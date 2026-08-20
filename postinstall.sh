@@ -175,10 +175,16 @@ chmod 600 "$PCONFIG/zugang.json"
 
 # ---------- Dienst wieder anlaufen lassen ----------
 # preupgrade.sh legt den Merker "lief_vorher" NEBEN den Konfigordner, wenn der
-# Dienst vor dem Update lief. Warum nicht in den Datenordner: den raeumt der
-# Installer VOR diesem Skript vollstaendig ab - ein Merker darin waere hier
-# weg, und der Dienst bliebe nach JEDEM Update still stehen, bis jemand die
-# Oberflaeche oeffnet. Das ist die unauffaelligste Art von Ausfall: der
+# Dienst vor dem Update lief.
+#
+# BERICHTIGT am 20.08.2026: hier stand, der Installer raeume den Datenordner
+# vor diesem Skript ab. Gemessen in sbin/plugininstall.pl stimmt das nicht -
+# beim Upgrade wird darueber kopiert, geloescht wird nur beim Deinstallieren
+# (:996, :1000, :1606, :233). Der Grund fuer den Merker ist ein anderer und
+# er traegt: dieses Plugin haelt den Dienst ueber 'dienst.sh stop' an, und
+# das entfernt den Sollmerker - ohne ihn holt der Cron-Waechter den Dienst
+# NICHT zurueck. Ohne diesen Merker bliebe er nach jedem Update stehen, bis
+# jemand die Oberflaeche oeffnet. Das ist die unauffaelligste Art von Ausfall: der
 # Endpunkt antwortet weiter mit dem letzten Stand, und in Loxone sieht das
 # nicht nach einem Defekt aus, sondern nach einem ruhigen Tag.
 #

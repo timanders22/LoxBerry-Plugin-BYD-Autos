@@ -37,10 +37,28 @@ CFGDIR="$BASE/config/plugins/$PFOLDER"
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
 
 # ---------- 1. Lief der Dienst? ----------
-# Der Merker liegt NEBEN dem Konfigordner. Im Datenordner waere er beim Lauf
-# von postinstall.sh weg (der Installer raeumt data/plugins/<ordner>/
-# vollstaendig ab) - genau daran ist dieselbe Korrektur in einem
-# Schwesterplugin gescheitert, und alle Pruefungen sahen gruen aus, weil der
+# Der Merker liegt NEBEN dem Konfigordner.
+#
+# BERICHTIGT am 20.08.2026. Hier stand, der Installer raeume
+# data/plugins/<ordner>/ beim Upgrade vollstaendig ab. Das ist FALSCH und
+# war nie gemessen. Nachgelesen in sbin/plugininstall.pl: beim Upgrade wird
+# der Ordner angelegt, falls er fehlt (make_path, :996), und der
+# Archivinhalt darueber kopiert (cp -r, :1000). Geloescht wird er nur in
+# purge_installation (:1606), und die laeuft ausschliesslich im
+# Deinstallations-Zweig (:233).
+#
+# Ein Merker im Datenordner taete es also auch - so steht es in REGELN_2 -
+# und er verschwaende beim Deinstallieren von selbst. Die Stelle hier ist
+# trotzdem geblieben: sie ist erprobt, und ein Steuermerker gehoert nicht in
+# die Daten des Anwenders. Der Preis dafuer steht im uninstall, das ihn
+# ausdruecklich abraeumt.
+#
+# Was hier wirklich zaehlt, ist etwas anderes und IST gemessen: dieses
+# preupgrade haelt den Dienst ueber 'dienst.sh stop' an, und anhalten()
+# entfernt dabei absichtlich den Sollmerker. Ohne ihn startet der
+# Cron-Waechter den Dienst NICHT wieder - der Merker hier ist also das
+# einzige, was ihn zurueckbringt.
+# Alte Begruendung, die sich als falsch erwiesen hat: sie sah gruen aus, weil der
 # Pruefstand das Abraeumen nicht nachbildete.
 rm -f "$MERKER"
 if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" status >/dev/null 2>&1; then
