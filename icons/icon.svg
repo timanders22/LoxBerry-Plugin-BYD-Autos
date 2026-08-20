@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Volkswagen ID - Plugin-Symbol nach Hausstandard.
+
+  Aufbau wie bei den uebrigen Plugins der Reihe: Scheibe r=246 mit
+  Radialverlauf, innerer Ring r=232 mit 35 % Deckung, flaches weisses Motiv
+  mit Schlagschatten, gestrichelte Trennlinie bei y=345, darunter zwei
+  Textzeilen.
+
+  Keine fremden Wortmarken ausser dem Plugin-Namen; das Fahrzeug ist eine
+  eigene Silhouette und bildet kein bestimmtes Modell nach.
+-->
+<svg width="512" height="512" viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
+
+  <g filter="url(#shadow)" fill="#ffffff">
+
+    <!-- Funkwellen ueber dem Fahrzeug: drei Boegen und ein Punkt.
+         Der Punkt sitzt im Mittelpunkt der Boegen, damit die Wellen von ihm
+         auszugehen scheinen. -->
+    <g transform="translate(256, 152)">
+      <circle cx="0" cy="0" r="9" fill="#ffffff" />
+      <path d="M -22 -14 A 28 28 0 0 1 22 -14" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round" />
+      <path d="M -40 -34 A 54 54 0 0 1 40 -34" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round" opacity="0.8" />
+      <path d="M -58 -54 A 80 80 0 0 1 58 -54" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round" opacity="0.55" />
+    </g>
+
+    <!-- Fahrzeug in Seitenansicht.
+         Ein durchgehender Umriss: Front links, ansteigende Motorhaube,
+         flaches Dach, abfallendes Heck. Die Radausschnitte sind in den
+         Umriss hineingezogen, damit die Raeder frei stehen. -->
+    <path d="M 118 268
+             C 118 252 126 244 142 242
+             L 176 236
+             C 196 210 220 198 256 198
+             C 292 198 318 208 342 232
+             L 378 240
+             C 396 244 402 252 402 268
+             L 402 282
+             C 402 288 398 292 392 292
+             L 366 292
+             A 30 30 0 0 0 306 292
+             L 214 292
+             A 30 30 0 0 0 154 292
+             L 128 292
+             C 122 292 118 288 118 282
+             Z" fill="#ffffff" />
+
+    <!-- Seitenscheiben, in Gruen ausgespart. Zwei Felder statt eines
+         durchgehenden Bandes: bei 64 Pixeln liest sich ein einzelner
+         Schlitz wie ein Fehler in der Karosserie. -->
+    <path d="M 206 232 L 222 212 C 232 206 244 204 254 204 L 254 232 Z" fill="#6dac20" />
+    <path d="M 264 204 C 292 204 312 212 330 232 L 264 232 Z" fill="#6dac20" />
+
+    <!-- Raeder: weisser Reifen, gruene Nabe -->
+    <circle cx="184" cy="292" r="30" fill="#ffffff" />
+    <circle cx="184" cy="292" r="13" fill="#6dac20" />
+    <circle cx="336" cy="292" r="30" fill="#ffffff" />
+    <circle cx="336" cy="292" r="13" fill="#6dac20" />
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+  </g>
+
+  <!-- Typography
+       ZUR SCHRIFTGROESSE: 29 px fuer den Plugin-Namen, 20 px fuer LOXBERRY -
+       einheitlich ueber alle Plugins. Massgeblich fuer den Rand ist die
+       UNTERSTE Bildzeile der Schrift, dort ist der Kreis am schmalsten. -->
+  <text x="256" y="388" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="29" letter-spacing="1">BYD CONNECT</text>
+  <text x="256" y="424" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="20" letter-spacing="3">LOXBERRY</text>
+</svg>
