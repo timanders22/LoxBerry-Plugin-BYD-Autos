@@ -196,8 +196,9 @@ niemandem auf.
 ### Reiter *Ladevorgänge*
 
 Ein Ladevorgang wird am Wechsel des Feldes `LAEDT` erkannt; BYD meldet ihn
-nicht. Die Liste liegt in `verlauf/ladungen.csv` im Datenordner und
-**überlebt eine Aktualisierung nicht** — der Installateur räumt `data/` aus.
+nicht. Die Liste liegt in `verlauf/ladungen.csv` im Datenordner. Sie überlebt
+eine Aktualisierung — der Installateur kopiert über `data/`, er räumt es nicht
+aus (nachgelesen in `sbin/plugininstall.pl`) —, aber **keine Deinstallation**.
 Beginn und Ende sind die Zeitpunkte der *Abrufe*, an denen der Wechsel auffiel;
 sie liegen bis zu einem Taktabstand neben der Wirklichkeit. Die kWh sind
 gerechnet, nicht gemessen: Ladeverluste stecken nicht darin.
