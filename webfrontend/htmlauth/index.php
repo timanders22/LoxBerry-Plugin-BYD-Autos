@@ -1279,11 +1279,41 @@ foreach ($by_mit_kwh as $by_x) { $by_summe += $by_x['kwh']; }
     <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="test" value="felder"><?= by_e(by_t('TEST.K_FELDER')) ?></button>
   </form>
   <a data-role="none" class="sm-btn sm-b-technik" href="<?= by_e($by_basis) ?>?token=<?= by_e($by_token) ?>&amp;aktion=json" target="_blank"><?= by_e(by_t('TEST.K_JSON')) ?></a>
+  <a data-role="none" class="sm-btn sm-b-technik" href="index.php?form=test&amp;rohdaten=1"><?= by_e(by_t('TEST.K_ROH')) ?></a>
 </div>
 <p class="sm-hilfe"><?= by_t('TEST.H_FELDER_ERKLAERUNG') ?></p>
 <?php if ($by_ausgabe !== '') { ?>
 <div class="sm-pre"><?= by_e($by_ausgabe) ?></div>
 <?php } ?>
+
+<?php
+/* Die Rohdaten der Gegenstelle - mit den ECHTEN Feldnamen.
+ *
+ * Bis 0.9.0 versprach der Knopf "Rohdaten als JSON ansehen" genau das und
+ * zeigte aktion=json, also das bereits umgesetzte Abbild mit den Namen
+ * dieses Plugins. by_rohdaten() gab es, aufgerufen hat sie niemand.
+ * Gefunden mit Werkzeuge/tote_helfer.py am 20.08.2026.
+ *
+ * Die Anzeige gibt es NUR hier im angemeldeten Bereich: bin/byd.py legt
+ * rohdaten.json mit Rechten 0600 ab, weil Fahrzeugkennung und Standort
+ * darin stehen. Ueber den tokengeschuetzten Endpunkt, der im
+ * unangemeldeten Bereich liegt, geht sie deshalb nicht hinaus. */
+if (isset($_GET['rohdaten'])) {
+    $by_roh = by_rohdaten();
+    echo '<h3>' . by_e(by_t('TEST.H_ROHDATEN')) . '</h3>';
+    echo '<div class="sm-warnung">' . by_t('TEST.ROHDATEN_WARNUNG') . '</div>';
+    if (!$by_roh) {
+        echo '<div class="sm-hinweis">' . by_t('TEST.ROHDATEN_LEER') . '</div>';
+    } else {
+        echo '<p class="sm-hilfe">' . sprintf(by_t('TEST.ROHDATEN_STAND'),
+            by_e(date('d.m.Y H:i:s', (int) (isset($by_roh['ts']) ? $by_roh['ts'] : 0)))) . '</p>';
+        echo '<div class="sm-pre" style="max-height:520px;">'
+           . by_e(json_encode(isset($by_roh['roh']) ? $by_roh['roh'] : $by_roh,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))
+           . '</div>';
+    }
+}
+?>
 
 <h3><?= by_e(by_t('TEST.H_SCHALTEN')) ?></h3>
 <div class="sm-warnung"><?= by_t('TEST.SCHALTEN_WARNUNG') ?></div>
