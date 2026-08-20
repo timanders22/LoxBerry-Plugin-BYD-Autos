@@ -1,0 +1,16 @@
+# Uebersetzungsreste von Python. Sie gehoeren nicht ins Archiv: LoxBerry
+# entpackt das Plugin und laesst Python selbst uebersetzen. Eine mitgelieferte
+# .pyc passt spaetestens nach der naechsten Aenderung an byd.py nicht mehr
+# zur Quelle - und sie traegt den Pfad des Rechners, auf dem sie entstanden
+# ist, mit sich herum.
+__pycache__/
+*.py[cod]
+
+# Zur Laufzeit entstehende Dateien. Sie gehoeren dem Geraet, nicht dem
+# Repository - in zugang.json stehen Benutzername, Passwort und Steuer-PIN
+# des BYD-Kontos.
+config/byd.json
+config/zugang.json
+data/
+log/
+*.log

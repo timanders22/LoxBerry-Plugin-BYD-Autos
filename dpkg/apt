@@ -1,0 +1,20 @@
+# Debian-Pakete, die LoxBerry waehrend der Installation als root einspielt.
+#
+# Warum diese Datei und nicht apt-get in postinstall.sh: postinstall.sh laeuft
+# als Benutzer loxberry (plugininstall.pl startet es mit "sudo -n -u loxberry").
+# Ein apt-get scheitert dort IMMER an /var/lib/dpkg/lock-frontend - und weil
+# der Aufruf ueblicherweise mit >/dev/null 2>&1 dasteht, sieht man nur den
+# Ersatztext dahinter und haelt das Paket fuer unverfuegbar.
+#
+# python3-venv: postinstall.sh legt die virtuelle Python-Umgebung mit
+# "python3 -m venv" an. Auf Debian steckt das Modul venv NICHT im Paket
+# python3, sondern in python3-venv beziehungsweise python3.<x>-venv. Fehlt es,
+# scheitert das Anlegen der Umgebung, und das Plugin bleibt ohne Dienst
+# installiert. Bei den Schwesterplugins (Volkswagen ID, Skoda Connect NG) fehlt
+# diese Datei; sie nennen das fehlende Paket nur im Fehlertext.
+python3-venv
+
+# python3-pip: die Umgebung bringt pip normalerweise selbst mit
+# (ensurepip). Auf Systemen, auf denen ensurepip abgeschaltet ist, fehlt es -
+# und dann laesst sich pybyd nicht installieren.
+python3-pip

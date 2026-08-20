@@ -1,0 +1,162 @@
+#!/bin/bash
+# BYD Autos - uninstall
+# command <TEMPFOLDER> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
+#
+# Laeuft als root beim Deinstallieren.
+#
+# ===================================================================
+# WARUM ES DIESE DATEI GIBT
+# ===================================================================
+#
+# LoxBerry raeumt beim Deinstallieren die Ordner weg, die dem Plugin gehoeren:
+# bin/, data/, log/, config/, templates/ und die beiden webfrontend-Ordner. Die
+# virtuelle Python-Umgebung liegt in bin/plugins/<ordner>/venv und geht damit
+# mit.
+#
+# Drei Dinge liegen AUSSERHALB dieser Ordner:
+#
+#   1. Die Sicherungsdateien
+#        config/plugins/<ordner>.backup.byd.json
+#        config/plugins/<ordner>.backup.zugang.json
+#      Sie liegen bewusst NEBEN dem Konfigordner, damit sie ein Update und
+#      sogar eine Neuinstallation ueberstehen. Beim Deinstallieren ist genau
+#      das falsch: in zugang.json stehen Benutzername, Passwort und Steuer-PIN
+#      des BYD-Kontos. Die Datei ist nicht umsonst mit 0600 angelegt. Wer das
+#      Plugin entfernt, erwartet nicht, dass seine Zugangsdaten auf der Karte
+#      bleiben - und eine spaetere NEUinstallation holte daraus stillschweigend
+#      die alte Konfiguration samt altem Aktionstoken zurueck.
+#
+#      Anmerkung zu einer verbreiteten Sorge: LoxBerry loescht beim
+#      Deinstallieren config/plugins/<ordner>/ - also das VERZEICHNIS. Eine
+#      Datei namens <ordner>.backup.byd.json liegt daneben, nicht darin, und
+#      bliebe ohne dieses Skript liegen.
+#
+#   2. Der Merker fuer den Wiederanlauf (<ordner>.lief_vorher), aus demselben
+#      Grund.
+#
+#   3. Der laufende Dienst. Er wird mit nohup gestartet und haengt an keinem
+#      Elternprozess, den LoxBerry beenden wuerde.
+#
+# WAS DIESES SKRIPT NICHT KANN, und das steht hier, statt Aufraeumen
+# vorzutaeuschen: Die Werte, die ueber das MQTT-Gateway hinausgegangen sind,
+# stehen im Broker. Der Dienst sendet mit "publish", nicht mit "retain" - sie
+# verfallen also von selbst und muessen nicht geloescht werden. Die virtuellen
+# Eingaenge in der Loxone-Projektdatei bleiben dagegen stehen und behalten
+# ihren letzten Wert; sie entfernt nur der Anwender in Loxone Config.
+
+ARGV3=$3
+ARGV5=$5
+PFOLDER="${ARGV3:-bydautos}"
+BASE="${ARGV5:-$LBHOMEDIR}"
+# Dritter Rueckfall: der eigene Ablageort. Bewusst kein fest verdrahteter
+# Systempfad - LoxBerry laesst sich anderswohin installieren, und der
+# Plugin-Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu sehen.
+# Dieses Skript liegt unter <home>/data/plugins/<ordner>/uninstall/
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../../.." 2>/dev/null && pwd)
+fi
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    echo "<FAIL> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen."
+    echo "<FAIL> Es wurde NICHTS entfernt. Die Zugangsdaten des BYD-Kontos liegen"
+    echo "<FAIL> weiterhin in config/plugins/$PFOLDER.backup.zugang.json."
+    exit 1
+fi
+
+PDATA="$BASE/data/plugins/$PFOLDER"
+PBIN="$BASE/bin/plugins/$PFOLDER"
+PCONFIG="$BASE/config/plugins"
+
+# Vor jedem rm auf einen zusammengesetzten Pfad eine Pruefung, die abweist
+# statt zu raten. Ein blankes rm -rf "${LBPDATA:-...}" hat in einer Attrappe
+# schon einmal den Datenordner ALLER Plugins getroffen, weil die
+# Umgebungsvariable bereits auf data/plugins zeigte und der Rueckfallzweig
+# deshalb nie griff.
+if [ "$(basename "$PDATA")" != "$PFOLDER" ] || [ "$(basename "$PBIN")" != "$PFOLDER" ]; then
+    echo "<FAIL> Die Pfade sehen nicht aus wie erwartet - es wurde nichts entfernt."
+    exit 1
+fi
+
+# ---------------------------------------------------------------
+# 1. Dienst anhalten
+# ---------------------------------------------------------------
+# Geprueft wird ARGUMENTWEISE: /proc/<pid>/cmdline trennt die Argumente mit
+# Nullbytes. Das zweite Argument muss genau unser Skript sein, das erste ein
+# Python - "nano <pfad>/byd.py" fuehrt den vollen Pfad sonst ebenfalls als
+# zweites Argument. Der volle Pfad statt nur des Dateinamens, damit die
+# Deinstallation des einen Exemplars nicht den Dienst eines zweiten abschiesst
+# (LoxBerry haengt bei Namenskonflikt 01, 02 ... an den Ordnernamen an).
+ist_unser_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    ARGS=$(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null)
+    [ "$(echo "$ARGS" | sed -n '2p')" = "$PBIN/byd.py" ] || return 1
+    echo "$ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
+    return 0
+}
+
+beenden() {
+    P="$1"
+    kill "$P" 2>/dev/null
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$P" 2>/dev/null || return 0
+        sleep 1
+    done
+    kill -9 "$P" 2>/dev/null
+    sleep 1
+    return 0
+}
+
+GEFUNDEN=0
+PIDDATEI="$PDATA/dienst.pid"
+if [ -f "$PIDDATEI" ]; then
+    P=$(cat "$PIDDATEI" 2>/dev/null)
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && ist_unser_dienst "$P"; then
+        beenden "$P"
+        GEFUNDEN=1
+        echo "<OK> Laufender Abrufdienst beendet (PID $P)."
+    fi
+fi
+
+# Zweiter Durchgang ohne PID-Datei: sie kann fehlen, wenn der Dienst von Hand
+# gestartet oder die Datei geloescht wurde.
+for D in /proc/[0-9]*; do
+    P=$(basename "$D")
+    if ist_unser_dienst "$P" && kill -0 "$P" 2>/dev/null; then
+        beenden "$P"
+        GEFUNDEN=1
+        echo "<OK> Weiterer Abrufdienst beendet (PID $P)."
+    fi
+done
+
+[ "$GEFUNDEN" -eq 0 ] && echo "<INFO> Es lief kein Abrufdienst."
+rm -f "$PIDDATEI" "$PDATA/soll_laufen" 2>/dev/null
+
+# ---------------------------------------------------------------
+# 2. Dateien ausserhalb der Plugin-Ordner
+# ---------------------------------------------------------------
+for f in byd.json zugang.json; do
+    BK="$PCONFIG/$PFOLDER.backup.$f"
+    if [ -f "$BK" ]; then
+        # Ueberschreiben, dann entfernen: nur ein rm liesse den Inhalt auf der
+        # Karte stehen, bis der Platz neu vergeben wird.
+        LAENGE=$(stat -c %s "$BK" 2>/dev/null || echo 0)
+        case "$LAENGE" in ''|*[!0-9]*) LAENGE=0 ;; esac
+        [ "$LAENGE" -gt 0 ] && dd if=/dev/zero of="$BK" bs=1 count="$LAENGE" \
+            conv=notrunc >/dev/null 2>&1
+        rm -f "$BK" && echo "<OK> Sicherung entfernt: $PFOLDER.backup.$f"
+    fi
+done
+rm -f "$PCONFIG/$PFOLDER.lief_vorher" 2>/dev/null
+
+echo "<INFO> Benutzername, Passwort und Steuer-PIN des BYD-Kontos sind damit vom"
+echo "<INFO> LoxBerry entfernt."
+
+# ---------------------------------------------------------------
+# 3. Was LoxBerry selbst wegraeumt, und was stehen bleibt
+# ---------------------------------------------------------------
+echo "<INFO> Die virtuelle Python-Umgebung ($PBIN/venv) wird mit dem bin-Ordner"
+echo "<INFO> des Plugins entfernt - dafuer ist nichts zu tun."
+echo "<INFO> Nicht entfernt werden die virtuellen Eingaenge in Loxone Config: sie"
+echo "<INFO> behalten ihren letzten Wert. Wer sie nicht mehr braucht, loescht sie"
+echo "<INFO> dort selbst."
+
+exit 0
