@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.0
+Version 0.9.1
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
