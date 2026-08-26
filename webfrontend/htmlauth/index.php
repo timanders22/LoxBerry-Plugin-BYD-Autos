@@ -128,6 +128,23 @@ if ($by_post && !in_array($by_formular, $by_formulare, true)) {
     $by_post = false;
 }
 
+/* ==================================================================
+ * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
+ * ==================================================================
+ *
+ * Stand der Kopf davor, war er beim Aufruf von header() schon
+ * geschrieben - "Cannot modify header information", und der Knopf
+ * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON
+ * statt einer Datei.
+ *
+ * Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos und
+ * headers_sent() immer falsch. Und wer OHNE gueltiges Formularmerkmal
+ * misst, wird vom Wachposten abgewiesen, bevor der Handler anlaeuft.
+ * Beides hat den Fehler lange verdeckt.
+ *
+ * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
+ * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ * ================================================================== */
 /* ---------------- Vorlage herunterladen ----------------
  * Eigenes Formular, damit der Download nicht am Speichern haengt.
  *
@@ -440,9 +457,6 @@ $by_pruefungen = by_pruefungen();
 $by_bilanz = by_pruefbilanz($by_pruefungen);
 
 $by_rahmen = class_exists('LBWeb', false);
-if ($by_rahmen) {
-    LBWeb::lbheader('BYD Autos', 'https://wiki.loxberry.de/', 'help.html');
-}
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -489,6 +503,11 @@ if ($by_post && isset($_POST['by_zurueck'])) {
             $by_fehler[] = by_t('EINST.SICH_SCHREIBFEHLER');
         }
     }
+}
+
+
+if ($by_rahmen) {
+    LBWeb::lbheader('BYD Autos', 'https://wiki.loxberry.de/', 'help.html');
 }
 
 ?>
