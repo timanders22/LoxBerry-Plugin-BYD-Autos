@@ -443,6 +443,54 @@ $by_rahmen = class_exists('LBWeb', false);
 if ($by_rahmen) {
     LBWeb::lbheader('BYD Autos', 'https://wiki.loxberry.de/', 'help.html');
 }
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($by_post && isset($_POST['by_sichern'])) {
+    $by_js = json_encode(by_config(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($by_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="byd_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $by_js;
+        exit;
+    }
+    $by_fehler[] = by_t('EINST.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($by_post && isset($_POST['by_zurueck'])) {
+    if (!isset($_FILES['by_sicherung']) || !is_array($_FILES['by_sicherung'])
+        || !isset($_FILES['by_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['by_sicherung']['tmp_name'])) {
+        $by_fehler[] = by_t('EINST.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['by_sicherung']['size'] > 262144) {
+        $by_fehler[] = by_t('EINST.SICH_ZU_GROSS');
+    } else {
+        list($by_neu, $by_mangel, $by_n) = by_sicherung_lesen(
+            (string) @file_get_contents($_FILES['by_sicherung']['tmp_name']));
+        if ($by_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $by_fehler[] = by_t('EINST.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $by_mangel);
+        } elseif (by_config_speichern($by_neu)) {
+            $by_meldungen[] = sprintf(by_t('EINST.SICH_UEBERNOMMEN'), $by_n);
+        } else {
+            $by_fehler[] = by_t('EINST.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 /* Hausstandard, wortgetreu aus VORLAGE_hausstandard.css.html uebernommen.
@@ -858,6 +906,27 @@ if ($by_rahmen) {
 </div>
 <p class="sm-hilfe"><?= by_t('EINST.VIN_HINWEIS') ?></p>
 <?php } ?>
+
+<h2><?= by_t('EINST.H_SICHERUNG') ?></h2>
+<div class="sm-hinweis"><?= by_t('EINST.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= by_t('EINST.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="by_sichern" value="1"><?= by_t('EINST.K_SICHERN') ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+    <input data-role="none" type="file" name="by_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="by_zurueck" value="1"><?= by_t('EINST.K_ZURUECK') ?></button>
+  </form>
+</div>
 </div>
 
 <!-- ================= Reiter: MQTT ================= -->
@@ -904,7 +973,7 @@ if ($by_rahmen) {
 </table>
 
 <h2><?= by_e(by_t('MQTT.H_ABO')) ?></h2>
-<div class="sm-warnung"><?= by_t('MQTT.ABO_WARNUNG') ?></div>
+<div class="sm-warnung"><?= by_abo_text() ?></div>
 <div class="sm-step">
 <?= by_t('MQTT.ABO_SCHRITTE') ?>
 <p><span class="sm-mono"><?= by_e($by_cfg['mqtt_topic']) ?>/#</span></p>
@@ -935,7 +1004,7 @@ if ($by_rahmen) {
 <div class="sm-step"><b><?= by_e(by_t('LOX.S2_TITEL')) ?></b><br>
 <?= by_t('LOX.S2_TEXT') ?>
 <p><span class="sm-mono"><?= by_e($by_cfg['mqtt_topic']) ?>/#</span></p>
-<div class="sm-warnung"><?= by_t('LOX.S2_WARNUNG') ?></div>
+<div class="sm-warnung"><?= by_abo_text() ?></div>
 </div>
 
 <div class="sm-step"><b><?= by_e(by_t('LOX.S3_TITEL')) ?></b><br>
