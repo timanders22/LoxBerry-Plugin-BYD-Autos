@@ -934,7 +934,7 @@ function by_horcher_zustand()
 function by_mqtt_zustand()
 {
     $p = by_paths();
-    $leer = array('gefunden' => 0, 'autostart' => 0, 'udpport' => 0,
+    $leer = array('gefunden' => 0, 'autostart' => 0, 'fassung' => 0, 'udpport' => 0,
                   'broker' => '', 'brokerport' => '', 'websocket' => '');
     if ($p['home'] === '') {
         return $leer;
@@ -959,12 +959,43 @@ function by_mqtt_zustand()
     return array(
         'gefunden'   => 1,
         'autostart'  => in_array((string) $auto, array('1', 'true'), true) ? 1 : 0,
+        /* Die FASSUNG des MQTT-Gateways, ab Werk 1. Sie entscheidet, was der
+         * Anwender eintragen muss: unter V1 jedes Thema von Hand, ab V2
+         * erscheint die Themengruppe von selbst in den Subscriptions.
+         * 0 heisst "nicht feststellbar" - dann wird nichts behauptet,
+         * sondern es werden beide Faelle genannt. */
+        'fassung'    => (int) $hol('Gatewayversion', 'gatewayversion'),
         'udpport'    => (int) $hol('Udpinport', 'udpinport'),
         'broker'     => (string) $hol('Brokerhost', 'brokerhost'),
         'brokerport' => (string) $hol('Brokerport', 'brokerport'),
         'websocket'  => (string) $hol('Websocketport', 'websocketport'),
     );
 }
+
+/**
+ * Der Hinweis zum MQTT-Abo - in der Fassung, die zum GATEWAY passt.
+ *
+ * Bis hierher stand an den Ausgabestellen unbedingt "Ohne diesen Eintrag
+ * kommt am Miniserver nichts an". Das gilt fuer Gateway V1, wo jedes Thema
+ * von Hand einzutragen ist. Ab V2 erscheint die Themengruppe von selbst in
+ * den Subscriptions - der Satz schickte jeden V2-Anwender zu einem
+ * Eingabeplatz, den es nicht gibt.
+ *
+ * Drei Ausgaenge, nicht zwei: ist die Fassung nicht feststellbar, werden
+ * BEIDE Faelle genannt statt einer behauptet.
+ */
+function by_abo_text()
+{
+    $m = by_mqtt_zustand();
+    $f = isset($m['fassung']) ? (int) $m['fassung'] : 0;
+    if ($f <= 0) {
+        return by_t('MQTT.ABO_UNBEKANNT');
+    }
+    $gemessen = ' <span class="sm-mono">'
+              . sprintf(by_t('MQTT.ABO_GEMESSEN'), $f) . '</span>';
+    return by_t($f >= 2 ? 'MQTT.ABO_V2' : 'MQTT.ABO_WARNUNG') . $gemessen;
+}
+
 
 /* ==================================================================
  * DIE FELDTABELLE - EINE QUELLE FUER ALLES
@@ -1521,4 +1552,44 @@ function by_t($schluessel)
     $a = $teile[0];
     $s = $teile[1];
     return isset($texte[$a][$s]) ? $texte[$a][$s] : $schluessel;
+}
+
+
+/**
+ * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
+ *
+ * Die sieben Punkte aus REGELN_2, und der wichtigste ist der dritte: eine
+ * halb gueltige Datei ueberschreibt GAR NICHTS. Wer eine Sicherung
+ * zurueckspielt, will entweder den ganzen Stand oder gar keinen - eine zur
+ * Haelfte uebernommene Konfiguration ist schlimmer als die alte, und man
+ * sieht es ihr nicht an.
+ *
+ * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
+ * stammen aus einer anderen Fassung oder einem anderen Plugin.
+ *
+ * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ */
+function by_sicherung_lesen($roh)
+{
+    $mangel = array();
+    $daten = json_decode((string) $roh, true);
+    if (!is_array($daten)) {
+        return array(null, array(by_t('EINST.SICH_KEIN_JSON')), 0);
+    }
+    $neu = by_vorgaben();
+    $bekannt = array_keys($neu);
+    $anzahl = 0;
+    foreach ($daten as $k => $w) {
+        if (!in_array($k, $bekannt, true)) {
+            $mangel[] = sprintf(by_t('EINST.SICH_FREMD'),
+                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        $neu[$k] = $w;
+        $anzahl++;
+    }
+    if ($anzahl === 0) {
+        $mangel[] = by_t('EINST.SICH_LEER');
+    }
+    return array($mangel ? null : $neu, $mangel, $anzahl);
 }
