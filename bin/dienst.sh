@@ -14,6 +14,34 @@
 # Logdatei landeten neben dem eigenen Ordner statt darin. Die Oberflaeche
 # saehe den Dienst dann nie laufen, und der Waechter startete ihn im
 # Minutentakt ein zweites Mal.
+# Als loxberry laufen, nicht als root.
+#
+# Der minuetliche Waechter kommt aus dem Cron. Laeuft der als root - und je
+# nach Ablage des Cronjobs tut er das -, dann gehoerten PID-Datei, Sollmerker
+# und Protokoll danach root. Die Oberflaeche laeuft als loxberry und koennte
+# den Dienst anschliessend weder anhalten noch neu starten: sie darf die
+# Dateien nicht mehr schreiben. Schlimmer noch, 'dienst.sh stop' meldet dann
+# Erfolg - das kill scheitert, aber das rm der PID-Datei gelingt, weil das
+# Verzeichnis loxberry gehoert. Der Dienst laeuft weiter und ist nur noch
+# ueber die Prozessliste zu finden.
+#
+# Deshalb setzt sich das Skript selbst herunter, EINMAL und bevor es
+# irgendetwas anlegt. exec, damit kein zusaetzlicher Prozess stehen bleibt.
+# '-s /bin/bash' ausdruecklich: ohne das nimmt su die Login-Shell aus
+# /etc/passwd. Steht dort nologin oder /bin/false, endet dieses Skript hier
+# still und ohne Meldung - und weil es 'exec' ist, kaeme nicht einmal ein
+# Rueckgabewert zurueck. Auf einem regulaeren LoxBerry ist der Zweig ohnehin
+# unerreichbar (der Cron laeuft bereits als loxberry); er greift nur, wenn
+# jemand von Hand mit sudo aufruft.
+#
+# Woertlich uebernommen aus LoxBerry-Plugin-Dashboard-0.9.12, dort seit dem
+# 16.08.2026 in Betrieb. Ueber den Bestand gezaehlt am 31.08.2026: 15 von 17
+# dienst.sh hatten den Abstieg nicht, obwohl REGELN_2 ihn seit langem
+# verlangt.
+if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+    exec su -s /bin/bash loxberry -c "$(printf '%q ' "$0" "$@")"
+fi
+
 SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)          # <home>/bin/plugins/<ordner>
 PNAME=$(basename "$SELF")
 LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
