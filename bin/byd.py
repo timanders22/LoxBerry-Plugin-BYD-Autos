@@ -52,7 +52,6 @@ import signal
 import socket
 import sys
 import time
-from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -77,6 +76,35 @@ def lb_wurzel_ermitteln() -> str:
     return ""
 
 
+def mqtt_thema_saeubern(roh: str) -> str:
+    """Einen Themenpraefix aus der Oberflaeche unschaedlich machen.
+
+    Der Wert wurde bisher nur an den Raendern von Schraegstrichen befreit.
+    Das genuegt nicht: das Gateway liest "publish <thema> <wert>" zeilenweise
+    und trennt mit einem LEERZEICHEN. Ein Praefix "mein haus" wird damit zum
+    Thema "mein" mit dem Wert "haus/ok 1" - und das Plugin sendet ab da in ein
+    Thema, das niemand abonniert hat, ohne jede Meldung. Ein Zeilenumbruch
+    zerlegt die Uebertragung vollends.
+
+    Ausserdem fallen # und + heraus: das sind die Jokerzeichen von MQTT und in
+    einem Sendethema nicht zulaessig. Broker weisen solche Nachrichten ab -
+    wieder still, denn ueber UDP kommt keine Antwort zurueck.
+
+    Bleibt nichts uebrig, gilt "byd". Ein leeres Thema waere schlimmer als ein
+    unerwuenschtes.
+    """
+    text = str(roh)
+    for zeichen in ("\r\n", "\r", "\n", "\t", " "):
+        text = text.replace(zeichen, "")
+    for zeichen in ("#", "+"):
+        text = text.replace(zeichen, "")
+    # Mehrfache Schraegstriche zusammenziehen: "a//b" waere eine leere Ebene.
+    while "//" in text:
+        text = text.replace("//", "/")
+    text = text.strip("/")
+    return text or "byd"
+
+
 def mqtt_wert_saeubern(wert) -> str:
     """Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
 
@@ -84,7 +112,20 @@ def mqtt_wert_saeubern(wert) -> str:
     Uebertragung, und aus den Bruchstuecken bildet das Gateway erfundene
     Themen. Ein Tabulator schadet ebenso, weil Leerzeichen Thema und Wert
     trennt.
+
+    Wahrheitswerte werden zu 1 und 0. str(True) ergaebe "True", und ein
+    virtueller Eingang in Loxone macht daraus 0 - der eingeschaltete Zustand
+    kaeme als "aus" an. Die Abfrage steht VOR jeder Zahlbehandlung, weil bool
+    in Python eine Unterart von int ist.
+
+    Das ist eine ABSICHERUNG und kein behobener Fehler: nachgemessen wurde,
+    dass heute kein einziges Feld einen Wahrheitswert fuehrt. LAEDT, KABEL und
+    ZUHAUSE sind an ihren Rechenstellen bereits 1/0 (byd.py:1245, :1246,
+    :1371). Die Zeile faengt den Tag ab, an dem ein neues Feld schlicht
+    "wert == 1" zurueckgibt.
     """
+    if isinstance(wert, bool):
+        return "1" if wert else "0"
     text = str(wert)
     for zeichen in ("\r\n", "\r", "\n", "\t"):
         text = text.replace(zeichen, " ")
@@ -167,6 +208,21 @@ ORDNER_BEFEHLE = PDATA / "befehle"
 ORDNER_ANTWORTEN = PDATA / "antworten"
 DATEI_LOG = PLOG / "byd.log"
 
+# Lebenszeichen der Hauptschleife. Es liegt bei den Protokollen und NICHT im
+# Datenordner: die Datei wird alle 30 s neu geschrieben, und das gehoert auf
+# die Ramdisk und nicht auf die SD-Karte.
+#
+# Wozu: der Waechter im Cron fragte bisher nur, ob der PROZESS lebt (PID da,
+# kill -0, richtige Befehlszeile). Das ist die erste Ebene der Dreiteilung aus
+# REGELN_1 - ein Dienst, der in einem Aufruf haengt, erfuellt sie tadellos und
+# liefert trotzdem nichts. Der Herzschlag beantwortet die zweite Frage:
+# ARBEITET die Schleife noch?
+#
+# Nicht der Zeitstempel des Abrufs, denn der steht bei einer Stoerung mit
+# Absicht still (Bremse bis zu einer Stunde). Der Herzschlag schlaegt auch
+# waehrend der Wartezeit weiter - er misst die Schleife, nicht den Erfolg.
+DATEI_HERZ = PLOG / "herzschlag"
+
 # Muessen zu by_vorgaben() in webfrontend/html/by_lib.php passen. Der Reiter
 # Test vergleicht beide Listen gegeneinander - ein Kommentar "muss zur anderen
 # passen" ist eine Hoffnung, keine Pruefung.
@@ -222,9 +278,64 @@ TAKT_MIN = 120
 # Befehlswarteschlange, die im selben Ablauf abgearbeitet wird.
 GRENZE_ABRUF = 180
 
+# Drei weitere Fristen. Bisher hing nur der Abruf an einer Grenze - die
+# Anmeldung, die Schreibbefehle und die PIN-Freischaltung hatten keine. Genau
+# die drei sprechen aber mit derselben Gegenstelle, die schweigen kann, und
+# sie liegen im selben Ablauf: haengt eine, steht der ganze Dienst, und mit
+# ihm der naechste Abruf und die Warteschlange.
+#
+# Die Zahlen sind gesetzt, nicht gemessen: eine Anmeldung darf laenger dauern
+# als ein Schaltbefehl, und die Freischaltung ist ein einzelner Aufruf. Wie
+# lange die BYD-Gegenstelle wirklich braucht, ist an dieser Anlage nicht
+# gemessen - es gibt kein Konto zum Messen.
+GRENZE_ANMELDUNG = 120
+GRENZE_BEFEHL = 90
+GRENZE_FREIGABE = 60
+
+# Deckel und Hoechstalter der Befehlswarteschlange.
+#
+# Bisher arbeitete der Dienst ab, was da lag - alles, und ohne aufs Alter zu
+# sehen. Stand er eine Stunde still (Neustart, Netzausfall, haengende
+# Gegenstelle), dann ging danach jeder in dieser Stunde angeklickte Befehl
+# nacheinander ans Fahrzeug: die Klimaanlage, die um sieben Uhr gewollt war,
+# lief um acht. Bei 90 s Frist je Befehl haelt schon ein Dutzend alter
+# Auftraege den naechsten Abruf ueber zwanzig Minuten auf.
+#
+# Beide Zahlen sind gesetzt, nicht gemessen. 300 s deshalb, weil ein
+# Schaltbefehl an ein Auto eine Absicht von JETZT ist; 20 deshalb, weil mehr
+# als das in einem Takt ohnehin nicht abzuarbeiten waeren.
+BEFEHLE_JE_LAUF = 20
+BEFEHL_HOECHSTALTER = 300
+
 _LAUF = True
 _LOG = logging.getLogger("bydautos")
 _LETZTE_MELDUNG: dict[str, float] = {}
+# Hat die Protokolldatei in diesem Lauf schon einmal existiert? Siehe
+# melde_gebremst(): nur ihr VERSCHWINDEN heisst Neustart, ihr Nie-Dasein nicht.
+_LOG_GESEHEN = False
+_HERZ_ZULETZT = 0.0
+
+
+def herzschlag(erzwingen: bool = False) -> None:
+    """Lebenszeichen der Hauptschleife auffrischen - hoechstens alle 30 s.
+
+    Die Bremse steckt hier drin, damit der Aufrufer die Funktion bedenkenlos
+    in eine Sekundenschleife stellen kann. Begruendung bei DATEI_HERZ.
+
+    Schlaegt das Schreiben fehl, wird geschwiegen: der Waechter faellt dann in
+    "kein Urteil" zurueck, und ein Dienst, der nur seine Ramdisk nicht
+    beschreiben kann, wird nicht deswegen neu gestartet.
+    """
+    global _HERZ_ZULETZT
+    jetzt = time.time()
+    if not erzwingen and jetzt - _HERZ_ZULETZT < 30:
+        return
+    _HERZ_ZULETZT = jetzt
+    try:
+        DATEI_HERZ.parent.mkdir(parents=True, exist_ok=True)
+        DATEI_HERZ.write_text("%d\n" % int(jetzt), encoding="utf-8")
+    except OSError:
+        pass
 
 
 # ===========================================================================
@@ -359,13 +470,6 @@ BEFEHLE = {
     "fenster_zu":      {"methoden": ("close_windows",),      "pin": 1},
 }
 
-# Themen, die ueber MQTT hinausgehen. Sie tragen dieselben Werte wie die
-# HTTP-Zeile - ein Plugin, dessen MQTT-Meldung weniger enthaelt als seine
-# HTTP-Zeile, macht die Umstellung unmoeglich, und zwar unauffaellig.
-# Geprueft wird das im Reiter Test.
-MQTT_ZUSATZ = ("ok", "ts", "fahrzeuge")
-
-
 # ---------------------------------------------------------------------------
 # Protokollierung
 #
@@ -375,7 +479,17 @@ MQTT_ZUSATZ = ("ok", "ts", "fahrzeuge")
 # und die liest die Oberflaeche per exec() ein.
 # ---------------------------------------------------------------------------
 def log_einrichten() -> None:
-    PLOG.mkdir(parents=True, exist_ok=True)
+    # Der mkdir stand ohne Wache da. Laesst sich der Protokollordner nicht
+    # anlegen - falsche Rechte, volle Ramdisk, ein Pfad, der aus einer
+    # verrutschten Wurzel abgeleitet wurde -, starb der Dienst hier mit einem
+    # Traceback: bevor ein Protokoll eingerichtet war, also ohne jede Spur
+    # ausser dem, was das Systemprotokoll zufaellig auffing. Genau der Fall,
+    # fuer den der stderr-Rueckfall drei Zeilen weiter unten gedacht ist.
+    try:
+        PLOG.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        print("Protokollordner %s nicht anlegbar (%s) - es wird nach stderr "
+              "geschrieben." % (PLOG, err), file=sys.stderr)
     _LOG.setLevel(logging.INFO)
     try:
         h: logging.Handler = RotatingFileHandler(
@@ -402,13 +516,24 @@ def melde_gebremst(schluessel: str, text: str, sekunden: int = 3600) -> None:
     """Dieselbe Meldung hoechstens einmal je Zeitfenster - sonst wird die
     Logdatei durch eine Dauerstoerung unlesbar.
 
-    Der Merker wird zurueckgesetzt, sobald die Protokolldatei fehlt: nach einem
-    Neustart liegt log/plugins auf einer Ramdisk und ist leer, und dann
-    unterdrueckte die Bremse ausgerechnet die ERSTE Zeile.
+    Der Merker wird zurueckgesetzt, sobald die Protokolldatei VERSCHWINDET:
+    nach einem Neustart liegt log/plugins auf einer Ramdisk und ist leer, und
+    dann unterdrueckte die Bremse ausgerechnet die ERSTE Zeile.
+
+    "Verschwindet" und nicht "fehlt" - das ist der Unterschied. Vorher wurde
+    zurueckgesetzt, sooft die Datei nicht dalag. Entsteht sie NIE, weil sich
+    der Protokollordner nicht anlegen liess und alles nach stderr geht, hiess
+    das: bei jedem einzelnen Aufruf zuruecksetzen, die Bremse wirkte gar nicht,
+    und eine Dauerstoerung schrieb im Sekundentakt. Also wird gemerkt, ob die
+    Datei je da war; nur dann bedeutet ihr Fehlen einen Neustart.
     """
+    global _LOG_GESEHEN
     jetzt = time.time()
-    if not DATEI_LOG.exists():
+    if DATEI_LOG.exists():
+        _LOG_GESEHEN = True
+    elif _LOG_GESEHEN:
         _LETZTE_MELDUNG.clear()
+        _LOG_GESEHEN = False
     if jetzt - _LETZTE_MELDUNG.get(schluessel, 0) >= sekunden:
         _LETZTE_MELDUNG[schluessel] = jetzt
         _LOG.warning(text)
@@ -602,8 +727,16 @@ def mqtt_senden(paare: dict, praefix: str) -> tuple[int, int]:
 #     Messwert mehr. Jeder Wert traegt seinen Zeitstempel, und wer ihn liest,
 #     prueft das Alter.
 #  3. NACHABONNIEREN statt neu verbinden. Aendert sich die Themenliste in der
-#     Oberflaeche, wird abgemeldet und neu abonniert; ein Neuaufbau kostet die
-#     bereits empfangenen zurueckbehaltenen Werte.
+#     Oberflaeche, wird abgemeldet und neu abonniert.
+#
+#     Was ein Neuaufbau kostet, ist genau dies: schliessen() leert den
+#     Zwischenspeicher self.werte, und alles, was seither einmal ankam, ist
+#     fort. Ob der Broker etwas davon beim erneuten Abonnieren nachliefert,
+#     haengt daran, ob der SENDER seine Nachricht zurueckbehalten laesst -
+#     das entscheidet nicht dieses Plugin, und an dieser Anlage ist es NICHT
+#     gemessen. Bis 0.9.5 stand hier, ein Neuaufbau koste "die bereits
+#     empfangenen zurueckbehaltenen Werte"; das war eine Aussage ueber
+#     fremdes Verhalten, die niemand geprueft hatte.
 # ===========================================================================
 def mqtt_broker() -> dict:
     gen = json_lesen(LBHOME / "config" / "system" / "general.json")
@@ -619,7 +752,6 @@ def mqtt_broker() -> dict:
         "port": ganz(hol("Brokerport", "brokerport", 1883), 1883),
         "benutzer": str(hol("Brokeruser", "brokeruser", "")),
         "passwort": str(hol("Brokerpass", "brokerpass", "")),
-        "lokal": str(hol("Uselocalbroker", "uselocalbroker", "")),
     }
 
 
@@ -632,6 +764,9 @@ class Horcher:
         self.themen: set = set()
         self.fehler = ""
         self.verbunden = False
+        # Wann wurde zuletzt ein Verbindungsaufbau VERSUCHT - gelungen oder
+        # nicht. Siehe die Wiederholungsbremse in sicherstellen().
+        self._letzter_versuch = 0.0
 
     def moeglich(self) -> tuple[bool, str]:
         try:
@@ -657,6 +792,26 @@ class Horcher:
         import paho.mqtt.client as mqtt  # noqa: PLC0415
 
         if self.client is None:
+            # WIEDERHOLUNGSBREMSE. connect() blockiert den Hauptstrang, und
+            # zwar bei jedem Durchlauf neu, solange der Broker nicht antwortet
+            # - nach einem Fehlschlag wird self.client wieder None, und beim
+            # naechsten Takt geht es von vorn los.
+            #
+            # Wie lange es blockiert, haengt an der paho-Fassung. GEMESSEN mit
+            # paho 1.6.1 an einem nicht routbaren Ziel: 5,0 s, denn diese
+            # Fassung fuehrt _connect_timeout = 5.0. Was eine aeltere oder eine
+            # 2.x-Fassung auf dem Geraet tut, ist NICHT gemessen; ohne diese
+            # Eigenschaft laeuft der Versuch in die Zeitgrenze des
+            # Betriebssystems und dauert Minuten.
+            #
+            # Darum wird die Wiederholung hier begrenzt, statt sich auf ein
+            # Verhalten der Bibliothek zu verlassen: nach einem Fehlschlag
+            # eine Minute Ruhe. Der Horcher ist eine Zusatzfunktion - der
+            # Abruf bei BYD darf nicht daran haengen, dass ein Broker
+            # falsch eingetragen ist.
+            if time.time() - self._letzter_versuch < 60:
+                return
+            self._letzter_versuch = time.time()
             b = mqtt_broker()
             try:
                 # Ein eigener Client-Name je Prozess: zwei Clients mit
@@ -673,6 +828,14 @@ class Horcher:
             self.client.on_message = self._nachricht
             self.client.on_connect = self._verbunden_cb
             self.client.on_disconnect = self._getrennt_cb
+            # Den Fehler des vorigen Anlaufs HIER loeschen und nicht nach
+            # loop_start(): loop_start() startet den Netzstrang, das CONNACK
+            # kann sofort danach eintreffen, und _verbunden_cb traegt den Grund
+            # einer Ablehnung ein. Eine Loeschung dahinter nimmt ihn wieder
+            # fort. Gemessen in horcher_connack.py: der Grund fehlte je nach
+            # Lauf mal beim Code 4, mal beim Code 5 - ein Wettlauf zwischen dem
+            # Haupt- und dem Netzstrang, nicht ein Unterschied der Codes.
+            self.fehler = ""
             try:
                 self.client.connect(b["host"], b["port"], keepalive=60)
                 self.client.loop_start()
@@ -685,7 +848,6 @@ class Horcher:
                 melde_gebremst("horcher_verbindung", grund, 900)
                 self.client = None
                 return
-            self.fehler = ""
 
         neu = themen - self.themen
         fort = self.themen - themen
@@ -695,23 +857,101 @@ class Horcher:
             except Exception:  # noqa: BLE001
                 pass
             self.werte.pop(t, None)
-        for t in sorted(neu):
-            try:
-                self.client.subscribe(t, qos=0)
-                _LOG.info("Horcher abonniert %s", t)
-            except Exception as err:  # noqa: BLE001
-                melde_gebremst("horcher_abo", "Abo %s nicht moeglich: %s" % (t, err), 900)
+        # self.themen VOR der Abo-Schleife setzen: feuert _verbunden_cb
+        # dazwischen (paho ruft es aus dem Netzstrang), faende es die Liste
+        # sonst noch leer und abonnierte nichts nach.
         self.themen = set(themen)
+        for t in sorted(neu):
+            self._abonnieren(t, melden=True)
+
+    def _abonnieren(self, thema: str, melden: bool = False) -> bool:
+        """Ein Abo absetzen und den RUECKGABEWERT ansehen.
+
+        paho wirft nicht, wenn keine Verbindung steht - subscribe() liefert
+        dann (MQTT_ERR_NO_CONN, None). Ein try/except faengt hier also nichts,
+        und die Erfolgszeile im Protokoll stand bis 0.9.5 auch dann da, wenn
+        gar nichts abonniert wurde.
+        """
+        try:
+            erg = self.client.subscribe(thema, qos=0)
+        except Exception as err:  # noqa: BLE001
+            melde_gebremst("horcher_abo", "Abo %s nicht moeglich: %s" % (thema, err), 900)
+            return False
+        rc = erg[0] if isinstance(erg, (tuple, list)) and erg else erg
+        try:
+            rc = int(getattr(rc, "value", rc))
+        except (TypeError, ValueError):
+            rc = -1
+        if rc != 0:
+            melde_gebremst("horcher_abo_rc",
+                           "Das Abo auf %s wurde nicht abgesetzt (Rueckgabe %s). "
+                           "Meist steht die Verbindung zum Broker nicht."
+                           % (thema, rc), 900)
+            return False
+        if melden:
+            _LOG.info("Horcher abonniert %s", thema)
+        return True
 
     def _verbunden_cb(self, *args, **kwargs):
+        """Rueckmeldung des Brokers - MIT Auswertung des Codes.
+
+        DER BEFUND, gegen den das steht (03.09.2026): hier stand
+        self.verbunden = True, ohne den Code anzusehen. paho ruft on_connect
+        AUCH bei einer abgelehnten Anmeldung - rc 4 (Benutzer/Passwort falsch)
+        und rc 5 (nicht berechtigt). connect() wirft dabei nicht, denn die
+        TCP-Verbindung kam ja zustande; self.fehler blieb leer.
+
+        Ergebnis: der Zustand meldete horcher_verbunden=1, der Selbsttest gab
+        "[OK] Abonnierte Themen: ..." aus, der Reiter Test setzte einen gruenen
+        Haken - und es kam nie eine Nachricht an. Die Vorklimatisierung loeste
+        nie aus, und die einzige Spur zeigte auf den Abfahrtsassistenten statt
+        auf die abgewiesene Anmeldung.
+
+        Das ist genau die Dreiteilung aus REGELN_1: der Prozess laeuft, das
+        Netz antwortet, und die ANMELDUNG ist abgelehnt. Eine PID beantwortet
+        nur die erste Frage, ein gelungenes connect() nur die zweite.
+
+        Die Rueckrufform unterscheidet sich zwischen paho 1.x und 2.x; der Code
+        steht in beiden an vierter Stelle (rc bzw. reason_code). Gelesen wird
+        deshalb positionsunabhaengig ueber das erste Argument, das sich als
+        Zahl lesen laesst.
+        """
+        rc = None
+        for a in args[2:]:
+            wert = getattr(a, "value", a)
+            if isinstance(wert, bool):
+                continue
+            if isinstance(wert, int):
+                rc = int(wert)
+                break
+        if rc is None:
+            rc = kwargs.get("rc", kwargs.get("reason_code"))
+            rc = getattr(rc, "value", rc)
+            rc = int(rc) if isinstance(rc, int) and not isinstance(rc, bool) else None
+        if rc is None:
+            # Nicht messbar ist nicht "in Ordnung": ohne Code wird nichts
+            # behauptet, und der Selbsttest sagt es.
+            self.verbunden = False
+            self.fehler = ("Der Broker hat geantwortet, aber der Rueckmeldecode "
+                           "liess sich nicht lesen. Ob die Anmeldung angenommen "
+                           "wurde, ist damit UNBEKANNT.")
+            melde_gebremst("horcher_rc_unlesbar", self.fehler, 900)
+            return
+        if rc != 0:
+            self.verbunden = False
+            self.fehler = ("Der Broker hat die Anmeldung ABGELEHNT (Code %d%s). "
+                           "Es wird nichts empfangen. Stehen Brokeruser und "
+                           "Brokerpass in der general.json des LoxBerry?"
+                           % (rc, " - nicht berechtigt" if rc == 5 else
+                              (" - Benutzer oder Passwort falsch" if rc == 4 else "")))
+            melde_gebremst("horcher_connack", self.fehler, 900)
+            return
         self.verbunden = True
+        self.fehler = ""
         # Nach jedem Verbindungsaufbau werden die Abos neu gesetzt: der Broker
         # kennt sie nach einer Trennung nicht mehr.
         for t in sorted(self.themen):
-            try:
-                self.client.subscribe(t, qos=0)
-            except Exception:  # noqa: BLE001
-                pass
+            self._abonnieren(t)
 
     def _getrennt_cb(self, *args, **kwargs):
         self.verbunden = False
@@ -736,13 +976,29 @@ class Horcher:
     def schliessen(self) -> None:
         if self.client is not None:
             try:
-                self.client.loop_stop()
+                # ERST abmelden, DANN den Netzstrang anhalten. Umgekehrt - so
+                # stand es bis 0.9.5 - wird das DISCONNECT-Paket unter
+                # Umstaenden nicht mehr abgearbeitet, und der Socket bleibt
+                # liegen, bis der Aufraeumer ihn holt.
                 self.client.disconnect()
+                self.client.loop_stop()
             except Exception:  # noqa: BLE001
                 pass
         self.client = None
         self.themen = set()
         self.verbunden = False
+        # Die empfangenen Werte gehoeren mit weg. Sonst gilt nach einem Aus-
+        # und Wiedereinschalten der Ladeempfehlung ein alter Wert als frisch,
+        # solange er innerhalb von ladeempf_alter liegt - und das sind bis zu
+        # 86400 Sekunden.
+        self.werte = {}
+        self.fehler = ""
+        # Die Wiederholungsbremse zuruecksetzen: dieses Schliessen war
+        # gewollt (die Themenliste wurde leer). Wer danach wieder ein Thema
+        # eintraegt, soll nicht bis zu einer Minute auf die erste Verbindung
+        # warten - die Bremse ist gegen einen unerreichbaren Broker gedacht,
+        # nicht gegen eine Aenderung in der Oberflaeche.
+        self._letzter_versuch = 0.0
 
 
 def horcher_themen(cfg: dict) -> set:
@@ -793,6 +1049,16 @@ def ladeempfehlung(horcher: Horcher, cfg: dict):
         return 0
     grenze = zahl(cfg.get("ladeempf_grenze"))
     if grenze is None:
+        # Die beiden Faelle darueber melden, dieser schwieg. Dabei ist er der
+        # einzige, den der Anwender selbst verursacht hat und selbst beheben
+        # kann: die Empfehlung steht auf ein, ein Thema ist eingetragen, ein
+        # frischer Wert kommt an - und die Schwelle daneben ist keine Zahl.
+        # Sichtbar war nur eine Empfehlung, die dauerhaft 0 sagt.
+        melde_gebremst("ladeempf_grenze",
+                       "Ladeempfehlung: die Schwelle ist keine Zahl (%r). Es wird "
+                       "dauerhaft 0 gesendet. Reiter Einstellungen, Feld "
+                       "Schwelle." % (str(cfg.get("ladeempf_grenze"))[:40],),
+                       1800)
         return 0
     return 1 if (z <= grenze if cfg.get("ladeempf_unter") else z >= grenze) else 0
 
@@ -844,26 +1110,83 @@ def zu_dict(objekt) -> dict:
             if isinstance(d, dict):
                 return d
     if hasattr(objekt, "__dict__"):
-        return {k: v for k, v in vars(objekt).items() if not k.startswith("_")}
+        roh = vars(objekt)
+        aus = {k: v for k, v in roh.items() if not k.startswith("_")}
+        # Was mit einem Unterstrich beginnt, wird uebergangen - das ist so
+        # gewollt. Bisher geschah es aber STILL, und der Fall, in dem es weh
+        # tut, sieht von aussen aus wie ein Fahrzeug ohne Werte: haelt eine
+        # kuenftige pybyd-Fassung ihre Nutzdaten in _daten oder __fields, bleibt
+        # hier ein leeres Verzeichnis, und im Reiter Test steht "0 Felder
+        # aufgeloest" - ohne einen Hinweis, woran es liegt. Darum wird gezaehlt
+        # und gesagt, sobald nichts uebrig bleibt.
+        if not aus and roh:
+            melde_gebremst(
+                "zu_dict_privat",
+                "Die Bibliothek liefert ein Objekt (%s), dessen %d Attribute "
+                "alle mit einem Unterstrich beginnen. Uebergangen wurden sie "
+                "deshalb alle, sichtbar blieb kein einziger Wert. Das ist kein "
+                "Fahrzeug ohne Daten, sondern eine pybyd-Fassung, die ihre "
+                "Werte anders ablegt."
+                % (type(objekt).__name__, len(roh)), 3600)
+        return aus
+    melde_gebremst(
+        "zu_dict_unbekannt",
+        "Die Bibliothek liefert ein Objekt (%s), das weder model_dump() noch "
+        "dict() noch __dict__ anbietet. Es wird als leer behandelt - es werden "
+        "keine Werte erfunden." % type(objekt).__name__, 3600)
     return {}
 
 
-def flach(d: dict, praefix: str = "") -> dict:
+# Grenzen fuer flach(). Die Antwort der Gegenstelle ist fremde Eingabe, und
+# ihre Groesse bestimmt niemand hier: das Ergebnis von flach() landet als
+# Rohdaten in einer Datei auf der Ramdisk des LoxBerry und wird bei --felder
+# vollstaendig ausgegeben. Ohne Grenzen genuegt eine tief verschachtelte oder
+# sehr lange Antwort, um entweder den Rekursionsanschlag von Python zu
+# treffen (der Dienst stirbt) oder die Ramdisk zu fuellen (dann schreibt kein
+# Plugin des Geraets mehr, nicht nur dieses).
+#
+# Die Zahlen sind gesetzt, nicht gemessen. Gemessen ist nur, was eine echte
+# BYD-Antwort heute braucht - und das ist nicht gemessen, weil es kein Konto
+# zum Messen gibt. 12 und 5000 liegen weit ueber allem, was die Feldtabelle
+# ansteuert (tiefster Kandidat: range_detail_list.0.range, also drei Ebenen).
+FLACH_TIEFE = 12
+FLACH_FELDER = 5000
+
+
+def flach(d: dict, praefix: str = "", tiefe: int = 0, aus: dict = None) -> dict:
     """Verschachtelte Verzeichnisse und Listen zu Punktpfaden aufloesen.
 
     Aus {"a": {"b": 1}} wird {"a.b": 1}, aus {"a": [{"b": 2}]} wird
     {"a.0.b": 2}. Damit kann eine Kandidatenliste auch auf einen Pfad zeigen,
     ohne dass der Leser die Struktur kennen muss.
+
+    Tiefe und Feldzahl sind begrenzt - Begruendung bei FLACH_TIEFE. Wird eine
+    Grenze erreicht, bricht das Aufloesen an dieser Stelle ab und meldet es;
+    es wird NICHT stillschweigend weniger geliefert. Was schon gefunden ist,
+    bleibt brauchbar.
     """
-    aus: dict = {}
+    if aus is None:
+        aus = {}
+    if tiefe > FLACH_TIEFE:
+        melde_gebremst("flach_tiefe",
+                       "Die Antwort der Gegenstelle ist tiefer als %d Ebenen "
+                       "verschachtelt. Ab hier wird nicht weiter aufgeloest "
+                       "(Pfad %s)." % (FLACH_TIEFE, praefix or "(Wurzel)"), 3600)
+        return aus
     for k, v in d.items():
+        if len(aus) >= FLACH_FELDER:
+            melde_gebremst("flach_felder",
+                           "Die Antwort der Gegenstelle traegt mehr als %d "
+                           "Felder. Der Rest wird nicht mehr aufgeloest."
+                           % FLACH_FELDER, 3600)
+            return aus
         name = ("%s.%s" % (praefix, k)) if praefix else str(k)
         if isinstance(v, dict):
-            aus.update(flach(v, name))
+            flach(v, name, tiefe + 1, aus)
         elif isinstance(v, (list, tuple)):
             for i, e in enumerate(v):
                 if isinstance(e, dict):
-                    aus.update(flach(e, "%s.%d" % (name, i)))
+                    flach(e, "%s.%d" % (name, i), tiefe + 1, aus)
                 elif isinstance(e, (list, tuple)):
                     continue
                 else:
@@ -1200,6 +1523,71 @@ def merker_schreiben(m: dict) -> None:
     json_schreiben(DATEI_MERKER, m)
 
 
+def nummern_zuordnen(vins: list, merker: dict) -> tuple[dict, bool]:
+    """VIN -> laufende Nummer, DAUERHAFT. Rueckgabe: (Zuordnung, geaendert).
+
+    Die Nummer ist eine ADRESSE: sie steht in Loxone als virtueller Eingang
+    fahrzeug1/SOC verdrahtet und im MQTT-Thema. Bisher entstand sie aus einer
+    Aufzaehlung ueber die nach VIN sortierte Fahrzeugliste. Der Kommentar dort
+    nannte den Schaden richtig - "fiele ein Fahrzeug weg, rueckte jedes
+    nachfolgende um eins vor" - und die Sortierung verhindert ihn NICHT. Sie
+    macht die Reihenfolge stabil, nicht die Nummern: verschwindet das
+    alphabetisch erste Fahrzeug aus dem Konto, wird das zweite zur Nummer 1,
+    und der Eingang in Loxone zeigt ohne jede Meldung auf ein anderes Auto.
+
+    Darum steht die Zuordnung im merker und ueberlebt jeden Neustart. Wer
+    einmal Nummer 2 war, bleibt Nummer 2 - auch wenn Nummer 1 fortfaellt und
+    erst recht, wenn sie zurueckkommt.
+
+    ERSTER LAUF: die Nummern werden genau so vergeben, wie es die bisherige
+    Fassung tat - nach VIN sortiert, beginnend bei 1. Eine bestehende Anlage
+    behaelt damit ihre Verdrahtung; der Umbau ist von aussen nicht zu merken.
+
+    FAHRZEUG OHNE VIN: es bekommt keine dauerhafte Nummer, denn es gibt nichts,
+    woran sie haengen koennte. Solche Fahrzeuge kommen NACH den zugeordneten in
+    der Reihenfolge der Liste dran. Das wird gemeldet, statt eine Stabilitaet
+    vorzutaeuschen, die es nicht gibt.
+    """
+    tab = merker.get("nummern")
+    if not isinstance(tab, dict):
+        tab = {}
+    tab = {str(k): int(v) for k, v in tab.items()
+           if str(k) and str(v).lstrip("-").isdigit() and int(v) > 0}
+    geaendert = False
+    mit_vin = sorted({v for v in vins if v})
+
+    if not tab and mit_vin:
+        # Erstlauf: die bisherige Vergabe nachbilden.
+        for i, v in enumerate(mit_vin, start=1):
+            tab[v] = i
+        geaendert = True
+    else:
+        belegt = set(tab.values())
+        for v in mit_vin:
+            if v in tab:
+                continue
+            n = 1
+            while n in belegt:
+                n += 1
+            tab[v] = n
+            belegt.add(n)
+            geaendert = True
+
+    zuordnung = {v: tab[v] for v in vins if v and v in tab}
+    ohne = [v for v in vins if not v]
+    if ohne:
+        melde_gebremst(
+            "vin_fehlt",
+            "%d Fahrzeug(e) liefern keine VIN. Sie bekommen KEINE feste Nummer "
+            "und koennen bei einer Aenderung am Konto die Nummer wechseln. "
+            "Die virtuellen Eingaenge in Loxone waeren dann still vertauscht."
+            % len(ohne), 86400)
+
+    if geaendert:
+        merker["nummern"] = tab
+    return (zuordnung, geaendert)
+
+
 def ladung_anhaengen(zeile: dict, tage: int) -> None:
     """Einen abgeschlossenen Ladevorgang in die CSV schreiben.
 
@@ -1241,10 +1629,32 @@ def ladung_anhaengen(zeile: dict, tage: int) -> None:
         if len(teile) > 2 and ganz(teile[2], 0) >= grenze:
             behalten.append(z)
     if len(behalten) < len(zeilen):
+        # UEBER EINE NEBENDATEI, nicht mit write_text auf das Original. Das
+        # ist die einzige Datei des Plugins, die eine Aufzeichnung ueber
+        # Monate fuehrt - und die einzige, die preupgrade.sh eigens ueber ein
+        # Update rettet. Ein write_text kappt die Datei auf null und fuellt sie
+        # dann neu: bricht der Strom oder das Dateisystem in diesem Augenblick
+        # weg, ist die gesamte Ladehistorie fort. Ausserdem sieht die
+        # Oberflaeche, die parallel liest, sonst eine halbe Datei.
+        text = "\n".join(behalten) + "\n"
+        tmp = datei.with_name(datei.name + ".tmp." + str(os.getpid()))
         try:
-            datei.write_text("\n".join(behalten) + "\n", encoding="utf-8")
-        except OSError:
-            pass
+            with tmp.open("w", encoding="utf-8") as f:
+                geschrieben = f.write(text)
+            if geschrieben != len(text):
+                tmp.unlink(missing_ok=True)
+                _LOG.error("Ladehistorie: nur %d von %d Zeichen geschrieben - "
+                           "die alte Datei bleibt unangetastet.",
+                           geschrieben, len(text))
+                return
+            os.replace(tmp, datei)
+        except OSError as err:
+            _LOG.error("Ladehistorie liess sich nicht kappen (%s) - die alte "
+                       "Datei bleibt unangetastet.", err)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def abgeleitetes_ergaenzen(nummer: str, d: dict, cfg: dict, merker: dict,
@@ -1562,7 +1972,11 @@ async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
             try:
                 erg = pruef(vin)
                 if inspect.isawaitable(erg):
-                    erg = await erg
+                    # Unter eine Frist stellen: schweigt die Gegenstelle hier,
+                    # steht der ganze Dienst - die Freischaltung laeuft im
+                    # selben Ablauf wie der naechste Abruf.
+                    erg = await mit_frist(erg, GRENZE_FREIGABE,
+                                          "Die Freischaltung der Steuer-PIN")
             except Exception as err:  # noqa: BLE001
                 return (0, "Die Steuer-PIN wurde nicht angenommen (%s): %s"
                            % (name, fehlertext(err)), {})
@@ -1651,15 +2065,36 @@ async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
 
 
 async def warteschlange(client, fahrzeuge: dict, cfg: dict, z: dict,
-                        freigeschaltet: set) -> bool:
-    """Arbeitet alle vorliegenden Befehle ab. True, wenn ein Sofortabruf
-    angefordert wurde."""
+                        freigeschaltet: set, letzter_versuch: int = 0) -> bool:
+    """Arbeitet die vorliegenden Befehle ab. True, wenn ein Sofortabruf
+    angefordert wurde UND die Bremse ihn durchlaesst.
+
+    Drei Sperren, die es vorher nicht gab - Begruendung bei BEFEHLE_JE_LAUF,
+    BEFEHL_HOECHSTALTER und TAKT_MIN:
+
+      * hoechstens BEFEHLE_JE_LAUF Befehle je Durchlauf,
+      * nichts, was aelter als BEFEHL_HOECHSTALTER Sekunden ist,
+      * und kein Sofortabruf schneller als der Mindesttakt.
+
+    Abgewiesene Befehle werden BEANTWORTET und ihre Datei geloescht. Ein
+    Befehl, der stumm liegen bleibt, staut sich sonst auf und geht beim
+    naechsten Mal doch noch ans Fahrzeug.
+    """
     try:
         ORDNER_BEFEHLE.mkdir(parents=True, exist_ok=True)
     except OSError:
         return False
     sofort = False
-    for datei in sorted(ORDNER_BEFEHLE.glob("*.json")):
+    jetzt = int(time.time())
+    dateien = sorted(ORDNER_BEFEHLE.glob("*.json"))
+    if len(dateien) > BEFEHLE_JE_LAUF:
+        melde_gebremst(
+            "warteschlange_voll",
+            "Es liegen %d Befehle vor. Hoechstens %d werden je Durchlauf "
+            "ausgefuehrt; die uebrigen werden abgewiesen und nicht "
+            "aufgehoben." % (len(dateien), BEFEHLE_JE_LAUF), 900)
+
+    for nr, datei in enumerate(dateien, start=1):
         b = json_lesen(datei)
         kennung = datei.stem
         try:
@@ -1669,9 +2104,45 @@ async def warteschlange(client, fahrzeuge: dict, cfg: dict, z: dict,
         if not b:
             antwort_schreiben(kennung, 0, "Befehlsdatei war leer oder unlesbar.")
             continue
+        if nr > BEFEHLE_JE_LAUF:
+            antwort_schreiben(kennung, 0,
+                              "Abgewiesen: es lagen %d Befehle vor, ausgefuehrt "
+                              "werden hoechstens %d je Durchlauf."
+                              % (len(dateien), BEFEHLE_JE_LAUF))
+            continue
+        # Das Alter nur pruefen, wenn ein Zeitstempel da ist. Fehlt er, ist
+        # der Befehl von Hand oder aus einer aelteren Fassung - dann wird er
+        # ausgefuehrt, statt ihn wegen einer fehlenden Angabe zu verwerfen.
+        alter = jetzt - int(b.get("ts") or 0)
+        if b.get("ts") and alter > BEFEHL_HOECHSTALTER:
+            antwort_schreiben(kennung, 0,
+                              "Abgewiesen: der Befehl ist %d s alt (erlaubt sind "
+                              "%d). Ein Schaltbefehl an ein Auto ist eine Absicht "
+                              "von jetzt." % (alter, BEFEHL_HOECHSTALTER))
+            _LOG.info("Befehl %s (%s) verworfen: %d s alt.",
+                      kennung, b.get("aktion"), alter)
+            continue
+        if b.get("aktion") == "abruf":
+            # Bremse gegen den Mindesttakt. Ohne sie umgeht jeder Klick auf
+            # "Jetzt abrufen" die Untergrenze, die fuer den Takt gilt - und
+            # zwar beliebig oft. Das BYD-Konto sieht dann eine Abrufrate, die
+            # ueber der liegt, die die Einstellungen ueberhaupt zulassen.
+            rest = TAKT_MIN - (jetzt - int(letzter_versuch or 0))
+            if letzter_versuch and rest > 0:
+                antwort_schreiben(kennung, 0,
+                                  "Abgewiesen: der letzte Abruf ist erst %d s her. "
+                                  "Der Mindestabstand betraegt %d s; der naechste "
+                                  "Abruf ist in %d s moeglich."
+                                  % (jetzt - int(letzter_versuch), TAKT_MIN, rest))
+                continue
         try:
-            ok, meldung, zusatz = await befehl_ausfuehren(
-                client, fahrzeuge, cfg, z, b, freigeschaltet)
+            # Unter eine Frist: die Warteschlange laeuft im selben Ablauf wie
+            # der Abruf. Ein Schaltbefehl, der nie zurueckkommt, hielte auch
+            # jede Messung an - und die Oberflaeche zeigte weiter alte Werte,
+            # ohne dass jemand saehe, warum.
+            ok, meldung, zusatz = await mit_frist(
+                befehl_ausfuehren(client, fahrzeuge, cfg, z, b, freigeschaltet),
+                GRENZE_BEFEHL, "Der Befehl an BYD")
         except Exception as err:  # noqa: BLE001 - jeder Fehler gehoert gemeldet
             ok, meldung, zusatz = 0, fehlertext(err), {}
         antwort_schreiben(kennung, ok, meldung, zusatz)
@@ -1684,6 +2155,49 @@ async def warteschlange(client, fahrzeuge: dict, cfg: dict, z: dict,
 # ---------------------------------------------------------------------------
 # Abbild schreiben
 # ---------------------------------------------------------------------------
+def stand_zusammenfuehren(alt: dict, neu: dict) -> dict:
+    """Bei einem TEILAUSFALL die bewahrten Werte mit den frischen mischen.
+
+    Ein Fahrzeug antwortet, ein zweites nicht. Der Sammelabruf gilt dann als
+    gelungen (ok=1), denn irgendetwas kam ja. Wuerde der neue Stand den alten
+    vollstaendig ersetzen, staende das ausgefallene Fahrzeug danach mit lauter
+    Leerwerten da, obwohl Minuten zuvor gute Messwerte vorlagen - und der
+    aufgefrischte Zeitstempel liesse es in Loxone frisch aussehen. ALTER waere
+    klein, die Werte waeren fort: die Ausfallerkennung schluege gerade dann
+    nicht an, wofuer sie da ist.
+
+    Darum: wer geliefert hat, kommt neu herein; wer nicht, behaelt seine
+    letzten Messwerte und wird mit ok=0 gekennzeichnet. Ueber dieses ok geht
+    fahrzeugN/OK=0 hinaus - daran, und nur daran, ist ein Teilausfall in Loxone
+    zu erkennen.
+
+    FEHLFOLGE bleibt dabei UNVERAENDERT stehen. Der Zaehler zaehlt Ausfaelle
+    DES ABRUFS, nicht die eines einzelnen Fahrzeugs; ihn hier hochzuzaehlen
+    oder auf 0 zu setzen waere beides eine Behauptung. Wer die Dauer eines
+    Teilausfalls braucht, bildet sie in Loxone aus dem Verlauf von OK.
+    """
+    alt = alt or {}
+    zusammen: dict = {}
+    for nummer, fz in (neu or {}).items():
+        vorher = alt.get(nummer)
+        if fz.get("ok") or not vorher:
+            # Geliefert - oder noch nie etwas gehabt, dann gibt es nichts zu
+            # bewahren, und die Leerwerte sind die Wahrheit.
+            zusammen[nummer] = fz
+            continue
+        behalten = dict(vorher)
+        behalten["ok"] = 0
+        # Die Stammangaben duerfen aus der frischen Antwort kommen: Name,
+        # Kennzeichen und Modell sind keine Messwerte und altern nicht.
+        for s in ("vin", "name", "kennzeichen", "marke", "modell",
+                  "antriebsart", "tbox"):
+            if fz.get(s):
+                behalten[s] = fz[s]
+        behalten["offen"] = fz.get("offen") or []
+        zusammen[nummer] = behalten
+    return zusammen
+
+
 def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
     """Schreibt den Zwischenspeicher.
 
@@ -1708,10 +2222,17 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
     json_schreiben(DATEI_CACHE, {"ts": int(stand.get("ts") or 0), "ok": ok,
                                  "fehler": fehler, "fahrzeuge": fahrzeuge}, 0o600)
 
-    praefix = str(cfg.get("mqtt_topic") or "byd").strip("/") or "byd"
+    praefix = mqtt_thema_saeubern(cfg.get("mqtt_topic") or "byd")
 
     if ok:
         for nummer, f in fahrzeuge.items():
+            # Auch hier je Fahrzeug: bei einem Teilausfall stehen im Satz des
+            # ausgefallenen Fahrzeugs die BEWAHRTEN Werte des letzten guten
+            # Abrufs. Sie noch einmal anzuhaengen erfaende eine Messung, die es
+            # nicht gab - der Verlauf zeigte eine waagerechte Linie statt einer
+            # Luecke.
+            if not f.get("ok", 1):
+                continue
             try:
                 verlauf_anhaengen(int(nummer), f.get("SOC"), f.get("REICHW"),
                                   cfg["verlauf_tage"])
@@ -1721,7 +2242,13 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
     if not cfg.get("mqtt_ein"):
         return lox
 
-    # Bei JEDEM Durchlauf gehen ok und ts hinaus, auch bei einer Stoerung.
+    # Bei JEDEM Durchlauf gehen ok, ts und die Fahrzeugzahl hinaus, auch bei
+    # einer Stoerung. Die drei tragen dieselbe Aussage wie die Statuszeile des
+    # HTTP-Endpunkts: ein Plugin, dessen MQTT-Meldung weniger enthaelt als
+    # seine Zeile, macht die Umstellung von dem einen auf den anderen Weg
+    # unmoeglich - und zwar unauffaellig. Dass sich beide Wege decken, prueft
+    # der Reiter Test an den erzeugten Stuecken (Pruefung 13, by_test.php);
+    # hier stand dafuer frueher eine Namensliste, die niemand las.
     #
     # ts statt ALTER: ueber MQTT ist das Alter beim Senden immer null. Wer die
     # beiden Wege gleich behandeln will, veroeffentlicht den Zeitstempel und
@@ -1730,10 +2257,40 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
     # und die letzten Werte stehen weiter im Broker.
     paare: dict = {"ok": ok, "ts": int(stand.get("ts") or 0),
                    "fahrzeuge": len(fahrzeuge)}
-    if ok:
-        for nummer, f in fahrzeuge.items():
+    for nummer, f in fahrzeuge.items():
+        # Je Fahrzeug entscheiden und nicht am Sammelergebnis: bei einem
+        # Teilausfall ist ok=1 (irgendetwas kam), aber fuer das ausgefallene
+        # Fahrzeug ist nichts Neues zu senden. Sein ok steht im Fahrzeugsatz.
+        # get("ok", 1) und nicht get("ok"): fehlt das Feld ganz, gilt der
+        # Sammelstatus. Es fehlt in Fahrzeugsaetzen, die nicht aus
+        # fahrzeug_abbilden() stammen - etwa aus einem Zwischenspeicher, der
+        # noch von einer aelteren Fassung liegt. Ein Teilausfall setzt ok
+        # ausdruecklich auf 0; nur das Fehlen wird wohlwollend gelesen. Sonst
+        # verstummte das Plugin nach einem Update, bis der erste Abruf durch
+        # ist - und niemand saehe, warum.
+        fz_ok = 1 if (ok and f.get("ok", 1)) else 0
+        if fz_ok:
             for feld in list(FELDER) + list(ABGELEITET):
                 paare["fahrzeug%s/%s" % (nummer, feld)] = f.get(feld)
+        else:
+            # Bei einer Stoerung bleiben die MESSWERTE stehen - sie sind das
+            # zuletzt Gemessene, und ein alter Messwert ist ehrlicher als eine
+            # erfundene Null. FEHLFOLGE und LADEEMPF sind aber keine Messwerte:
+            # die Hauptschleife schreibt sie im Stoerungszweig JETZT fort. Sie
+            # gingen bisher nur in die Datei und nicht ueber MQTT, weil die
+            # ganze Feldschleife hinter "if ok" hing. Loxone bekam ueber MQTT
+            # bei einem Ausfall unveraendert FEHLFOLGE=0 - also genau in dem
+            # Fall nicht, fuer den der Zaehler da ist.
+            for feld in ("FEHLFOLGE", "LADEEMPF"):
+                if feld in f:
+                    paare["fahrzeug%s/%s" % (nummer, feld)] = f.get(feld)
+        # OK je Fahrzeug: das globale ok liegt in Loxone auf einer anderen
+        # Adresse als der Fahrzeugbaustein. Ohne diese Zeile muesste jeder
+        # Baustein zusaetzlich das Sammel-ok verdrahtet bekommen - und selbst
+        # dann bliebe der Teilausfall unsichtbar, weil das Sammel-ok dabei 1
+        # ist. Was es NICHT sagt: wie lange dieses Fahrzeug schon ausfaellt.
+        # Diese Dauer ist in Loxone aus dem Verlauf von OK zu bilden.
+        paare["fahrzeug%s/OK" % nummer] = fz_ok
     versucht, schlecht = mqtt_senden(paare, praefix)
     lox["mqtt_versucht"] = versucht
     lox["mqtt_gescheitert"] = schlecht
@@ -1750,7 +2307,7 @@ def zustand_schreiben(**felder) -> None:
 # ---------------------------------------------------------------------------
 # Ein Abruf
 # ---------------------------------------------------------------------------
-async def einmal_abrufen(client, cfg: dict) -> tuple[dict, str, dict]:
+async def einmal_abrufen(client, cfg: dict, merker: dict = None) -> tuple[dict, str, dict]:
     """Rueckgabe: (Fahrzeuge, Fehlertext, Rohdaten)."""
     roh_alle: dict = {}
     liste = await client.get_vehicles()
@@ -1758,16 +2315,27 @@ async def einmal_abrufen(client, cfg: dict) -> tuple[dict, str, dict]:
         return ({}, "Das BYD-Konto fuehrt kein Fahrzeug.", roh_alle)
 
     fahrzeuge: dict = {}
-    # Nach VIN sortieren, damit die laufenden Nummern stabil bleiben. Eine
-    # Nummer, die aus einer Aufzaehlung entsteht, ist keine Adresse: fiele ein
-    # Fahrzeug weg, rueckte jedes nachfolgende um eins vor - und der virtuelle
-    # Eingang in Loxone zeigte still auf ein anderes Auto.
+
     def vin_von(f) -> str:
         d = flach(zu_dict(f))
         w, _ = hole(d, ("vin",))
         return str(w or "")
 
-    for i, fz in enumerate(sorted(liste, key=vin_von), start=1):
+    # Die laufende Nummer ist eine ADRESSE, keine Zaehlung. Sie kommt aus der
+    # dauerhaften Zuordnung im merker; warum das Sortieren allein nicht
+    # genuegt, steht bei nummern_zuordnen(). Ohne merker - beim Handaufruf -
+    # bleibt es bei der Aufzaehlung, dort wird nichts verdrahtet.
+    geordnet = sorted(liste, key=vin_von)
+    zuordnung: dict = {}
+    if merker is not None:
+        zuordnung, neu = nummern_zuordnen([vin_von(f) for f in geordnet], merker)
+        if neu:
+            # Sofort ablegen und nicht auf das Ende des Durchlaufs warten: eine
+            # Zuordnung, die einen Absturz nicht ueberlebt, ist keine.
+            merker_schreiben(merker)
+    naechste = max(list(zuordnung.values()) + [0]) + 1
+
+    for fz in geordnet:
         stamm = flach(zu_dict(fz))
         vin = str(hole(stamm, ("vin",))[0] or "")
         echtzeit: dict = {}
@@ -1787,40 +2355,48 @@ async def einmal_abrufen(client, cfg: dict) -> tuple[dict, str, dict]:
         if fehler_teil:
             abbild["ausfaelle"] = fehler_teil
             melde_gebremst("abschnitt_%s" % vin, "; ".join(fehler_teil), 900)
-        fahrzeuge[str(i)] = abbild
-        roh_alle[str(i)] = {"stamm": stamm, "echtzeit": echtzeit, "gps": gps}
+        if vin and vin in zuordnung:
+            nummer = str(zuordnung[vin])
+        else:
+            # Kein VIN, keine Adresse: hinten anhaengen. nummern_zuordnen()
+            # hat das bereits gemeldet.
+            nummer = str(naechste)
+            naechste += 1
+        fahrzeuge[nummer] = abbild
+        roh_alle[nummer] = {"stamm": stamm, "echtzeit": echtzeit, "gps": gps}
     return (fahrzeuge, "", roh_alle)
 
 
-class Zeitgrenze:
-    """Bricht einen haengenden Aufruf nach $sekunden ab.
+async def mit_frist(coro, sekunden: int, was: str = "Abruf"):
+    """Bricht eine haengende Coroutine nach $sekunden geordnet ab.
 
-    Der Wecker (signal.alarm) wirkt auch dort, wo eine Zeitgrenze der
-    Bibliothek nicht greift. Er geht nur im Hauptstrang - dienst() laeuft
-    dort, und SIGALRM ist sonst unbenutzt; belegt sind nur SIGTERM und SIGINT.
+    Vorher stand hier ein Wecker (signal.alarm). Der bricht zwar auch ab, aber
+    falsch: SIGALRM wirft die Ausnahme irgendwo im Hauptstrang, mitten in einen
+    laufenden await hinein. Die Bibliothek unter uns bekommt keine Gelegenheit
+    aufzuraeumen - offene Verbindungen und halbfertige Sitzungen bleiben
+    zurueck, und beim naechsten Durchlauf faengt es damit an. Ausserdem gibt es
+    SIGALRM nur dort, wo es SIGALRM gibt; die Abfrage hasattr(signal, "SIGALRM")
+    hiess in Wahrheit: auf manchen Systemen wirkt die Grenze gar nicht, ohne
+    dass jemand es merkt.
+
+    asyncio.wait_for bricht dagegen die AUFGABE ab. Der Abbruch kommt an der
+    Stelle an, an der die Coroutine gerade wartet, und die Bibliothek darf ihre
+    finally-Zweige laufen lassen.
+
+    Der Fehlertext bleibt derselbe, damit die Meldung im Protokoll nicht mit
+    dem Umbau eine andere wird.
     """
-
-    def __init__(self, sekunden: int, was: str = "Abruf"):
-        self.sekunden = int(sekunden)
-        self.was = was
-        self.alt = None
-
-    def __enter__(self):
-        if self.sekunden > 0 and hasattr(signal, "SIGALRM"):
-            self.alt = signal.signal(signal.SIGALRM, self._schlagen)
-            signal.alarm(self.sekunden)
-        return self
-
-    def _schlagen(self, *_):
+    sekunden = int(sekunden)
+    if sekunden <= 0:
+        return await coro
+    try:
+        return await asyncio.wait_for(coro, sekunden)
+    except asyncio.TimeoutError:
+        # In eine TimeoutError des Sprachkerns wandeln: die Aufrufer fangen
+        # Exception, und die Meldung soll sagen, WAS zu lange gebraucht hat.
+        # (Ab Python 3.11 ist asyncio.TimeoutError ohnehin dasselbe.)
         raise TimeoutError("%s hat laenger als %d s gebraucht - abgebrochen."
-                           % (self.was, self.sekunden))
-
-    def __exit__(self, *_):
-        if self.alt is not None:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, self.alt)
-            self.alt = None
-        return False
+                           % (was, sekunden)) from None
 
 
 # ---------------------------------------------------------------------------
@@ -1863,99 +2439,150 @@ async def dienst_lauf(einmal: bool) -> int:
     merker = merker_lesen()
 
     client = None
+    _sitzung = None
     try:
-        async with BydClient(konf) as client:
-            while _LAUF:
-                cfg = config()   # Aenderungen aus der Oberflaeche ohne Neustart
-                # Abos nachziehen, nicht die Verbindung neu aufbauen: ein
-                # Neuaufbau kostet die bereits empfangenen zurueckbehaltenen
-                # Werte.
-                horcher.sicherstellen(horcher_themen(cfg))
-                ok = 0
-                fehler = ""
-                fahrzeuge: dict = {}
-                try:
-                    with Zeitgrenze(GRENZE_ABRUF, "Der Abruf bei BYD"):
-                        fahrzeuge, fehler, roh = await einmal_abrufen(client, cfg)
-                    if roh:
-                        json_schreiben(DATEI_ROH, {"ts": int(time.time()), "roh": roh},
-                                       0o600)
-                    ok = 1 if fahrzeuge and any(f.get("ok") for f in fahrzeuge.values()) else 0
-                    fehler_folge = 0 if ok else fehler_folge + 1
-                except Exception as err:  # noqa: BLE001
-                    fehler = fehlertext(err)
-                    fehler_folge += 1
-                    melde_gebremst("abruf", "Abruf fehlgeschlagen: " + fehler, 900)
+        # Die ANMELDUNG unter eine Frist stellen. Sie steckt im Betreten des
+        # Kontextmanagers - und ein "async with" laesst sich von aussen nicht
+        # befristen. asyncio.timeout als Kontextmanager gaebe es, aber erst ab
+        # Python 3.11; die Zielsysteme fuehren auch aeltere. Darum wird der
+        # Manager hier von Hand betreten und im finally von Hand verlassen,
+        # damit die Sitzung auf JEDEM Weg zugeht.
+        #
+        # Ohne diese Frist hielt eine Gegenstelle, die die Verbindung annimmt
+        # und dann schweigt, den Dienst schon VOR dem ersten Abruf an - und
+        # zwar unbegrenzt. Die Grenze am Abruf half da nicht, denn es kam nie
+        # zu einem Abruf.
+        _sitzung = BydClient(konf)
+        client = await mit_frist(_sitzung.__aenter__(), GRENZE_ANMELDUNG,
+                                 "Die Anmeldung bei BYD")
+        # Wann wurde zuletzt bei BYD angefragt - gelungen ODER nicht. Nicht
+        # stand["ts"]: der bleibt bei einer Stoerung absichtlich stehen, und
+        # die Bremse gegen den Mindesttakt oeffnete dann gerade dann, wenn die
+        # Gegenstelle ohnehin zickt.
+        letzter_versuch = 0
+        # Einmal erzwungen, bevor der erste Abruf laeuft: sonst gaebe es beim
+        # Start eine Luecke von der Laenge eines Abrufs, in der der Waechter
+        # eine alte oder gar keine Datei saehe.
+        herzschlag(True)
+        while _LAUF:
+            herzschlag()
+            cfg = config()   # Aenderungen aus der Oberflaeche ohne Neustart
+            # Abos nachziehen, nicht die Verbindung neu aufbauen: ein
+            # Neuaufbau leert den Zwischenspeicher des Horchers. Ausfuehrlich
+            # bei der Klasse Horcher, Punkt 3.
+            horcher.sicherstellen(horcher_themen(cfg))
+            ok = 0
+            fehler = ""
+            fahrzeuge: dict = {}
+            try:
+                # VOR dem Abruf setzen und nicht danach: gelingt er nicht,
+                # zaehlt der Versuch trotzdem gegen die Bremse.
+                letzter_versuch = int(time.time())
+                fahrzeuge, fehler, roh = await mit_frist(
+                    einmal_abrufen(client, cfg, merker),
+                    GRENZE_ABRUF, "Der Abruf bei BYD")
+                if roh:
+                    json_schreiben(DATEI_ROH, {"ts": int(time.time()), "roh": roh},
+                                   0o600)
+                ok = 1 if fahrzeuge and any(f.get("ok") for f in fahrzeuge.values()) else 0
+                fehler_folge = 0 if ok else fehler_folge + 1
+            except Exception as err:  # noqa: BLE001
+                fehler = fehlertext(err)
+                fehler_folge += 1
+                melde_gebremst("abruf", "Abruf fehlgeschlagen: " + fehler, 900)
 
-                # Die gerechneten Groessen erst NACH dem Abruf und nur auf
-                # frischen Werten: sie leiten aus SOC und Kilometerstand ab, und
-                # aus alten Zahlen entstuende ein Verbrauch, der aussieht wie
-                # gemessen.
-                empfehlung = ladeempfehlung(horcher, cfg)
-                if ok and fahrzeuge:
-                    for nummer, fz in fahrzeuge.items():
-                        try:
-                            abgeleitetes_ergaenzen(nummer, fz, cfg, merker,
-                                                   fehler_folge, empfehlung)
-                        except Exception as err:  # noqa: BLE001
-                            _LOG.error("Gerechnete Groessen, Fahrzeug %s: %s",
-                                       nummer, fehlertext(err))
-                    merker_schreiben(merker)
-                    stand = {"ts": int(time.time()), "fahrzeuge": fahrzeuge}
-                else:
-                    # Bei einer Stoerung bleiben die Messwerte stehen - aber der
-                    # Stoerungszaehler und die Ladeempfehlung gelten JETZT und
-                    # werden fortgeschrieben. Sonst meldete Loxone bei einem
-                    # Ausfall unveraendert FEHLFOLGE=0.
-                    for fz in (stand.get("fahrzeuge") or {}).values():
-                        fz["FEHLFOLGE"] = int(fehler_folge)
-                        fz["LADEEMPF"] = empfehlung
-                abbild_schreiben(stand, cfg, ok, fehler)
-                zustand_schreiben(ok=ok, fehler=fehler, fehler_folge=fehler_folge,
-                                  pid=os.getpid(), intervall=cfg["intervall"],
-                                  anzahl_fahrzeuge=len(stand["fahrzeuge"]),
-                                  konfiguration=bericht,
-                                  horcher=sorted(horcher.themen),
-                                  horcher_verbunden=1 if horcher.verbunden else 0,
-                                  horcher_fehler=horcher.fehler)
-
-                # Vorklimatisierung. Sie steht NACH dem Abbild, damit die
-                # Oberflaeche den Stand schon zeigt, und VOR der Wartezeit,
-                # damit sie nicht einen Takt zu spaet kommt.
-                try:
-                    auftrag = vorklimatisierung(horcher, cfg, merker)
-                    if auftrag:
-                        ok2, meldung, _z = await befehl_ausfuehren(
-                            client, stand["fahrzeuge"], cfg, z, auftrag, freigeschaltet)
-                        _LOG.info("Vorklimatisierung: ok=%s %s", ok2, meldung)
-                        merker_schreiben(merker)
-                except Exception as err:  # noqa: BLE001
-                    _LOG.error("Vorklimatisierung: %s", fehlertext(err))
-
-                if einmal:
-                    return 0 if ok else 1
-
-                rest = cfg["intervall"]
-                if fehler_folge >= 3:
-                    rest = min(3600, cfg["intervall"] * min(8, fehler_folge))
-                    melde_gebremst("bremse",
-                                   "%d Fehlversuche - naechster Abruf erst in %d s."
-                                   % (fehler_folge, rest), 1800)
-                while rest > 0 and _LAUF:
+            # Die gerechneten Groessen erst NACH dem Abruf und nur auf
+            # frischen Werten: sie leiten aus SOC und Kilometerstand ab, und
+            # aus alten Zahlen entstuende ein Verbrauch, der aussieht wie
+            # gemessen.
+            empfehlung = ladeempfehlung(horcher, cfg)
+            if ok and fahrzeuge:
+                for nummer, fz in fahrzeuge.items():
                     try:
-                        if await warteschlange(client, stand["fahrzeuge"], cfg, z,
-                                               freigeschaltet):
-                            break     # Sofortabruf angefordert
+                        abgeleitetes_ergaenzen(nummer, fz, cfg, merker,
+                                               fehler_folge, empfehlung)
                     except Exception as err:  # noqa: BLE001
-                        _LOG.error("Warteschlange: %s", fehlertext(err))
-                    await asyncio.sleep(1)
-                    rest -= 1
+                        _LOG.error("Gerechnete Groessen, Fahrzeug %s: %s",
+                                   nummer, fehlertext(err))
+                merker_schreiben(merker)
+                # Teilausfall: die bewahrten Werte mit den frischen
+                # mischen. Warum ersetzen falsch waere, steht bei
+                # stand_zusammenfuehren().
+                stand = {"ts": int(time.time()),
+                         "fahrzeuge": stand_zusammenfuehren(
+                             stand.get("fahrzeuge") or {}, fahrzeuge)}
+            else:
+                # Bei einer Stoerung bleiben die Messwerte stehen - aber der
+                # Stoerungszaehler und die Ladeempfehlung gelten JETZT und
+                # werden fortgeschrieben. Sonst meldete Loxone bei einem
+                # Ausfall unveraendert FEHLFOLGE=0.
+                for fz in (stand.get("fahrzeuge") or {}).values():
+                    fz["FEHLFOLGE"] = int(fehler_folge)
+                    fz["LADEEMPF"] = empfehlung
+            abbild_schreiben(stand, cfg, ok, fehler)
+            zustand_schreiben(ok=ok, fehler=fehler, fehler_folge=fehler_folge,
+                              pid=os.getpid(), intervall=cfg["intervall"],
+                              anzahl_fahrzeuge=len(stand["fahrzeuge"]),
+                              konfiguration=bericht,
+                              horcher=sorted(horcher.themen),
+                              horcher_verbunden=1 if horcher.verbunden else 0,
+                              horcher_fehler=horcher.fehler)
+
+            # Vorklimatisierung. Sie steht NACH dem Abbild, damit die
+            # Oberflaeche den Stand schon zeigt, und VOR der Wartezeit,
+            # damit sie nicht einen Takt zu spaet kommt.
+            try:
+                auftrag = vorklimatisierung(horcher, cfg, merker)
+                if auftrag:
+                    ok2, meldung, _z = await mit_frist(
+                        befehl_ausfuehren(client, stand["fahrzeuge"], cfg, z,
+                                          auftrag, freigeschaltet),
+                        GRENZE_BEFEHL, "Die Vorklimatisierung")
+                    _LOG.info("Vorklimatisierung: ok=%s %s", ok2, meldung)
+                    merker_schreiben(merker)
+            except Exception as err:  # noqa: BLE001
+                _LOG.error("Vorklimatisierung: %s", fehlertext(err))
+
+            if einmal:
+                return 0 if ok else 1
+
+            rest = cfg["intervall"]
+            if fehler_folge >= 3:
+                rest = min(3600, cfg["intervall"] * min(8, fehler_folge))
+                melde_gebremst("bremse",
+                               "%d Fehlversuche - naechster Abruf erst in %d s."
+                               % (fehler_folge, rest), 1800)
+            while rest > 0 and _LAUF:
+                # Auch waehrend der Wartezeit schlagen: sie kann nach mehreren
+                # Fehlversuchen bis zu einer Stunde dauern, und ein Dienst, der
+                # planmaessig wartet, ist kein haengender.
+                herzschlag()
+                try:
+                    # letzter_versuch mitgeben: daran haengt die Bremse gegen
+                    # den Mindesttakt. Die Zahl stand bisher nur im Abbild und
+                    # wurde von niemandem gelesen.
+                    if await warteschlange(client, stand["fahrzeuge"], cfg, z,
+                                           freigeschaltet, letzter_versuch):
+                        break     # Sofortabruf angefordert und durchgelassen
+                except Exception as err:  # noqa: BLE001
+                    _LOG.error("Warteschlange: %s", fehlertext(err))
+                await asyncio.sleep(1)
+                rest -= 1
     except Exception as err:  # noqa: BLE001
         meldung = fehlertext(err)
         _LOG.error("Dienst abgebrochen: %s", meldung)
         zustand_schreiben(ok=0, fehler=meldung)
         return 1
     finally:
+        # Die Sitzung von Hand schliessen - das Gegenstueck zum Betreten
+        # oben. Ein eigenes try darum: schlaegt das Schliessen fehl, darf es
+        # den Horcher nicht mit sich reissen.
+        if _sitzung is not None:
+            try:
+                await _sitzung.__aexit__(None, None, None)
+            except Exception as err:  # noqa: BLE001
+                _LOG.error("Die BYD-Sitzung liess sich nicht schliessen: %s",
+                           fehlertext(err))
         # Jeder Fehlerweg schliesst zu. Ein Horcher, der an einem
         # Abbruch haengen bleibt, haelt eine Verbindung zum Broker offen -
         # eine Ressource, die niemand zaehlt.
@@ -1985,7 +2612,11 @@ async def felder_zeigen() -> int:
     for k, v in sorted(bericht.items()):
         print("[INFO] Konfiguration: %-9s -> %s" % (k, v))
     async with BydClient(konf) as client:
-        fahrzeuge, fehler, roh = await einmal_abrufen(client, cfg)
+        # Den merker MITGEBEN, damit dieser Handaufruf dieselben Nummern zeigt
+        # wie der laufende Dienst. Ohne ihn zaehlte er neu durch, und wer die
+        # Ausgabe zum Verdrahten benutzt, verdrahtete bei mehreren Fahrzeugen
+        # womoeglich das falsche.
+        fahrzeuge, fehler, roh = await einmal_abrufen(client, cfg, merker_lesen())
     if fehler:
         print("[INFO] " + fehler)
     if not roh:
@@ -2272,10 +2903,26 @@ def selbsttest() -> int:
                               % ("OK]  " if not offen else "INFO]", nummer,
                                  len(FELDER) - len(offen), len(FELDER),
                                  (", ohne Treffer: " + ", ".join(offen)) if offen else ""))
-                if getroffen:
-                    zeilen.append("[INFO] Getroffene Namen: %s"
-                                  % ", ".join("%s=%s" % (k, v)
-                                              for k, v in sorted(getroffen.items())))
+                # Getrennt ausgeben. Die Zahl darueber zaehlt FELDER; das
+                # Verzeichnis 'getroffen' fuehrt aber auch die sieben
+                # Stammangaben (vin, name, kennzeichen, marke, modell,
+                # antriebsart, tbox). Zusammen ausgegeben las sich das wie ein
+                # Widerspruch: "8 von 14 Feldern aufgeloest" und darunter 15
+                # getroffene Namen. Wer nachzaehlte, zaehlte zwei verschiedene
+                # Mengen.
+                tr_feld = {k: v for k, v in getroffen.items() if k in FELDER}
+                tr_stamm = {k: v for k, v in getroffen.items() if k not in FELDER}
+                if tr_feld:
+                    zeilen.append("[INFO] Getroffene Feldnamen (%d): %s"
+                                  % (len(tr_feld),
+                                     ", ".join("%s=%s" % (k, v)
+                                               for k, v in sorted(tr_feld.items()))))
+                if tr_stamm:
+                    zeilen.append("[INFO] Getroffene Stammangaben (%d, zaehlen "
+                                  "nicht zu den Feldern): %s"
+                                  % (len(tr_stamm),
+                                     ", ".join("%s=%s" % (k, v)
+                                               for k, v in sorted(tr_stamm.items()))))
     else:
         zeilen.append("[INFO] Es hat noch kein Abruf stattgefunden")
 

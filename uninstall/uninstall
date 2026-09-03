@@ -1,6 +1,8 @@
 #!/bin/bash
 # BYD Autos - uninstall
-# command <TEMPFOLDER> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
+# Aufrufform des Installers:
+#   $1 KENNUNG (zehnstellig, KEIN Pfad)   $2 NAME   $3 FOLDER
+#   $4 VERSION                            $5 BASEFOLDER (LoxBerry-Wurzel)
 #
 # Laeuft als root beim Deinstallieren.
 #
@@ -52,11 +54,26 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 # Systempfad - LoxBerry laesst sich anderswohin installieren, und der
 # Plugin-Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu sehen.
 # Dieses Skript liegt unter <home>/data/plugins/<ordner>/uninstall/
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../../.." 2>/dev/null && pwd)
+# Und die Wurzel wird GEPRUEFT, nicht nur auf Vorhandensein: ein Verzeichnis,
+# das es gibt, ist noch keine LoxBerry-Wurzel. Traefe der Rueckfall daneben,
+# griffe der Fehlerzweig unten NICHT - und Benutzername, Passwort und Steuer-PIN
+# blieben in <ordner>.backup.zugang.json liegen, waehrend das Skript <OK>
+# meldet. Fail closed: im Zweifel wird nichts entfernt und es wird gesagt.
+ist_wurzel() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
+}
+if ! ist_wurzel "$BASE"; then
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    BASE=""
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if ist_wurzel "$v"; then BASE="$v"; break; fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
 fi
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    echo "<FAIL> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen."
+if ! ist_wurzel "$BASE"; then
+    echo "<FAIL> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen"
+    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins und data/plugins)."
     echo "<FAIL> Es wurde NICHTS entfernt. Die Zugangsdaten des BYD-Kontos liegen"
     echo "<FAIL> weiterhin in config/plugins/$PFOLDER.backup.zugang.json."
     exit 1
@@ -136,8 +153,19 @@ rm -f "$PIDDATEI" "$PDATA/soll_laufen" 2>/dev/null
 for f in byd.json zugang.json; do
     BK="$PCONFIG/$PFOLDER.backup.$f"
     if [ -f "$BK" ]; then
-        # Ueberschreiben, dann entfernen: nur ein rm liesse den Inhalt auf der
-        # Karte stehen, bis der Platz neu vergeben wird.
+        # Ueberschreiben, dann entfernen - und die Zusage dazu bleibt klein.
+        #
+        # BERICHTIGT am 03.09.2026. Hier stand, ein blosses rm liesse den
+        # Inhalt "auf der Karte stehen" und das dd verhindere das. Der zweite
+        # Halbsatz traegt nicht: auf einer SD-Karte und auf eMMC entscheidet
+        # der Flash-Controller selbst, wohin geschrieben wird (Wear-Levelling),
+        # und ein Dateisystem mit Journal oder Copy-on-Write schreibt ohnehin
+        # woandershin. Der alte Block kann physisch stehen bleiben.
+        #
+        # Das Ueberschreiben ist trotzdem richtig - es ERSCHWERT das
+        # Wiederfinden. Es LOESCHT nicht sicher, und eine unzutreffende
+        # Sicherheitszusage im Quelltext ist schlimmer als gar keine: sie wird
+        # weitergegeben.
         LAENGE=$(stat -c %s "$BK" 2>/dev/null || echo 0)
         case "$LAENGE" in ''|*[!0-9]*) LAENGE=0 ;; esac
         [ "$LAENGE" -gt 0 ] && dd if=/dev/zero of="$BK" bs=1 count="$LAENGE" \
@@ -147,8 +175,32 @@ for f in byd.json zugang.json; do
 done
 rm -f "$PCONFIG/$PFOLDER.lief_vorher" 2>/dev/null
 
-echo "<INFO> Benutzername, Passwort und Steuer-PIN des BYD-Kontos sind damit vom"
-echo "<INFO> LoxBerry entfernt."
+# Die Ladehistorie, die preupgrade.sh ueber ein Update traegt. Sie enthaelt
+# kein Geheimnis, wird also nicht ueberschrieben - aber sie muss weg: eine
+# liegengebliebene Zweitschrift ueberlebt die Deinstallation und braechte
+# einer spaeteren NEUinstallation die Daten des Vorgaengers zurueck. Eine
+# saubere Neuinstallation waere dann keine.
+if [ -f "$PCONFIG/$PFOLDER.backup.verlauf.tar" ]; then
+    rm -f "$PCONFIG/$PFOLDER.backup.verlauf.tar" \
+        && echo "<OK> Gesicherte Ladehistorie entfernt: $PFOLDER.backup.verlauf.tar"
+fi
+
+# Nachgezaehlt statt behauptet: "entfernt" wird nur gemeldet, wenn wirklich
+# nichts mehr daliegt. Ein "alles entfernt" nach einem fehlgeschlagenen rm
+# waere die schlechteste Zeile dieser Datei.
+REST=0
+for f in byd.json zugang.json verlauf.tar; do
+    [ -e "$PCONFIG/$PFOLDER.backup.$f" ] && REST=$((REST + 1))
+done
+[ -e "$PCONFIG/$PFOLDER.lief_vorher" ] && REST=$((REST + 1))
+if [ "$REST" -eq 0 ]; then
+    echo "<INFO> Benutzername, Passwort und Steuer-PIN des BYD-Kontos sind damit vom"
+    echo "<INFO> LoxBerry entfernt."
+else
+    echo "<FAIL> $REST Datei(en) neben dem Konfigordner liessen sich NICHT entfernen."
+    echo "<FAIL> Bitte in $PCONFIG nach $PFOLDER.backup.* und $PFOLDER.lief_vorher"
+    echo "<FAIL> sehen - darin stehen die Zugangsdaten des BYD-Kontos."
+fi
 
 # ---------------------------------------------------------------
 # 3. Was LoxBerry selbst wegraeumt, und was stehen bleibt

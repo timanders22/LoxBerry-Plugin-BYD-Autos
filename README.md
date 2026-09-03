@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.2
+Version 0.9.6
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -12,7 +12,7 @@ suchen lassen, blinken und die Fenster schließen. Dazu kommen fünf
 Vorklimatisierung am Abfahrtsassistenten und ein **Trockenlauf** für jeden
 schreibenden Befehl.
 
-> ## Fassung 0.9.0 — ungeprüft, und das ist wörtlich gemeint
+> ## Fassung 0.9.x — ungeprüft, und das ist wörtlich gemeint
 >
 > **BYD veröffentlicht keine Beschreibung seiner Schnittstelle.** Das Plugin
 > wurde ohne BYD-Konto und ohne Fahrzeug gebaut. Was es über Feldnamen und
@@ -196,9 +196,22 @@ niemandem auf.
 ### Reiter *Ladevorgänge*
 
 Ein Ladevorgang wird am Wechsel des Feldes `LAEDT` erkannt; BYD meldet ihn
-nicht. Die Liste liegt in `verlauf/ladungen.csv` im Datenordner. Sie überlebt
-eine Aktualisierung — der Installateur kopiert über `data/`, er räumt es nicht
-aus (nachgelesen in `sbin/plugininstall.pl`) —, aber **keine Deinstallation**.
+nicht. Die Liste liegt in `verlauf/ladungen.csv` im Datenordner.
+
+Bis 0.9.5 stand hier, sie überlebe eine Aktualisierung, „der Installateur
+kopiert über `data/`, er räumt es nicht aus (nachgelesen in
+`sbin/plugininstall.pl`)". Das war falsch, und der Beleg machte es schlimmer:
+`plugininstall.pl` ruft `purge_installation` an **zwei** Stellen auf — beim
+Deinstallieren (`:233`) und im Upgrade-Zweig (`:886`) —, und `:1626` löscht
+`data/plugins/<ordner>/` ohne jede Bedingung. Der Datenordner wird also bei
+**jeder** Aktualisierung vollständig abgeräumt.
+
+Seit 0.9.6 trägt das Plugin die Liste selbst hinüber: `preupgrade.sh` legt sie
+als `config/plugins/<ordner>.backup.verlauf.tar` **neben** den
+Konfigurationsordner, `postinstall.sh` holt sie zurück. Sie überlebt eine
+Aktualisierung also, weil das Plugin sie trägt — nicht, weil der Ordner bliebe.
+Eine **Deinstallation** überlebt sie nicht; `uninstall` entfernt auch diese
+Zweitschrift.
 Beginn und Ende sind die Zeitpunkte der *Abrufe*, an denen der Wechsel auffiel;
 sie liegen bis zu einem Taktabstand neben der Wirklichkeit. Die kWh sind
 gerechnet, nicht gemessen: Ladeverluste stecken nicht darin.
@@ -281,16 +294,31 @@ auch nicht prüfen. Sie stehen hier als Auftrag, nicht als Ergebnis:
 
 ## Selbstaktualisierung
 
-`AUTOMATIC_UPDATES` steht auf **false**, und die Adressen in `release.cfg` sind
-leer. Zu dieser Fassung gibt es kein Repository, keinen Tag und kein Release —
-ein eingeschaltetes Auto-Update mit Adressen, die es nicht gibt, bietet jeder
-Anlage eine Fassung an, die keine laden kann. Einzuschalten ist es erst in
-dieser Reihenfolge: Inhalt schieben, taggen, das Tag-Archiv **messen** (HTTP
-200), danach `release.cfg` und `prerelease.cfg` setzen.
+`AUTOMATIC_UPDATES` steht auf **true**, und `release.cfg` wie `prerelease.cfg`
+führen Fassung und Adressen des veröffentlichten Standes.
 
-## Mitgelieferte Werkzeuge
+Dieser Abschnitt beschrieb bis 0.9.5 den Zustand vor der ersten
+Veröffentlichung — „steht auf false", „die Adressen sind leer", „kein
+Repository, kein Tag, kein Release". Zu dem Zeitpunkt war jedes der drei
+bereits überholt: `plugin.cfg` trug `AUTOMATIC_UPDATES=true`, beide `.cfg`
+trugen die Adressen, und Tag wie Release lagen vor. Ein Abschnitt, der den
+eigenen Auslieferungszustand falsch beschreibt, ist schlimmer als keiner: er
+wird geglaubt.
 
-Sie liegen im Arbeitsordner unter `Werkzeuge/` und gehören nicht ins Archiv:
+**Die Nummern in `release.cfg` und `prerelease.cfg` gehen der Fassung bewusst
+hinterher.** Sie nennen, was auf GitHub als Tag wirklich liegt — nicht, was im
+Arbeitsordner entsteht. Angehoben werden sie erst, wenn der neue Tag existiert
+und sein Archiv gemessen ist (HTTP 200). Die Reihenfolge ist: Inhalt schieben,
+taggen, Tag-Archiv messen, **danach** beide `.cfg` setzen — am besten mit
+`Werkzeuge/fassung_setzen.py ORDNER <nummer> --auch-release`, das sich
+weigert, solange der Tag fehlt.
+
+## Werkzeuge im Arbeitsordner — nicht im Archiv
+
+Der Abschnitt hieß bis 0.9.5 „Mitgelieferte Werkzeuge" und sagte im nächsten
+Satz, dass sie nicht ins Archiv gehören. Beides zusammen ergibt keinen Sinn:
+wer das Plugin installiert, bekommt sie nicht. Sie liegen im Arbeitsordner
+unter `Werkzeuge/` und dienen dem Bauen, nicht dem Betrieb:
 
 * `byd_sprache_erzeugen.py` — erzeugt beide Sprachdateien aus **einer** Quelle
   und weist ab, statt die Hälfte zu schreiben: fehlende Schlüssel, Auszeichnung
@@ -298,6 +326,94 @@ Sie liegen im Arbeitsordner unter `Werkzeuge/` und gehören nicht ins Archiv:
   Platzhalter. In vier Richtungen geeicht.
 * `byd_symbol_erzeugen.py` — erzeugt `icon.svg` **und** die vier PNG aus
   derselben Geometrietabelle, damit Vektor und Bild nicht auseinanderlaufen.
+
+## Fassung 0.9.6 — eine Durchsicht Zeile für Zeile
+
+Diese Fassung ändert keine Funktion und keine Adresse. Sie behebt, was eine
+Durchsicht des veröffentlichten Standes 0.9.5 gefunden hat. Jeder Punkt hat
+einen Prüfstand in `Pruefung-BYD-Autos-0.9.6/`, und jeder ist **in beide
+Richtungen** geeicht: gegen 0.9.6 grün, gegen 0.9.5 rot.
+
+**Was falsch war und jetzt stimmt**
+
+* **Der Horcher meldete „verbunden", wenn der Broker die Anmeldung ablehnte.**
+  `on_connect` feuert auch bei einem abgelehnten CONNACK (Code 4, Code 5), und
+  der Rückgabecode wurde nicht angesehen. Der Zustand meldete
+  `horcher_verbunden=1`, der Reiter Test setzte einen grünen Haken, und es kam
+  nie eine Nachricht an. Jetzt wird der Code ausgewertet und der Grund benannt.
+  (`horcher_connack.py`)
+* **Bei einer Störung gingen `FEHLFOLGE` und `LADEEMPF` nicht über MQTT
+  hinaus.** Die Feldschleife hing hinter `if ok`. Loxone las bei einem Ausfall
+  unverändert `FEHLFOLGE=0` — also genau dann nicht, wofür der Zähler da ist.
+  (`abbild_mqtt.py`)
+* **Ein Teilausfall ließ ein Fahrzeug frisch aussehen, das nichts geliefert
+  hatte.** Antwortete ein Fahrzeug und ein zweites nicht, ersetzte der neue
+  Stand den alten vollständig: die Messwerte des ausgefallenen waren fort, der
+  Zeitstempel aber aufgefrischt. Jetzt wird zusammengeführt, und `fahrzeugN/OK`
+  sagt je Fahrzeug, ob dieser Abruf etwas gebracht hat. (`teilausfall.py`)
+* **Die Fahrzeugnummer rückte vor, wenn ein Auto aus dem Konto fiel.** Sie
+  entstand aus einer Aufzählung; die Sortierung nach VIN machte die
+  *Reihenfolge* stabil, nicht die *Nummern*. Der virtuelle Eingang in Loxone
+  zeigte danach ohne Meldung auf ein anderes Auto. Die Zuordnung steht jetzt im
+  `merker.json` und überlebt jeden Neustart; beim ersten Lauf vergibt sie
+  genau die Nummern, die die alte Fassung vergeben hätte. (`fahrzeugnummer.py`)
+* **Nur der Abruf hing an einer Zeitgrenze.** Anmeldung, Schreibbefehle und die
+  Freischaltung der Steuer-PIN hatten keine — schwieg die Gegenstelle bei der
+  Anmeldung, stand der Dienst schon vor dem ersten Abruf. Dazu war die Grenze
+  ein Wecker (`signal.alarm`), der die Ausnahme irgendwo hineinwirft, statt die
+  Aufgabe geordnet abzubrechen. Jetzt `asyncio.wait_for` und drei weitere
+  Fristen. (`fristen.py`)
+* **Die Befehlswarteschlange hatte weder Deckel noch Höchstalter.** Nach einem
+  Stillstand ging jeder in dieser Zeit angeklickte Befehl nacheinander ans
+  Fahrzeug — die Klimaanlage, die um sieben Uhr gewollt war, lief um acht. Und
+  jeder Klick auf *Jetzt abrufen* umging den Mindesttakt, beliebig oft.
+  (`warteschlange.py`)
+* **Der Wächter im Cron fragte nur, ob der Prozess lebt.** Ein Dienst, der in
+  einem Aufruf hängt, erfüllte das tadellos und lieferte nichts. Die
+  Hauptschleife frischt jetzt alle 30 s ein Lebenszeichen auf, und der Wächter
+  misst dessen Alter. (`waechter_herzschlag.py`)
+* **Zwei Knöpfe im Reiter Einstellungen taten gar nichts.** *Sichern* und
+  *Zurückspielen* trugen keine Formularmarke; der Wachposten wies den POST ab,
+  und die Seite lud aus, als wäre nichts gewesen. Der Reiter Test prüft das
+  jetzt (Prüfung 17) — gemessen: 0.9.5 führt 15 Formulare und 13 Marken.
+  (`formularmarken.py`, `sicherung_knopf.py`)
+* **Ein einziger Einwand verwarf das ganze Einstellungsformular.** Wer das
+  Abrufintervall ändert und sich dabei in der Heimatposition vertippt, verlor
+  auch das Intervall. Jetzt wird gespeichert, was gültig ist; die Beanstandung
+  steht daneben, und die betroffenen Felder behalten ihren bisherigen Wert.
+* **Der Reiter Test meldete ein Kreuz bei den Auswahlfeldern**, weil er den
+  eigenen CSS-Kommentar mitzählte, der ein `<select>` als Beispiel enthält.
+  Gemessen: 3 gezählte Felder, 2 Merkmale — bei zwei einwandfreien Feldern.
+  (`auswahlfeld_zaehlung.py`)
+* **Der Knopf *Felder zeigen* meldete immer Erfolg**, auch wenn die virtuelle
+  Python-Umgebung ganz fehlte. Jetzt entscheidet der Rückgabecode.
+* **Fünf Stellen versprachen, die Liste der Ladevorgänge überlebe eine
+  Aktualisierung** — mit einem Beleg, der nicht trug. Sie überlebt jetzt
+  wirklich, weil `preupgrade.sh` sie neben den Konfigurationsordner legt und
+  `postinstall.sh` sie zurückholt. Siehe den Abschnitt *Reiter Ladevorgänge*.
+* **Die Hilfe widersprach sich selbst:** K24 bestritt den Trockenlauf, den
+  K31 und K32 zwei Zeilen darunter beschreiben.
+* Kleineres: die Protokollbremse wirkte nie, wenn die Protokolldatei nie
+  entstand; das Kappen der Ladeliste schrieb nicht über eine Nebendatei; der
+  MQTT-Präfix wurde nicht gesäubert (ein Leerzeichen darin zerlegt die Zeile
+  am UDP-Eingang); `flach()` hatte weder Tiefen- noch Größengrenze; der Knopf
+  *Dienst starten* war grün, obwohl grün laut Legende „verändert nichts" heißt;
+  ein Schreibfehler beim Speichern der MQTT-Einstellungen blieb unerwähnt.
+
+**Was weiterhin nicht gemessen ist**
+
+Unverändert alles, wofür ein BYD-Konto, ein Fahrzeug oder echte Hardware nötig
+wäre: die Anmeldung bei BYD, die Feldnamen an einem echten Fahrzeug, die
+Wirkung der Schaltbefehle, die Installation auf einem LoxBerry. Dazu am
+laufenden MQTT-Gateway: das Mithören fremder Themen und das Verhalten von
+`retain`. Der V2-Zweig in `by_abo_text()` ist ungemessen — hier läuft
+Gateway **Version 1**. Die Zeitgrenzen (120/90/60 s) und die Grenzen der
+Warteschlange (20 Befehle, 300 s) sind **gesetzt, nicht gemessen**; wie lange
+die BYD-Gegenstelle wirklich braucht, weiß hier niemand.
+
+Ein Punkt ist ausdrücklich **keine** Behebung: die Umwandlung von
+Wahrheitswerten in 1/0 vor dem Senden ist eine Absicherung. Nachgemessen wurde,
+dass heute kein einziges Feld einen Wahrheitswert führt.
 
 ## Fassung 0.9.4 — der Stat-Zwischenspeicher
 Die Protokollkappung (512 000 Byte) stand in

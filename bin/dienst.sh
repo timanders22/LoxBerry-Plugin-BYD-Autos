@@ -76,6 +76,34 @@ laeuft() {
     return 0
 }
 
+arbeitet() {
+    # Laeuft der Dienst nicht nur, sondern ARBEITET er auch?
+    #
+    # laeuft() beantwortet die erste Frage der Dreiteilung aus REGELN_1: der
+    # Prozess ist da. Ein Dienst, der in einem Aufruf haengt, erfuellt das
+    # tadellos und liefert trotzdem nichts - der Waechter meldete "in Ordnung",
+    # waehrend seit Stunden kein Wert mehr ankam.
+    #
+    # Gemessen wird am Lebenszeichen, das die Hauptschleife alle 30 s
+    # auffrischt (byd.py, DATEI_HERZ). NICHT am Zeitstempel des letzten
+    # Abrufs: der steht bei einer Stoerung mit Absicht still, und die Bremse
+    # nach mehreren Fehlversuchen reicht bis zu einer Stunde. Ein planmaessig
+    # wartender Dienst ist kein haengender.
+    #
+    # Fehlt die Datei, wird KEIN Urteil gefaellt (Rueckgabe 0). Sie fehlt beim
+    # allerersten Start, und sie fehlt, wenn sich der Protokollordner nicht
+    # beschreiben laesst. Ein Dienst, der nur seine Ramdisk nicht beschreiben
+    # kann, darf deswegen nicht im Minutentakt neu gestartet werden.
+    HERZ="$PLOG/herzschlag"
+    [ -f "$HERZ" ] || return 0
+    T=$(cat "$HERZ" 2>/dev/null)
+    case "$T" in ''|*[!0-9]*) return 0 ;; esac
+    JETZT=$(date +%s)
+    # 300 s: zehnmal der Schlagtakt. Weit genug weg von einer kurzen
+    # Verzoegerung, eng genug, um ein Haengen in wenigen Minuten zu bemerken.
+    [ $((JETZT - T)) -lt 300 ]
+}
+
 starten() {
     if laeuft; then
         echo "laeuft bereits (PID $(cat "$PID"))"
@@ -163,7 +191,22 @@ case "$1" in
         # Fehlversuchen in Folge wird nur noch alle 30 Minuten versucht - und
         # gesagt, dass gebremst wird. Ein Waechter, der schweigend nichts tut,
         # ist schlimmer als keiner.
-        if [ -f "$SOLL" ] && ! laeuft; then
+        #
+        # Zwei Gruende fuer einen Neustart: der Prozess ist fort - ODER er ist
+        # da und ruehrt sich nicht mehr. Der zweite Fall war bisher blind.
+        GRUND=""
+        if [ -f "$SOLL" ]; then
+            if ! laeuft; then
+                GRUND="Dienst lief nicht"
+            elif ! arbeitet; then
+                GRUND="Dienst lief, aber sein Lebenszeichen ist ueber 300 s alt - er haengt"
+                # Erst anhalten: ein zweiter Prozess neben dem haengenden
+                # brauechte dieselben Dateien und dieselbe PID-Datei.
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: $GRUND. Wird angehalten." >> "$LOGDATEI"
+                anhalten >> "$LOGDATEI" 2>&1 || true
+            fi
+        fi
+        if [ -n "$GRUND" ]; then
             ZAEHLER="$PDATA/.waechter_fehl"
             N=$(cat "$ZAEHLER" 2>/dev/null || echo 0)
             case "$N" in ''|*[!0-9]*) N=0 ;; esac
@@ -176,7 +219,7 @@ case "$1" in
                 fi
             fi
             date +%s > "$PDATA/.waechter_zeit"
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet (Fehlversuche bisher: $N)." >> "$LOGDATEI"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: $GRUND, wird neu gestartet (Fehlversuche bisher: $N)." >> "$LOGDATEI"
             if starten >> "$LOGDATEI" 2>&1; then
                 rm -f "$ZAEHLER"
             else

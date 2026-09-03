@@ -1,6 +1,9 @@
 #!/bin/bash
 # BYD Autos - postupgrade
-# command <TEMPFOLDER-KENNUNG> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <WORKDIR>
+# Aufrufform des Installers:
+#   $1 KENNUNG (zehnstellig, KEIN Pfad)   $2 NAME   $3 FOLDER
+#   $4 VERSION                            $5 BASEFOLDER (LoxBerry-Wurzel)
+#   $6 WORKDIR (der Arbeitsordner des Installers)
 #
 # ---------------------------------------------------------------------------
 # WARUM HIER FAST NICHTS STEHT
@@ -20,10 +23,30 @@
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bydautos}"
+# Die Wurzel wird GEPRUEFT, nicht angenommen (siehe preupgrade.sh). Ein
+# Verzeichnis, das existiert, ist noch keine LoxBerry-Wurzel - und dieses
+# Skript pruefte bis 0.9.5 gar nicht, sondern nahm den Rueckfall ungesehen.
+ist_wurzel() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
+}
 BASE="${ARGV5:-$LBHOMEDIR}"
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    SELF=$(cd "$(dirname "$0")" && pwd)
-    BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
+if ! ist_wurzel "$BASE"; then
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    BASE=""
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if ist_wurzel "$v"; then BASE="$v"; break; fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+fi
+if ! ist_wurzel "$BASE"; then
+    # Kein Abbruch mit Rueckgabewert 1: dieses Skript meldet nur, es aendert
+    # nichts. Ein Fehlschlag hier darf eine gelungene Installation nicht
+    # nachtraeglich als gescheitert erscheinen lassen.
+    echo "<INFO> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen -"
+    echo "<INFO> die Schlussmeldungen entfallen. Die Installation ist davon"
+    echo "<INFO> nicht betroffen."
+    exit 0
 fi
 
 # Eine Warnung, die bei heiler Konfiguration erscheint, ist ein Fehler: ein

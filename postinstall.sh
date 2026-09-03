@@ -1,6 +1,9 @@
 #!/bin/bash
 # BYD Autos - postinstall
-# command <TEMPFOLDER> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <WORKDIR>
+# Aufrufform des Installers:
+#   $1 KENNUNG (zehnstellig, KEIN Pfad)   $2 NAME   $3 FOLDER
+#   $4 VERSION                            $5 BASEFOLDER (LoxBerry-Wurzel)
+#   $6 WORKDIR (der Arbeitsordner des Installers)
 #
 # Legt an: Konfigurations-, Daten- und Logordner, die Zugangsdatei mit Rechten
 # 0600 und die virtuelle Python-Umgebung samt der Bibliothek pybyd.
@@ -22,13 +25,35 @@
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bydautos}"
+
+# Die Wurzel wird GEPRUEFT, nicht angenommen - siehe preupgrade.sh.
+# LoxBerry::System taugt hier ohnehin nicht: es leitet den Pluginordner aus dem
+# Aufrufort ab und liefert aus postinstall.sh heraus ueberall Leerstring.
+#
+# Bis 0.9.5 fiel das Skript auf "$SELF/../.." zurueck und pruefte danach GAR
+# NICHT. Lief es aus dem Entpackordner des Installers, entstand ein Pfad
+# ausserhalb der Wurzel; mkdir -p gelingt dort, venv und pybyd werden gebaut,
+# und die letzte Zeile meldete "Installation abgeschlossen" - eine vollstaendige
+# Installation neben dem LoxBerry, mit gruener Rueckmeldung.
+ist_wurzel() {
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
+}
+wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if ist_wurzel "$v"; then echo "$v"; return 0; fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
 BASE="${ARGV5:-$LBHOMEDIR}"
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    # Ableitung aus dem eigenen Ablageort - LoxBerry::System taugt hier nicht,
-    # weil es den Pluginordner aus dem Aufrufort ableitet und aus
-    # postinstall.sh heraus ueberall Leerstring liefert.
-    SELF=$(cd "$(dirname "$0")" && pwd)
-    BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
+ist_wurzel "$BASE" || BASE=$(wurzel_suchen)
+if ! ist_wurzel "$BASE"; then
+    echo "<FAIL> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen"
+    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins und data/plugins)."
+    echo "<FAIL> Es wurde NICHTS angelegt und NICHTS installiert."
+    exit 1
 fi
 
 PBIN="$BASE/bin/plugins/$PFOLDER"
@@ -80,6 +105,36 @@ for f in byd.json zugang.json; do
     fi
 done
 chmod 600 "$PCONFIG/zugang.json"
+
+# ---------- Ladehistorie zurueckspielen ----------
+# preupgrade.sh hat data/plugins/<ordner>/verlauf/ neben den Konfigordner
+# gelegt, weil der Installer den Datenordner dazwischen abraeumt.
+#
+# Zurueckgespielt wird nur, wenn am Ziel nichts steht: eine Sicherung, die eine
+# vorhandene Historie ueberschreibt, ist kein Schutz. Und danach wird sie
+# ENTFERNT - eine liegengebliebene Zweitschrift ueberlebt die Deinstallation
+# und braechte einer spaeteren Neuinstallation stillschweigend fremde Daten
+# zurueck.
+VSICHERUNG="$BASE/config/plugins/$PFOLDER.backup.verlauf.tar"
+if [ -f "$VSICHERUNG" ] && [ -s "$VSICHERUNG" ]; then
+    if [ -d "$PDATA/verlauf" ] && [ -n "$(ls -A "$PDATA/verlauf" 2>/dev/null)" ]; then
+        echo "<INFO> Im Datenordner liegt bereits eine Ladehistorie - die"
+        echo "<INFO> gesicherte wurde NICHT darueber gespielt und ist entfernt."
+    elif ! command -v tar >/dev/null 2>&1; then
+        echo "<INFO> tar fehlt - die gesicherte Ladehistorie bleibt liegen unter"
+        echo "<INFO> $VSICHERUNG"
+        VSICHERUNG=""
+    elif tar -xf "$VSICHERUNG" -C "$PDATA" 2>/dev/null; then
+        ZEILEN=$(wc -l < "$PDATA/verlauf/ladungen.csv" 2>/dev/null || echo 0)
+        case "$ZEILEN" in ''|*[!0-9]*) ZEILEN=0 ;; esac
+        echo "<OK> Ladehistorie zurueckgespielt ($ZEILEN Zeilen in ladungen.csv)."
+    else
+        echo "<INFO> Die gesicherte Ladehistorie liess sich nicht zurueckspielen."
+        echo "<INFO> Sie bleibt liegen unter $VSICHERUNG"
+        VSICHERUNG=""
+    fi
+    [ -n "$VSICHERUNG" ] && rm -f "$VSICHERUNG"
+fi
 
 # ---------- Python suchen ----------
 # pybyd verlangt Python 3.11 oder neuer (Metadaten von pybyd 0.0.73:
@@ -163,7 +218,16 @@ echo "<OK> pybyd geladen, Fassung: $IST"
 # ---------- Rechte ----------
 chmod 755 "$PBIN/byd.py" 2>/dev/null
 chmod 755 "$PBIN/dienst.sh" 2>/dev/null
-chown -R loxberry:loxberry "$PBIN" "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
+# KEIN chown. Bis 0.9.5 stand hier
+#     chown -R loxberry:loxberry "$PBIN" "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
+# Dieses Skript laeuft als loxberry (siehe Kopfzeile), ein chown durch einen
+# Nicht-root scheitert immer, und das 2>/dev/null verschluckte es. Eine Zeile,
+# die genau dann nichts tut, wenn sie gebraucht wuerde, ist keine Absicherung,
+# sondern eine Absicherung, an die die naechste Hand glaubt.
+#
+# Gebraucht wird sie auch nicht: alles unter bin/, data/, config/ und log/ des
+# Plugins gehoert ohnehin loxberry - der Installer legt es so an, und dieses
+# Skript schreibt als derselbe Benutzer.
 # Rechte am Ende noch einmal festziehen.
 #
 # byd.json bekommt ebenfalls 0600. Darin stehen zwar keine Passwoerter, aber
@@ -177,14 +241,19 @@ chmod 600 "$PCONFIG/zugang.json"
 # preupgrade.sh legt den Merker "lief_vorher" NEBEN den Konfigordner, wenn der
 # Dienst vor dem Update lief.
 #
-# BERICHTIGT am 20.08.2026: hier stand, der Installer raeume den Datenordner
-# vor diesem Skript ab. Gemessen in sbin/plugininstall.pl stimmt das nicht -
-# beim Upgrade wird darueber kopiert, geloescht wird nur beim Deinstallieren
-# (:996, :1000, :1606, :233). Der Grund fuer den Merker ist ein anderer und
-# er traegt: dieses Plugin haelt den Dienst ueber 'dienst.sh stop' an, und
-# das entfernt den Sollmerker - ohne ihn holt der Cron-Waechter den Dienst
-# NICHT zurueck. Ohne diesen Merker bliebe er nach jedem Update stehen, bis
-# jemand die Oberflaeche oeffnet. Das ist die unauffaelligste Art von Ausfall: der
+# BERICHTIGT am 03.09.2026. Hier stand seit dem 20.08.2026, der Installer
+# raeume den Datenordner NICHT ab und der Merker koennte deshalb auch dort
+# liegen. Das war falsch - und es widersprach dem Absatz 115 Zeilen weiter
+# oben in DIESER Datei, der es richtig sagt. purge_installation hat zwei
+# Aufrufstellen, eine davon im Upgrade-Zweig, und ihr rm -rf trifft
+# config/plugins/<ordner>/ UND data/plugins/<ordner>/ ohne Pruefung auf das
+# Argument "all". Ausfuehrlich in preupgrade.sh, Schritt 1.
+#
+# Der Merker liegt deshalb NEBEN dem Konfigordner - dort ueberlebt er. Und er
+# wird gebraucht: dieses Plugin haelt den Dienst ueber 'dienst.sh stop' an,
+# und das entfernt den Sollmerker, an dem der Cron-Waechter haengt. Ohne
+# diesen Merker bliebe der Dienst nach jedem Update stehen, bis jemand die
+# Oberflaeche oeffnet. Das ist die unauffaelligste Art von Ausfall: der
 # Endpunkt antwortet weiter mit dem letzten Stand, und in Loxone sieht das
 # nicht nach einem Defekt aus, sondern nach einem ruhigen Tag.
 #

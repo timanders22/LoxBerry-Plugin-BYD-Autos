@@ -189,6 +189,29 @@ function by_reiter_lesen()
     return $aus;
 }
 
+/* Die Positivliste der Formularmarken aus index.php lesen.
+ *
+ * Aus dem QUELLTEXT und nicht durch Einbinden: index.php ist die Seite selbst,
+ * sie einzubinden hiesse, sie ein zweites Mal zu rendern. Dasselbe Verfahren
+ * wie bei by_reiter_lesen() daneben.
+ *
+ * null heisst "nicht gefunden" und ist etwas anderes als eine leere Liste.
+ * Wer das gleichsetzt, meldet bei einer umbenannten Variablen "alle Marken
+ * sind fremd" statt "hier ist nichts zu messen". */
+function by_formularliste()
+{
+    $f = __DIR__ . '/index.php';
+    if (!is_file($f)) {
+        return null;
+    }
+    $t = (string) @file_get_contents($f);
+    if (!preg_match('/\$by_formulare\s*=\s*array\((.*?)\);/s', $t, $m)) {
+        return null;
+    }
+    preg_match_all("/'([a-z_]+)'/", $m[1], $x);
+    return $x[1] ? $x[1] : null;
+}
+
 function by_pruefungen()
 {
     $p = by_paths();
@@ -201,16 +224,29 @@ function by_pruefungen()
      * "keine Fahrzeuge" anfaengt, schickt den Leser in die Grundeinrichtung,
      * obwohl der Endpunkt gar nicht antwortet. */
     $e = by_endpunkt_pruefen();
+    /* Das Alter gehoert an ALLE DREI Ausgaenge und nicht nur an den mit dem
+     * Haken. Der Kommentar bei by_endpunkt_pruefen() versprach es fuer jede
+     * Antwort ("Das Alter der Antwort steht dabei"), gezeigt wurde es aber nur
+     * im Erfolgsfall. Gerade beim Kreuz ist es die wichtigere Angabe: eine
+     * Fehlermeldung, die aus dem Zwischenspeicher stammt, kann vierzehn
+     * Minuten alt sein und laengst behoben. Wer das nicht sieht, sucht einen
+     * Fehler, den es nicht mehr gibt. Bei einer frischen Messung ist das Alter
+     * 0 - dann steht auch nichts da. */
+    $alt_zusatz = ((int) $e['alter'] > 0)
+        ? ' &mdash; ' . sprintf(by_t('TEST.A_ENDPUNKT_AUS_SPEICHER'), (int) $e['alter'])
+        : '';
     if (!$e['da'] && $e['code'] === 0) {
         $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_ENDPUNKT'),
-            by_t('TEST.A_ENDPUNKT_UNKLAR') . ($e['weg'] !== '' ? ' (' . $e['weg'] . ')' : ''));
+            by_t('TEST.A_ENDPUNKT_UNKLAR')
+            . ($e['weg'] !== '' ? ' (' . $e['weg'] . ')' : '') . $alt_zusatz);
     } elseif ($e['code'] === 200 && strpos($e['rumpf'], 'SELFTEST;OK=1') !== false) {
         $zeilen[] = by_pruefzeile(1, by_t('TEST.F_ENDPUNKT'),
             sprintf(by_t('TEST.A_ENDPUNKT_OK'), (int) $e['alter']));
     } else {
         $zeilen[] = by_pruefzeile(0, by_t('TEST.F_ENDPUNKT'),
             sprintf(by_t('TEST.A_ENDPUNKT_FEHL'), (int) $e['code'],
-                by_e($e['rumpf']) !== '' ? by_e($e['rumpf']) : by_t('TEST.A_LEER')));
+                by_e($e['rumpf']) !== '' ? by_e($e['rumpf']) : by_t('TEST.A_LEER'))
+            . $alt_zusatz);
     }
 
     /* ---- 2. Python und Bibliothek ---- */
@@ -280,7 +316,20 @@ function by_pruefungen()
             by_t('TEST.A_ZUORDNUNG_LEER'));
     } else {
         foreach ($fahrzeuge as $nr => $f) {
-            $offen = isset($f['offen']) && is_array($f['offen']) ? $f['offen'] : array();
+            /* FEHLT die Liste 'offen' ganz, ist das kein "nichts offen".
+             * Vorher wurde sie zu einem leeren Feld gemacht, daraus ergab sich
+             * "14 von 14 aufgeloest" und ein HAKEN - fuer ein Fahrzeug, ueber
+             * dessen Feldzuordnung nichts bekannt ist. Genau so sieht ein Satz
+             * aus, der aus einem Zwischenspeicher einer aelteren Fassung
+             * stammt oder von Hand entstanden ist. Ein Haken ueber einer
+             * unbekannten Menge ist schlimmer als kein Haken. */
+            if (!isset($f['offen']) || !is_array($f['offen'])) {
+                $zeilen[] = by_pruefzeile(-1,
+                    sprintf(by_t('TEST.F_ZUORDNUNG_N'), by_e($nr)),
+                    by_t('TEST.A_ZUORDNUNG_UNBEKANNT'));
+                continue;
+            }
+            $offen = $f['offen'];
             $getroffen = $anzahl_felder - count($offen);
             $zeilen[] = by_pruefzeile(count($offen) === 0 ? 1 : -1,
                 sprintf(by_t('TEST.F_ZUORDNUNG_N'), by_e($nr)),
@@ -446,8 +495,20 @@ function by_pruefungen()
     $selbst = (string) @file_get_contents(__DIR__ . '/index.php');
     $hat_css = (strpos($selbst, 'appearance: none') !== false
                 && strpos($selbst, 'background-image: url("data:image/svg+xml') !== false);
-    $anzahl_select = preg_match_all('/<select/', $selbst);
-    $anzahl_merkmal = preg_match_all('/<select[^>]*class="[^"]*sm-auswahl/', $selbst);
+    /* OHNE die Kommentare zaehlen. Genau daran ist diese Pruefung selbst
+     * gescheitert: in index.php erklaert ein CSS-Kommentar, warum die Klasse
+     * sm-auswahl noetig ist, und schreibt dabei "<select data-role=none>" hin.
+     * Gezaehlt wurden damit 3 Auswahlfelder und 2 Merkmale - der Reiter Test
+     * setzte ein Kreuz, obwohl beide wirklichen Felder in Ordnung waren.
+     * Ein Werkzeug, das an der Erklaerung seiner selbst scheitert, meldet
+     * einen Fehler, den es nicht gibt, und verdeckt den Tag, an dem es einen
+     * gibt. Entfernt werden Block- und HTML-Kommentare; Zeilenkommentare
+     * NICHT, denn ein // steckt auch in jeder URL. */
+    $ohne = preg_replace('#/\*.*?\*/#s', '', $selbst);
+    $ohne = preg_replace('#<!--.*?-->#s', '', (string) $ohne);
+    $ohne = (string) $ohne;
+    $anzahl_select = preg_match_all('/<select/', $ohne);
+    $anzahl_merkmal = preg_match_all('/<select[^>]*class="[^"]*sm-auswahl/', $ohne);
     $ok_sel = $hat_css && $anzahl_select === $anzahl_merkmal;
     $zeilen[] = by_pruefzeile($anzahl_select === 0 ? -1 : ($ok_sel ? 1 : 0),
         by_t('TEST.F_AUSWAHL'),
@@ -473,6 +534,156 @@ function by_pruefungen()
         count($schlecht) === 0
             ? sprintf(by_t('TEST.A_MASKE_OK'), count(array_unique($mm[1])))
             : sprintf(by_t('TEST.A_MASKE_FEHL'), by_e(implode(', ', $schlecht))));
+
+    /* ---- 17. Jedes Formular traegt seine Marke ----
+     * DIESE ZEILE HAETTE EINEN BEFUND GEFUNDEN, den keine andere fand.
+     *
+     * Der Beitrag prueft jedes abgeschickte Formular gegen eine Positivliste
+     * ($by_formulare). Ein Formular, dessen Marke dort NICHT steht, wird
+     * abgewiesen - lautlos, denn abgewiesen heisst: die Seite laedt neu und
+     * sieht aus wie vorher. Genau das war bis 0.9.5 mit den beiden Knoepfen
+     * zum Sichern und Zuruecksetzen der Einstellungen los: sie trugen gar
+     * keine Marke, die Positivliste kannte sie nicht, und ein Klick tat
+     * nichts. Kein Werkzeug sah es, weil beide Seiten fuer sich in Ordnung
+     * waren - das Formular gab es, den Verarbeiter auch, nur zusammen kamen
+     * sie nie.
+     *
+     * Zwei Fragen, und beide muessen stimmen:
+     *   a) traegt JEDES <form> eine Marke?
+     *   b) steht JEDE Marke in der Positivliste?
+     *
+     * Gezaehlt wird ohne Kommentare - aus demselben Grund wie bei den
+     * Auswahlfeldern eine Pruefung weiter oben. */
+    $anz_form = preg_match_all('/<form\b/', $ohne);
+    preg_match_all('/name="formular"\s+value="([a-z_]+)"/', $ohne, $mf);
+    $marken = array_values(array_unique($mf[1]));
+    $liste = by_formularliste();
+    $fremd = ($liste === null) ? array() : array_values(array_diff($marken, $liste));
+    if ($liste === null) {
+        // Ohne die Positivliste laesst sich (b) nicht beantworten. Dann wird
+        // auch (a) nicht als Haken verkauft.
+        $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_FORMULARE'),
+            by_t('TEST.A_FORMULARE_UNKLAR'));
+    } elseif ($anz_form === 0) {
+        $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_FORMULARE'),
+            by_t('TEST.A_FORMULARE_KEINE'));
+    } else {
+        $anz_marke = count($mf[1]);
+        $gut = ($anz_form === $anz_marke) && !$fremd;
+        $zeilen[] = by_pruefzeile($gut ? 1 : 0, by_t('TEST.F_FORMULARE'),
+            $gut ? sprintf(by_t('TEST.A_FORMULARE_OK'), $anz_form, count($liste))
+                 : sprintf(by_t('TEST.A_FORMULARE_FEHL'), $anz_marke, $anz_form,
+                           $fremd ? by_e(implode(', ', $fremd)) : by_t('TEST.A_LEER')));
+    }
+
+    /* ---- 25. Traegt jeder Reiter die Bedingung fuer sm-active? ----
+     * WELCHER REITER OFFEN IST, ENTSCHEIDET DER SERVER. Jeder Anker in der
+     * Leiste und jeder Bereich bekommt die Klasse sm-active genau dann, wenn
+     * $by_tab auf ihn zeigt - ohne diese Bedingung bleibt der Bereich auf
+     * display:none stehen und ist ueber die Leiste NICHT ERREICHBAR.
+     *
+     * Pruefung 11 vergleicht die NAMEN von Liste, Leiste und Bereichen. Das
+     * findet einen vergessenen Reiter, aber nicht einen, der zwar ueberall
+     * genannt ist und dem nur die Bedingung fehlt. Der waere unsichtbar, und
+     * zwar ohne jede Fehlermeldung. */
+    $anker = preg_match_all('/data-ziel="tab-[a-z]+"/', $ohne);
+    $bereiche = preg_match_all('/id="tab-[a-z]+"/', $ohne);
+    /* EINFACHE Anfuehrungszeichen. Mit doppelten interpoliert PHP das
+     * $by_tab im Muster - unter 8.4 gemessen: "Warning: Undefined variable
+     * $by_tab". Das Muster misst dann etwas anderes, als dort steht, und
+     * trifft trotzdem, weil der Rest allein schon passt. Ein Ausdruck, der aus
+     * dem falschen Grund die richtige Zahl liefert, ist die unangenehmste
+     * Sorte: er faellt erst auf, wenn sich der Quelltext aendert. */
+    $bedingt = preg_match_all('/\$by_tab === \'tab-[a-z]+\' \? \' sm-active\'/', $ohne);
+    if ($anker === 0 && $bereiche === 0) {
+        $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_AKTIV'), by_t('TEST.A_AKTIV_KEINE'));
+    } else {
+        // Jeder Anker UND jeder Bereich braucht die Bedingung.
+        $soll = $anker + $bereiche;
+        $zeilen[] = by_pruefzeile($bedingt === $soll ? 1 : 0, by_t('TEST.F_AKTIV'),
+            $bedingt === $soll
+                ? sprintf(by_t('TEST.A_AKTIV_OK'), $anker, $bereiche)
+                : sprintf(by_t('TEST.A_AKTIV_FEHL'), $bedingt, $soll));
+    }
+
+    /* ---- 26. Fuehrt die gespeicherte Konfiguration jeden Schluessel? ----
+     * by_config() ergaenzt fehlende Schluessel aus den Vorgaben - im Speicher.
+     * Die DATEI kann trotzdem unvollstaendig sein, etwa nach einem
+     * Zurueckspielen aus einer aelteren Sicherung. Sichtbar wird das nie: die
+     * Oberflaeche zeigt den Vorgabewert, und wer ihn nicht anfasst, speichert
+     * ihn auch nicht. Beim naechsten Zurueckspielen fehlt er wieder.
+     *
+     * Gelesen wird die Datei selbst und nicht by_config(). Wer die ergaenzte
+     * Fassung prueft, prueft die Ergaenzung. */
+    $roh = is_file($p['config']) ? (string) @file_get_contents($p['config']) : '';
+    $gespeichert = ($roh === '') ? null : json_decode($roh, true);
+    if (!is_array($gespeichert)) {
+        $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_VOLLSTAENDIG'),
+            by_t('TEST.A_VOLLSTAENDIG_KEINE'));
+    } else {
+        $fehlend = array_keys(array_diff_key(by_vorgaben(), $gespeichert));
+        $zeilen[] = by_pruefzeile(count($fehlend) === 0 ? 1 : -1,
+            by_t('TEST.F_VOLLSTAENDIG'),
+            count($fehlend) === 0
+                ? sprintf(by_t('TEST.A_VOLLSTAENDIG_OK'), count($gespeichert))
+                : sprintf(by_t('TEST.A_VOLLSTAENDIG_FEHLT'),
+                          by_e(implode(', ', $fehlend))));
+    }
+
+    /* ---- 24. Eine Legende je Reiter, und sie nennt die richtigen Farben ----
+     * REGELN_2, "Farblegende der Knoepfe": EINE gesammelte Legende oben im
+     * Reiter, nicht je Knopfreihe eine eigene - "dieselbe Zeile drei Mal
+     * untereinander stiftet mehr Unruhe als Nutzen". Und sie nennt genau die
+     * Farben, die in DIESEM Reiter vorkommen; Farben, die es dort nicht gibt,
+     * bleiben weg.
+     *
+     * Bis 0.9.5 fuehrte der Reiter Einstellungen VIER Legenden und der Reiter
+     * Loxone zwei - jede ueber ihrer eigenen Knopfreihe. Kein Werkzeug sah es:
+     * die Hausstandard-Pruefung fragt, OB eine Legende da ist, nicht wie viele.
+     *
+     * Zwei Fragen, und beide muessen stimmen:
+     *   a) genau eine Legende in jedem Reiter, der Knoepfe fuehrt
+     *   b) ihre Farben decken sich mit denen der Knoepfe - in BEIDE
+     *      Richtungen: keine unerklaerte Farbe, keine erklaerte, die fehlt */
+    $reiter = preg_split('/<div class="sm-seite/', $ohne);
+    $schlecht_anz = array();
+    $schlecht_farb = array();
+    $gezaehlt = 0;
+    foreach (array_slice($reiter, 1) as $stueck) {
+        if (!preg_match('/id="(tab-[a-z]+)"/', $stueck, $mid)) {
+            continue;
+        }
+        $name = $mid[1];
+        preg_match_all('/sm-btn (sm-b-[a-z]+)/', $stueck, $mk);
+        $knopffarben = array_unique($mk[1]);
+        if (!$knopffarben) {
+            continue;      // ein Reiter ohne Knoepfe braucht keine Legende
+        }
+        $gezaehlt++;
+        $anz = preg_match_all('/class="sm-legende"/', $stueck);
+        if ($anz !== 1) {
+            $schlecht_anz[] = $name . ' (' . $anz . ')';
+            continue;      // ueber die Farben ist dann nichts zu sagen
+        }
+        preg_match_all('/sm-punkt (sm-b-[a-z]+)/', $stueck, $ml);
+        $legendenfarben = array_unique($ml[1]);
+        sort($knopffarben);
+        sort($legendenfarben);
+        if ($knopffarben !== $legendenfarben) {
+            $schlecht_farb[] = $name;
+        }
+    }
+    if ($gezaehlt === 0) {
+        $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_LEGENDEN'),
+            by_t('TEST.A_LEGENDEN_KEINE'));
+    } else {
+        $gut = !$schlecht_anz && !$schlecht_farb;
+        $zeilen[] = by_pruefzeile($gut ? 1 : 0, by_t('TEST.F_LEGENDEN'),
+            $gut ? sprintf(by_t('TEST.A_LEGENDEN_OK'), $gezaehlt)
+                 : sprintf(by_t('TEST.A_LEGENDEN_FEHL'),
+                           by_e(implode(', ', $schlecht_anz) ?: by_t('TEST.A_LEER')),
+                           by_e(implode(', ', $schlecht_farb) ?: by_t('TEST.A_LEER'))));
+    }
 
     /* ---- 18. Mithoeren am Broker ----
      * Zwei Funktionen brauchen FREMDE Themen. Verglichen wird die Erwartung
@@ -604,7 +815,7 @@ function by_pruefungen()
                 : sprintf(by_t('TEST.A_LADUNGEN_UNLESBAR'), $roh));
     }
 
-    /* ---- 17. Steuerung ---- */
+    /* ---- 23. Steuerung ---- */
     $zeilen[] = by_pruefzeile(!empty($cfg['steuerung_ein']) ? 1 : -1,
         by_t('TEST.F_STEUERUNG'),
         !empty($cfg['steuerung_ein']) ? by_t('TEST.A_STEUERUNG_EIN')
@@ -660,7 +871,15 @@ function by_test_aktion($aktion)
             sprintf('HTTP %d: %s', (int) $e['code'], $e['rumpf']));
     }
     if ($aktion === 'felder') {
-        return array(1, by_python_ruf('--felder'));
+        /* Der RUECKGABECODE entscheidet, nicht die Tatsache, dass ein Aufruf
+         * stattgefunden hat. Vorher stand hier eine fest verdrahtete 1: fehlte
+         * die virtuelle Python-Umgebung oder war exec() gesperrt, meldete die
+         * Oberflaeche "gelungen" und zeigte darunter die Fehlermeldung an.
+         * Ein gruener Haken ueber einem [FEHL] ist schlimmer als gar keiner. */
+        $rc = 1;
+        $txt = by_python_ruf('--felder', $rc);
+        return array($rc === 0 ? 1 : 0,
+            $txt !== '' ? $txt : by_t('TEST.M_FELDER_STUMM'));
     }
     if ($aktion === 'abruf') {
         $b = array('aktion' => 'abruf');
