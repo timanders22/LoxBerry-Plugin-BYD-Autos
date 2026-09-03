@@ -38,17 +38,35 @@
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+/* display_errors ausdruecklich AUS, und das ist kein Widerspruch zur Hausregel
+ * "ein Absturz darf kein leerer HTTP 500 sein".
+ *
+ * Steht die Anzeige auf der Anlage an, landet eine PHP-Warnung im RUMPF - also
+ * vor der Statuszeile, die Loxone mit einer Befehlserkennung liest. Der Wert
+ * kaeme zwar trotzdem an (Loxone sucht das Muster in der ganzen Antwort), aber
+ * eine Warnung, die ein Semikolon oder ein Gleichheitszeichen enthaelt, schoebe
+ * zusaetzliche Paare in die Zeile. Der Absturz selbst wird weiter unten
+ * abgefangen und als lesbare Zeile beantwortet; alles Uebrige gehoert ins
+ * Fehlerprotokoll des Webservers, nicht in die Antwort. */
+ini_set('display_errors', '0');
 header('Content-Type: text/plain; charset=utf-8');
 header('Cache-Control: no-store');
 
 if (!is_file(__DIR__ . '/by_lib.php')) {
-    // Lesbar antworten statt zu schweigen: der Miniserver ist der einzige
-    // Aufrufer und liest kein Apache-Protokoll. Ein leerer HTTP 500 sieht in
-    // Loxone aus wie "kein Wert", und der virtuelle Eingang behaelt seinen
-    // letzten Stand - in der App wirkt alles normal.
+    /* Lesbar antworten statt zu schweigen: der Miniserver ist der einzige
+     * Aufrufer und liest kein Apache-Protokoll. Ein leerer HTTP 500 sieht in
+     * Loxone aus wie "kein Wert", und der virtuelle Eingang behaelt seinen
+     * letzten Stand - in der App wirkt alles normal.
+     *
+     * BERICHTIGT 03.09.2026: der gesuchte PFAD stand bis 0.9.5 in der
+     * HTTP-Antwort. Dieser Zweig liegt VOR jeder Tokenpruefung - die Auskunft
+     * ging also an jeden, der die Adresse kennt. Sie gehoert ins Protokoll des
+     * Webservers, wo der Betreiber sie findet und sonst niemand; in der Antwort
+     * steht nur die Kennung. */
+    @error_log('BYD Autos: by_lib.php nicht gefunden. Gesucht in: '
+               . __DIR__ . '/by_lib.php');
     http_response_code(500);
     echo "BYD;OK=0;GRUND=BIBLIOTHEK_FEHLT\n";
-    echo 'Erwartet: ' . __DIR__ . "/by_lib.php\n";
     exit;
 }
 require_once __DIR__ . '/by_lib.php';
@@ -62,6 +80,11 @@ function by_ende($code, $zeile, $zusatz = '')
     if ($code !== 200) {
         http_response_code($code);
     }
+    /* Hier wird NUR der Zeilenumbruch entfernt, und das ist Absicht: $zeile IST
+     * die Statuszeile, und die trennt ihre Paare selbst mit ";". Wer das
+     * Semikolon hier herausnaehme, zerstoerte jede Antwort.
+     *
+     * Gesaeubert gehoert der EINGESETZTE Text - dafuer gibt es by_sicher(). */
     echo str_replace(array("\r", "\n"), ' ', $zeile) . "\n";
     if ($zusatz !== '') {
         echo $zusatz . "\n";
@@ -69,13 +92,35 @@ function by_ende($code, $zeile, $zusatz = '')
     exit;
 }
 
+/**
+ * Einen fremden Text so saeubern, dass er in EIN Feld der Statuszeile passt.
+ *
+ * Die Zeile besteht aus Paaren NAME=WERT, getrennt durch ";". Ein eingesetzter
+ * Text, der selbst ein Semikolon oder einen Zeilenumbruch traegt, schiebt
+ * zusaetzliche Paare hinein - Loxone liest dann nicht "kein Wert", sondern
+ * einen FALSCHEN. Das "=" bleibt stehen: es macht kein neues Paar auf, solange
+ * kein Semikolon davor steht, und in Fehlermeldungen fremder Bibliotheken
+ * steht es haeufig.
+ *
+ * ERGAENZT 03.09.2026: bis 0.9.5 saeuberte genau EINE der beiden
+ * Einsetzstellen. Die andere - die Absturzmeldung - nahm getMessage() roh.
+ */
+function by_sicher($text)
+{
+    return str_replace(array("\r", "\n", ';'), ' ', (string) $text);
+}
+
 /* ---------------- Konfiguration lesen, NICHT anlegen ----------------
  *
- * by_config(false) und by_token(false): ein Aufruf ohne Ausweis darf nichts
- * anlegen - auch nichts Harmloses. In einem Schwesterplugin hinterliess ein
- * einziger, korrekt mit 403 abgewiesener Aufruf eine frisch erzeugte
- * Konfiguration samt Token und Zweitschrift; gemessen mit leerem
- * Konfigurationsordner.
+ * by_config(false): ein Aufruf ohne Ausweis darf nichts anlegen - auch nichts
+ * Harmloses. In einem Schwesterplugin hinterliess ein einziger, korrekt mit
+ * 403 abgewiesener Aufruf eine frisch erzeugte Konfiguration samt Token und
+ * Zweitschrift; gemessen mit leerem Konfigurationsordner.
+ *
+ * BERICHTIGT 03.09.2026: hier stand "by_config(false) und by_token(false)".
+ * by_token() wird in dieser Datei NIE gerufen - das Soll-Token kommt aus der
+ * gelesenen Konfiguration. Folgenlos, aber falsch: ein Kommentar, der einen
+ * Aufruf nennt, den es nicht gibt, schickt den naechsten Leser suchen.
  */
 $by_cfg = by_config(false);
 $by_p = by_paths();
@@ -94,7 +139,11 @@ $by_soll = (string) $by_cfg['aktionstoken'];
  * darf keine Abkuerzung an der Sicherheit vorbei sein. Kein Geraetekontakt,
  * kein Schreibzugriff.
  */
-if (isset($_GET['selftest'])) {
+/* Der Kopf dieser Datei verspricht ?selftest=1 - also wird auch das gemessen
+ * und nicht bloss die Anwesenheit des Parameters. isset() nahm bis 0.9.5 auch
+ * "selftest=0" und "selftest=" an, und ein Anwender, der ihn ausschalten will,
+ * indem er 0 schreibt, bekam den Selbsttest trotzdem. */
+if (isset($_GET['selftest']) && (string) $_GET['selftest'] === '1') {
     $by_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
     if ($by_soll === '') {
         by_ende(403, 'SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET',
@@ -301,7 +350,8 @@ try {
     by_log('Endpunkt: der Befehl ' . $by_aktion . ' ist abgestuerzt: '
          . $by_t->getMessage(), 'ERROR');
     by_ende(500, sprintf('SET;OK=0;AKTION=%s;ERR=%s (%s:%d)', $by_aktion,
-        $by_t->getMessage(), basename($by_t->getFile()), $by_t->getLine()));
+        by_sicher($by_t->getMessage()), basename($by_t->getFile()),
+        $by_t->getLine()));
 }
 
 /* Rueckgabe 2 heisst "eingereiht, Ergebnis unbekannt" - das ist kein Fehler
@@ -315,4 +365,4 @@ if ($by_erg === 0) {
     $by_code = 202;
 }
 by_ende($by_code, sprintf('SET;OK=%d;AKTION=%s;MELDUNG=%s', $by_erg, $by_aktion,
-    str_replace(array("\r", "\n", ';'), ' ', $by_meldung)));
+    by_sicher($by_meldung)));

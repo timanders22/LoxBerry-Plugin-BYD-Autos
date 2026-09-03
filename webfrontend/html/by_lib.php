@@ -193,13 +193,57 @@ function by_json_lesen($pfad)
  * Die Unterscheidung "unlesbar" haengt an is_file(), nicht am Inhalt: eine
  * Datei, die DA ist und leer, entsteht beim Abbruch eines Schreibvorgangs -
  * und gerade die darf nicht als "noch nichts eingerichtet" gelten.
+ *
+ * BERICHTIGT am 03.09.2026. Genau das stand hier schon, und der Code hielt es
+ * NICHT: die Bedingung unten fragte trim($roh) !== '' und schickte die leere
+ * Datei in denselben Zweig wie die fehlende. Gemessen in vier Lagen:
+ *
+ *     leer, ohne Zweitschrift   Werkseinstellung, Token "", KEINE Protokollzeile
+ *     leer, mit Zweitschrift    geheilt und geschrieben, KEINE Protokollzeile
+ *     ungueltiges JSON          geheilt, .kaputt angelegt, Protokollzeile
+ *     "{}"                      geheilt, Protokollzeile - der Aktualisierungsfall
+ *
+ * Die ersten beiden Zeilen sind der Befund. Ein abgebrochener Schreibvorgang
+ * (Stromausfall, volle Ramdisk) hinterlaesst eine 0-Byte-Datei; ohne
+ * Zweitschrift ist danach das Aktionstoken lautlos fort, der Endpunkt
+ * antwortet jedem virtuellen Ausgang mit KEIN_TOKEN_GESETZT, in Loxone sieht
+ * das aus wie "kein Wert" - und im Protokoll steht nichts.
+ *
+ * Die vier Zustaende bedeuten Verschiedenes und werden ab 0.9.6 auch
+ * verschieden behandelt. Ein ".kaputt" gibt es nur, wo es Inhalt zu retten
+ * gibt: eine leere Datei danebenzulegen waere Beiwerk.
  */
 function by_config($erzeugen = true)
 {
     $p = by_paths();
-    $roh = is_file($p['config']) ? (string) @file_get_contents($p['config']) : null;
+    $da  = is_file($p['config']);
+    $roh = $da ? (string) @file_get_contents($p['config']) : '';
 
-    if ($roh !== null && trim($roh) !== '' && trim($roh) !== '{}') {
+    /* Datei DA und LEER: ein abgebrochener Schreibvorgang, kein leerer
+     * Zustand. Gemeldet wird es in jedem Fall (by_log bremst gegen
+     * Wiederholungen); geheilt und geschrieben nur, wo Schreiben erlaubt ist. */
+    if ($da && trim($roh) === '') {
+        if ($erzeugen) {
+            by_log('Die Konfigurationsdatei ist vorhanden, aber LEER - das ist der '
+                 . 'Rest eines abgebrochenen Schreibvorgangs, kein leerer Zustand.',
+                   'WARN');
+            $sich = by_json_lesen($p['sicherung']);
+            if ($sich) {
+                by_log('Aus der Zweitschrift wiederhergestellt.', 'INFO');
+                by_config_speichern(array_merge(by_vorgaben(), $sich), false);
+                return array_merge(by_vorgaben(), $sich);
+            }
+            by_log('Es gibt keine Zweitschrift. Das Aktionstoken ist damit fort; '
+                 . 'die Adressen im Miniserver sind ungueltig, bis im Reiter '
+                 . 'Einstellungen einmal gespeichert wurde.', 'WARN');
+        }
+        /* Bewusst KEIN Schreiben ohne Zweitschrift: eine aus den Vorgaben
+         * entstandene Konfiguration wuerde beim naechsten Speichern die letzte
+         * heile Sicherung ueberschreiben. */
+        return by_vorgaben();
+    }
+
+    if ($da && trim($roh) !== '{}') {
         $cfg = json_decode($roh, true);
         if (!is_array($cfg)) {
             /* Ungueltiges JSON ist ein FEHLER, kein leerer Wert. Wer es
@@ -210,7 +254,9 @@ function by_config($erzeugen = true)
              * wird), Themenpraefix und Grenzen. */
             if ($erzeugen) {
                 if (!is_file($p['config'] . '.kaputt')) {
-                    @copy($p['config'], $p['config'] . '.kaputt');
+                    // Dieselben Rechte wie das Original - die kaputte Datei
+                    // traegt dasselbe Aktionstoken.
+                    by_kopie_geschuetzt($p['config'], $p['config'] . '.kaputt', 0600);
                     by_log('Die Konfiguration war unlesbar (kein gueltiges JSON). Sie liegt '
                          . 'als byd.json.kaputt daneben; weitergearbeitet wird mit der '
                          . 'Zweitschrift.');
@@ -229,8 +275,10 @@ function by_config($erzeugen = true)
         return array_merge(by_vorgaben(), $cfg);
     }
 
-    // Datei fehlt oder ist leer beziehungsweise "{}": Neuinstallation oder
-    // Aktualisierungsfall. Aus der Zweitschrift heilen, wenn es eine gibt.
+    /* Datei fehlt (Neuinstallation) oder traegt "{}" (Aktualisierungsfall -
+     * postinstall.sh legt sie so an). Beides sind ECHTE leere Zustaende, keine
+     * Beschaedigung: hier darf ein Token entstehen. Aus der Zweitschrift
+     * heilen, wenn es eine gibt. */
     if ($erzeugen && is_file($p['sicherung'])) {
         $sich = by_json_lesen($p['sicherung']);
         if ($sich) {
@@ -255,6 +303,47 @@ function by_config($erzeugen = true)
  * sie mit dem eben Gelesenen zu ueberschreiben waere nur Arbeit - schlimmer,
  * es koennte eine gute Sicherung mit einem halben Stand ueberschreiben.
  */
+/**
+ * Eine Datei geschuetzt kopieren - Rechte VOR dem Inhalt.
+ *
+ * "Kopieren, dann chmod" laesst die Datei fuer die Dauer des Schreibens mit
+ * den Rechten der umask stehen, und zwar bereits mit dem vollen Inhalt. Bei
+ * einer Zweitschrift, in der ein Passwort oder das Aktionstoken steht, ist das
+ * der Unterschied zwischen "kurz lesbar" und "nie lesbar".
+ *
+ * ERGAENZT 03.09.2026. Die Nebendatei beim Schreiben der Konfiguration macht
+ * es seit jeher richtig (leer anlegen, chmod, dann fuellen) und der Kommentar
+ * daneben begruendet genau diese Reihenfolge - fuer die beiden ZWEITSCHRIFTEN
+ * galt sie nicht: dort stand @copy() gefolgt von @chmod(). Der Fall trifft die
+ * Erstanlage und jede Wiederherstellung nach einem Loeschen; auf einer
+ * bestehenden Anlage behaelt copy() die vorhandenen Rechte.
+ *
+ * Die Nebendatei traegt die Prozessnummer: schreiben Oberflaeche und Dienst
+ * gleichzeitig, ueberschriebe sonst einer die Nebendatei des anderen, und
+ * umbenannt wuerde eine Mischung.
+ */
+function by_kopie_geschuetzt($von, $nach, $rechte = 0600)
+{
+    $inhalt = @file_get_contents($von);
+    if ($inhalt === false) {
+        return false;
+    }
+    $tmp = $nach . '.tmp.' . getmypid();
+    $fh = @fopen($tmp, 'c');
+    if ($fh === false) {
+        return false;
+    }
+    @chmod($tmp, $rechte);
+    $ok = ftruncate($fh, 0) && (@fwrite($fh, $inhalt) === strlen($inhalt));
+    fflush($fh);
+    fclose($fh);
+    if (!$ok || !@rename($tmp, $nach)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
 function by_config_speichern($cfg, $sicherung = true)
 {
     $p = by_paths();
@@ -291,8 +380,7 @@ function by_config_speichern($cfg, $sicherung = true)
         // Konfiguration MIT Token gespeichert wurde. Sonst ueberschriebe ein
         // halber Stand die letzte Zuflucht.
         if (trim((string) (isset($cfg['aktionstoken']) ? $cfg['aktionstoken'] : '')) !== '') {
-            @copy($p['config'], $p['sicherung']);
-            @chmod($p['sicherung'], 0600);
+            by_kopie_geschuetzt($p['config'], $p['sicherung'], 0600);
         }
     }
     return true;
@@ -408,8 +496,7 @@ function by_zugang_speichern($benutzer, $passwort, $pin, $land)
         @unlink($tmp);
         return false;
     }
-    @copy($p['zugang'], $p['zugang_sicherung']);
-    @chmod($p['zugang_sicherung'], 0600);
+    by_kopie_geschuetzt($p['zugang'], $p['zugang_sicherung'], 0600);
     return true;
 }
 
@@ -641,7 +728,7 @@ function by_dienst($befehl)
     }
     $ausgabe = array();
     $code = 0;
-    @exec(escapeshellcmd($skript) . ' ' . escapeshellarg($befehl) . ' 2>&1', $ausgabe, $code);
+    @exec(escapeshellarg($skript) . ' ' . escapeshellarg($befehl) . ' 2>&1', $ausgabe, $code);
     return array($code === 0 ? 1 : 0, implode("\n", $ausgabe));
 }
 
@@ -664,7 +751,7 @@ function by_bibliothek_fassung()
         return $f;
     }
     $ausgabe = array();
-    @exec(escapeshellcmd($py) . ' -c ' . escapeshellarg(
+    @exec(escapeshellarg($py) . ' -c ' . escapeshellarg(
         'import importlib.metadata as m' . "\n"
         . 'try: print(m.version("pybyd"))' . "\n"
         . 'except Exception: print("")'
@@ -686,7 +773,7 @@ function by_python_fassung()
         return $v;
     }
     $ausgabe = array();
-    @exec(escapeshellcmd($py) . ' -c ' . escapeshellarg(
+    @exec(escapeshellarg($py) . ' -c ' . escapeshellarg(
         'import sys; print("%d.%d.%d" % sys.version_info[:3])'
     ) . ' 2>/dev/null', $ausgabe);
     $v = trim(implode('', $ausgabe));
@@ -694,8 +781,16 @@ function by_python_fassung()
 }
 
 /** Ruft byd.py mit einem Schalter auf und gibt die Ausgabe zurueck. */
-function by_python_ruf($schalter)
+/* $code nimmt den Rueckgabecode des Aufrufs auf - 0 heisst gelungen.
+ *
+ * Der Parameter ist neu und der Grund dafuer ein Befund: der Aufrufer im
+ * Reiter Test verdrahtete eine 1 fest ("Erfolg"), ohne je nachzusehen, was
+ * herauskam. Fehlte die virtuelle Umgebung oder war exec() gesperrt, stand ein
+ * gruener Haken ueber einer Fehlermeldung. Die beiden Fehlerzweige hier setzen
+ * den Code deshalb ausdruecklich - nicht nur den Text. */
+function by_python_ruf($schalter, &$code = null)
 {
+    $code = 1;
     $p = by_paths();
     $py = $p['bindir'] . '/venv/bin/python3';
     $skript = $p['bindir'] . '/byd.py';
@@ -710,8 +805,10 @@ function by_python_ruf($schalter)
              . "laesst sich von hier aus nicht aufrufen.";
     }
     $ausgabe = array();
-    @exec(escapeshellcmd($py) . ' ' . escapeshellarg($skript) . ' '
-        . escapeshellarg($schalter) . ' 2>&1', $ausgabe);
+    $rc = 1;
+    @exec(escapeshellarg($py) . ' ' . escapeshellarg($skript) . ' '
+        . escapeshellarg($schalter) . ' 2>&1', $ausgabe, $rc);
+    $code = (int) $rc;
     return implode("\n", $ausgabe);
 }
 
@@ -1570,6 +1667,58 @@ function by_t($schluessel)
  *
  * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
  */
+/**
+ * Die zulaessigen Bereiche der Zahlenfelder - an EINER Stelle.
+ *
+ * ERGAENZT 03.09.2026. Bis 0.9.5 stand diese Tabelle im Speichern-Handler der
+ * Oberflaeche, und by_sicherung_lesen() prueft die Werte einer
+ * zurueckgespielten Datei gar nicht - nur die Schluesselnamen. Eine Sicherung
+ * mit "intervall": "abc" oder "aktionstoken": [] wurde angenommen und
+ * geschrieben; aus dem Feld wurde beim naechsten Vergleich die Zeichenkette
+ * "Array", und jede Adresse im Miniserver war ungueltig.
+ *
+ * Eine zweite Wahrheit ueber zulaessige Werte gibt es nicht: Formular,
+ * Sicherung und Endpunkt fragen dieselbe Tabelle.
+ */
+function by_grenzen()
+{
+    return array(
+        'intervall'        => array(120, 3600),
+        'temp_min'         => array(10, 32),
+        'temp_max'         => array(10, 32),
+        'verlauf_tage'     => array(1, 90),
+        'wartezeit'        => array(0, 30),
+        'abfahrt_vorlauf'  => array(1, 120),
+        'abfahrt_temp'     => array(10, 32),
+        'abfahrt_alter'    => array(60, 3600),
+        'abfahrt_fahrzeug' => array(1, 99),
+        'ladeempf_alter'   => array(60, 86400),
+        'kapazitaet'       => array(0, 500),
+        'heim_radius'      => array(20, 5000),
+    );
+}
+
+/**
+ * Taugt dieser Wert ueberhaupt fuer eine Konfigurationsdatei?
+ *
+ * Am Eingang, vor jeder feldbezogenen Pruefung: was kein Skalar ist, hat in
+ * einer JSON-Konfiguration nichts zu suchen - ein Feld wird beim naechsten
+ * (string)-Zugriff zur Zeichenkette "Array", und unter PHP 8 wirft es.
+ * Steuerzeichen fliegen ebenfalls heraus; sie waeren in keiner Anzeige
+ * sichtbar und in keiner Meldung erklaerbar.
+ */
+function by_wert_taugt($w)
+{
+    if (is_array($w) || is_object($w) || is_null($w) || is_bool($w)) {
+        return false;
+    }
+    $s = (string) $w;
+    if (strlen($s) > 4096) {
+        return false;
+    }
+    return preg_match('/[\x00-\x08\x0A-\x1F\x7F]/', $s) !== 1;
+}
+
 function by_sicherung_lesen($roh)
 {
     $mangel = array();
@@ -1579,12 +1728,36 @@ function by_sicherung_lesen($roh)
     }
     $neu = by_vorgaben();
     $bekannt = array_keys($neu);
+    $grenzen = by_grenzen();
     $anzahl = 0;
     foreach ($daten as $k => $w) {
+        /* Der lesbare Kopf einer Sicherungsdatei wird UEBERGANGEN, nicht
+         * beanstandet - sonst lehnt die Funktion die Datei ab, die dieselbe
+         * Bibliothek zwei Zeilen vorher erzeugt hat. Heute schreibt das Plugin
+         * keinen solchen Kopf; wer einen ergaenzt, hat die Leseseite schon. */
+        if (is_string($k) && $k !== '' && $k[0] === '_') {
+            continue;
+        }
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(by_t('EINST.SICH_FREMD'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
             continue;
+        }
+        if (!by_wert_taugt($w)) {
+            $mangel[] = sprintf(by_t('EINST.SICH_WERT'),
+                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        if (isset($grenzen[$k])) {
+            $s = trim((string) $w);
+            if (!preg_match('/^-?[0-9]+$/', $s)
+                || (int) $s < $grenzen[$k][0] || (int) $s > $grenzen[$k][1]) {
+                $mangel[] = sprintf(by_t('EINST.SICH_BEREICH'),
+                                     htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
+                                     $grenzen[$k][0], $grenzen[$k][1]);
+                continue;
+            }
+            $w = (int) $s;
         }
         $neu[$k] = $w;
         $anzahl++;

@@ -38,8 +38,15 @@ foreach (array(
     }
 }
 if (!$by_gefunden) {
+    /* Die EINZIGE Stelle dieser Datei mit fest verdrahtetem Text - und das
+     * muss so sein: die Sprachdatei wird von by_lib.php geladen, und genau die
+     * fehlt hier. Ein by_t() waere an dieser Stelle ein Aufruf ins Leere und
+     * liesse die Seite mit einem Fatal Error enden statt mit einer Meldung,
+     * die sagt, was zu tun ist. Deutsch und Englisch nebeneinander, weil auch
+     * die Sprachwahl in der fehlenden Datei steht. */
     echo '<p><b>Fehler:</b> by_lib.php wurde nicht gefunden. Bitte das Plugin neu '
-       . 'installieren.</p>';
+       . 'installieren.<br><b>Error:</b> by_lib.php was not found. Please '
+       . 'reinstall the plugin.</p>';
     exit;
 }
 require_once __DIR__ . '/by_test.php';
@@ -121,8 +128,24 @@ if ($by_post) {
  * Speichern im kleinen Reiter loeschte alle Messquellen, und die Seite meldete
  * "Die Einstellungen wurden gespeichert". */
 $by_formular = ($by_post && isset($_POST['formular'])) ? (string) $_POST['formular'] : '';
+/* ERGAENZT 03.09.2026: 'sichern' und 'zurueck'.
+ *
+ * Bis 0.9.5 fehlten beide - und mit ihnen fehlte das versteckte Feld in den
+ * zwei Sicherungsformularen. Der Wachposten unten wies deshalb JEDEN Druck auf
+ * "Einstellungen sichern" und "Zurueckspielen" ab: $by_formular blieb leer,
+ * war nicht in dieser Liste, $by_post wurde false, und die beiden Handler
+ * liefen nie an. Der Anwender bekam "Das Formular hat sich nicht zu erkennen
+ * gegeben" - eine Meldung, die auf ein Sitzungsproblem zeigt, waehrend das
+ * Formmerkmal in Ordnung war. Der Umzug auf einen zweiten LoxBerry, der
+ * erklaerte Zweck der beiden Knoepfe, war damit unmoeglich.
+ *
+ * Warum das keine Pruefung gefunden hat: sicherung_wirkung.py misst die
+ * LESEFUNKTION (nimmt sie Gueltiges an, lehnt sie Fremdes ab?) und
+ * sicherung_verdrahtung.py die POST-Bedingung - beide waren richtig. Die
+ * Positivliste sieht keines von beiden an. Die Zeile im Reiter Test, die es
+ * findet, steht seit dieser Fassung dort. */
 $by_formulare = array('einstellungen', 'mqtt', 'dienst', 'token', 'log', 'test',
-                      'vorlage', 'selbsttest');
+                      'vorlage', 'selbsttest', 'sichern', 'zurueck');
 if ($by_post && !in_array($by_formular, $by_formulare, true)) {
     $by_fehler[] = by_t('ALLG.FEHLER_FORMULAR');
     $by_post = false;
@@ -184,21 +207,16 @@ if ($by_post && $by_formular === 'vorlage') {
 /* ---------------- Einstellungen speichern ---------------- */
 if ($by_post && $by_formular === 'einstellungen') {
     $by_cfg = by_config();
+    /* Der Stand VOR diesem Absenden. Er wird gebraucht, um einzelne Felder
+     * zurueckzunehmen, ohne alles zu verwerfen - siehe den Block "Speichern"
+     * am Ende dieses Handlers. */
+    $by_cfg_alt = $by_cfg;
 
-    foreach (array(
-        'intervall'        => array(120, 3600),
-        'temp_min'         => array(10, 32),
-        'temp_max'         => array(10, 32),
-        'verlauf_tage'     => array(1, 90),
-        'wartezeit'        => array(0, 30),
-        'abfahrt_vorlauf'  => array(1, 120),
-        'abfahrt_temp'     => array(10, 32),
-        'abfahrt_alter'    => array(60, 3600),
-        'abfahrt_fahrzeug' => array(1, 99),
-        'ladeempf_alter'   => array(60, 86400),
-        'kapazitaet'       => array(0, 500),
-        'heim_radius'      => array(20, 5000),
-    ) as $by_feld => $by_grenzen) {
+    /* Die Grenzen stehen seit 0.9.6 in by_grenzen() - eine Quelle fuer das
+     * Formular, fuer das Zurueckspielen einer Sicherung und fuer den
+     * Endpunkt. Zwei getrennt gepflegte Tabellen sind zwei Wahrheiten, und
+     * das Zurueckspielen hatte bis dahin gar keine. */
+    foreach (by_grenzen() as $by_feld => $by_grenzen) {
         $by_wert = isset($_POST[$by_feld]) ? trim((string) $_POST[$by_feld]) : '';
         if (!preg_match('/^[0-9]+$/', $by_wert)) {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_ZAHL'),
@@ -219,6 +237,13 @@ if ($by_post && $by_formular === 'einstellungen') {
     if (isset($by_cfg['temp_min'], $by_cfg['temp_max'])
         && $by_cfg['temp_min'] > $by_cfg['temp_max']) {
         $by_fehler[] = by_t('EINST.FEHLER_TEMP_TAUSCH');
+        // Beide Werte zurueck auf den bisherigen Stand. Einzeln sind sie
+        // gueltig, zusammen ergeben sie ein Fenster, in das keine Temperatur
+        // passt - dann wiese der Dienst jeden Klimabefehl ab, und der Anwender
+        // saehe die Ursache nur hier. Der Rest des Formulars wird trotzdem
+        // gespeichert.
+        $by_cfg['temp_min'] = $by_cfg_alt['temp_min'];
+        $by_cfg['temp_max'] = $by_cfg_alt['temp_max'];
     }
 
     $by_cfg['steuerung_ein'] = isset($_POST['steuerung_ein']) ? 1 : 0;
@@ -238,6 +263,8 @@ if ($by_post && $by_formular === 'einstellungen') {
         $by_fehler[] = sprintf(by_t('EINST.FEHLER_ABFAHRT_TEMP'),
             (int) $by_cfg['abfahrt_temp'], (int) $by_cfg['temp_min'],
             (int) $by_cfg['temp_max']);
+        // Nur dieses eine Feld zurueck, nicht das ganze Formular.
+        $by_cfg['abfahrt_temp'] = $by_cfg_alt['abfahrt_temp'];
     }
 
     /* Themenpfade: dasselbe Muster wie beim eigenen Praefix. Wildcards sind
@@ -257,6 +284,11 @@ if ($by_post && $by_formular === 'einstellungen') {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_THEMA'), by_t($by_bez));
             continue;
         }
+        // Das Beschneiden der Schraegstriche bleibt STILL, und zwar mit
+        // Absicht: "haus/byd/" und "haus/byd" bezeichnen dasselbe Thema, ein
+        // Schraegstrich am Rand ist Schreibweise und nicht Inhalt. Gemeldet
+        // wird nur, wo Zeichen verschwinden, die etwas bedeuten - siehe den
+        // Benutzernamen und das Länderkürzel weiter unten.
         $by_cfg[$by_f] = trim($by_w, '/');
     }
 
@@ -297,12 +329,30 @@ if ($by_post && $by_formular === 'einstellungen') {
     /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
      * Passwortfeld loescht nichts - sonst stuende irgendwann ein leeres
      * Passwort in der Datei, ohne dass es jemand merkt. */
-    $by_benutzer = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
-        isset($_POST['benutzer']) ? (string) $_POST['benutzer'] : ''));
+    /* Gesaeubert wird weiter - aber nicht mehr STILL.
+     *
+     * Beide Zeilen entfernen Zeichen: aus dem Benutzernamen die Steuerzeichen
+     * und die beiden Anfuehrungszeichen, aus dem Land alles, was kein
+     * Buchstabe ist. Wer eine Kennung mit einem Apostroph fuehrt, bekam sie
+     * ohne gespeichert - und danach eine Anmeldung, die scheitert, ohne dass
+     * irgendwo steht, dass der eingegebene Name nicht der gespeicherte ist.
+     * Ein stillschweigend veraenderter Anmeldename ist der unangenehmste Fall
+     * dieser Art: er sieht im Feld richtig aus. */
+    $by_benutzer_roh = trim(isset($_POST['benutzer']) ? (string) $_POST['benutzer'] : '');
+    $by_benutzer = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', $by_benutzer_roh));
+    if ($by_benutzer !== $by_benutzer_roh) {
+        $by_fehler[] = by_t('EINST.HINWEIS_BENUTZER_GESAEUBERT');
+    }
     $by_pw = isset($_POST['passwort']) ? (string) $_POST['passwort'] : '';
     $by_pin = isset($_POST['pin']) ? trim((string) $_POST['pin']) : '';
-    $by_land = strtoupper(trim(preg_replace('/[^A-Za-z]/', '',
-        isset($_POST['land']) ? (string) $_POST['land'] : '')));
+    $by_land_roh = trim(isset($_POST['land']) ? (string) $_POST['land'] : '');
+    $by_land = strtoupper(preg_replace('/[^A-Za-z]/', '', $by_land_roh));
+    // Die reine Grossschreibung ist keine Aenderung, die jemanden ueberrascht -
+    // gemeldet wird nur, wenn ZEICHEN entfallen sind.
+    if ($by_land !== strtoupper($by_land_roh)) {
+        $by_fehler[] = sprintf(by_t('EINST.HINWEIS_LAND_GESAEUBERT'),
+            by_e($by_land_roh), by_e($by_land));
+    }
 
     if (isset($_POST['zugang_loeschen'])) {
         // Ausdruecklich gewollt: alles weg. Was im selben Absenden in den
@@ -336,12 +386,32 @@ if ($by_post && $by_formular === 'einstellungen') {
         $by_meldungen[] = by_t('EINST.HINWEIS_PIN_FEHLT');
     }
 
-    if (!$by_fehler) {
-        if (by_config_speichern($by_cfg)) {
-            $by_meldungen[] = by_t('EINST.GESPEICHERT');
-        } else {
-            $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
-        }
+    /* SPEICHERN - auch dann, wenn eine Eingabe beanstandet wurde.
+     *
+     * Vorher stand hier "if (!$by_fehler)". Damit verwarf EIN Einwand das
+     * ganze Formular: wer das Abrufintervall aendert und sich dabei in der
+     * Heimatposition vertippt, verliert auch das Intervall - beim naechsten
+     * Laden steht wieder der alte Wert da, ohne dass jemand sagt, dass er
+     * verworfen wurde. Bei sechzehn Feldern auf einer Seite ist das der
+     * Regelfall und nicht der Ausnahmefall.
+     *
+     * Die Haltung stand schon im Haus, drei Absaetze weiter oben bei der
+     * Steuer-PIN: "was sich zurechtruecken laesst, wird gespeichert, und die
+     * Beanstandung erscheint daneben". Sie wird jetzt durchgehalten.
+     *
+     * Das ist gefahrlos, weil eine beanstandete Eingabe gar nicht erst in
+     * $by_cfg landet - die Pruefschleifen springen mit continue weiter, und
+     * das betroffene Feld behaelt seinen bisherigen Wert. Wo zwei Felder
+     * zusammen nicht passen, sind sie oben ausdruecklich zurueckgenommen
+     * worden.
+     *
+     * Blockierend bleibt allein, was sich nicht schreiben laesst. */
+    if (by_config_speichern($by_cfg)) {
+        $by_meldungen[] = $by_fehler
+            ? sprintf(by_t('EINST.GESPEICHERT_MIT_EINWAND'), count($by_fehler))
+            : by_t('EINST.GESPEICHERT');
+    } else {
+        $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
     }
     $by_tab = 'tab-settings';
 
@@ -362,8 +432,20 @@ if ($by_post && $by_formular === 'mqtt') {
     } else {
         $by_mcfg['mqtt_topic'] = trim($by_mtopic, '/');
     }
-    if (!$by_fehler && by_config_speichern($by_mcfg)) {
-        $by_meldungen[] = by_t('EINST.GESPEICHERT');
+    /* Der Fehlerfall wurde bisher VERSCHWIEGEN: liess sich die Datei nicht
+     * schreiben, war die Bedingung falsch, und es geschah nichts weiter - kein
+     * Haken, kein Kreuz. Der Anwender klickte auf Speichern, die Seite lud neu,
+     * und sein Haken bei MQTT war wieder fort. Ohne eine einzige Zeile
+     * Erklaerung ist das nicht von "hat nicht geklickt" zu unterscheiden.
+     *
+     * Und der Themenname wird gespeichert, ohne mqtt_ein zu verwerfen: der
+     * Haken allein ist gueltig, auch wenn der Name beanstandet wurde. */
+    if (by_config_speichern($by_mcfg)) {
+        $by_meldungen[] = $by_fehler
+            ? sprintf(by_t('EINST.GESPEICHERT_MIT_EINWAND'), count($by_fehler))
+            : by_t('EINST.GESPEICHERT');
+    } else {
+        $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
     }
     $by_tab = 'tab-mqtt';
 }
@@ -429,8 +511,20 @@ if ($by_post && $by_formular === 'test') {
         $by_fehler[] = by_e($by_text);
     }
     if (strpos($by_text, "\n") !== false) {
+        /* Mehrzeiliges gehoert in den Ausgabekasten und nicht in die
+         * Meldungszeile - dort wuerde es zu einem Absatz zerlaufen.
+         *
+         * Entfernt wird aus DER Liste, in die eben geschrieben wurde. Vorher
+         * stand hier unbedingt array_pop($by_meldungen), auch wenn der Text
+         * als FEHLER abgelegt worden war: dann verschwand die letzte fremde
+         * ERFOLGSmeldung aus der Anzeige, und der Fehler stand doppelt da -
+         * einmal rot oben, einmal im Kasten. */
         $by_ausgabe = $by_text;
-        array_pop($by_meldungen);
+        if ($by_stand === 1 || $by_stand === 2) {
+            array_pop($by_meldungen);
+        } else {
+            array_pop($by_fehler);
+        }
     }
     $by_tab = 'tab-test';
 }
@@ -451,7 +545,13 @@ $by_pid = by_dienst_pid();
 $by_mqtt = by_mqtt_zustand();
 $by_libv = by_bibliothek_fassung();
 $by_host = by_host();
-$by_basis = 'http://' . $by_host . '/plugins/' . $by_p['plugin'] . '/index.php';
+/* EINE Quelle fuer den Pfad des Endpunkts. Er stand zweimal im Quelltext -
+ * hier mit Host davor und weiter unten in der Befehlstabelle noch einmal von
+ * Hand zusammengesetzt. Zwei Stellen, die dieselbe Adresse bilden, laufen beim
+ * naechsten Umbau auseinander, und der Anwender uebertraegt dann eine Adresse
+ * in den Miniserver, die es nicht gibt. */
+$by_pfad = '/plugins/' . $by_p['plugin'] . '/index.php';
+$by_basis = 'http://' . $by_host . $by_pfad;
 $by_logzeilen = is_file($by_p['log']) ? by_log_ende($by_p['log'], 400) : array();
 $by_pruefungen = by_pruefungen();
 $by_bilanz = by_pruefbilanz($by_pruefungen);
@@ -464,7 +564,7 @@ $by_rahmen = class_exists('LBWeb', false);
  * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
  * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
  * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
-if ($by_post && isset($_POST['by_sichern'])) {
+if ($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern'])) {
     $by_js = json_encode(by_config(),
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($by_js !== false) {
@@ -482,7 +582,7 @@ if ($by_post && isset($_POST['by_sichern'])) {
  * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
  * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
  * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
-if ($by_post && isset($_POST['by_zurueck'])) {
+if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
     if (!isset($_FILES['by_sicherung']) || !is_array($_FILES['by_sicherung'])
         || !isset($_FILES['by_sicherung']['tmp_name'])
         || !@is_uploaded_file($_FILES['by_sicherung']['tmp_name'])) {
@@ -690,12 +790,19 @@ if ($by_rahmen) {
 
 <div class="sm-warnung"><?= by_t('EINST.UNGEPRUEFT') ?></div>
 
-<h2><?= by_e(by_t('EINST.H_DIENST')) ?></h2>
-<p class="sm-hilfe"><?= by_t('EINST.DIENST_ERKLAERUNG') ?></p>
+<!-- EINE gesammelte Legende fuer den ganzen Reiter - so verlangt es
+     REGELN_2, Abschnitt "Farblegende der Knoepfe": nicht je Knopfreihe
+     eine eigene, weil dieselbe Zeile mehrfach untereinander mehr Unruhe
+     stiftet als Nutzen. Bis 0.9.5 standen hier VIER Legenden.
+     Genannt werden genau die zwei Farben, die in diesem Reiter
+     vorkommen; grau kommt nicht vor und bleibt deshalb weg. -->
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?= by_t('LEGENDE.LESEN') ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?= by_t('LEGENDE.AKTION') ?></span>
 </div>
+
+<h2><?= by_e(by_t('EINST.H_DIENST')) ?></h2>
+<p class="sm-hilfe"><?= by_t('EINST.DIENST_ERKLAERUNG') ?></p>
 <!-- Die Knopfklassen stehen AUSGESCHRIEBEN, nicht aus einer Schleife
      zusammengesetzt. Eine Klasse, die zur Laufzeit entsteht, kann kein
      Pruefwerkzeug sehen: hausstandard_pruefen.py fand daraufhin keinen gruenen
@@ -707,6 +814,12 @@ if ($by_rahmen) {
     <input data-role="none" type="hidden" name="formular" value="dienst">
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <!-- GRUEN, und das ist so richtig. REGELN_2, Abschnitt "Farblegende der
+         Knoepfe": gruen heisst "liest nur / STARTET", und die Trennlinie
+         zwischen Gruen und Orange ist nicht "hat eine Wirkung", sondern
+         "kann den Betrieb stoeren". Ein Dienststart ist umkehrbar und
+         harmlos; Anhalten und Neustarten greifen in den laufenden
+         Betrieb ein und sind orange. -->
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="dienst" value="start"><?= by_e(by_t('EINST.K_START')) ?></button>
   </form>
   <form action="index.php" method="post">
@@ -896,9 +1009,6 @@ if ($by_rahmen) {
   <div class="sm-hilfe"><?= by_t('EINST.H_HEIM_RADIUS') ?></div>
 </div>
 
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= by_t('LEGENDE.AKTION') ?></span>
-</div>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= by_e(by_t('ALLG.SPEICHERN')) ?></button>
 </div>
@@ -929,19 +1039,33 @@ if ($by_rahmen) {
 <h2><?= by_t('EINST.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= by_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= by_t('EINST.SICH_WARNUNG') ?></div>
+<!-- ZWEI GETRENNTE Formulare, und ab 0.9.6 auch zwei getrennte Knopfreihen.
+     Getrennte Formulare, weil das Sichern einen Download schickt und mit exit
+     endet, das Zurueckspielen aber enctype="multipart/form-data" braucht - wer
+     beides in ein Formular legt, bekommt entweder keinen Upload oder einen
+     Download, der das Speichern verschluckt.
+     Getrennte REIHEN, weil der Hausstandard lesende und schaltende Knoepfe
+     nicht in dieselbe Reihe laesst: der eine laedt nur herunter, der andere
+     ueberschreibt die Einstellungen. Bis 0.9.5 standen sie nebeneinander unter
+     gar keiner Legende. -->
 <div class="sm-knopfreihe">
-  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
-       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
-       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
-       einen Download, der das Speichern verschluckt. -->
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+    <!-- Ohne dieses Feld weist der Wachposten den POST ab und der Knopf tut
+         nichts - genau das war bis 0.9.5 der Fall. -->
+    <input data-role="none" type="hidden" name="formular" value="sichern">
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="by_sichern" value="1"><?= by_t('EINST.K_SICHERN') ?></button>
   </form>
+</div>
+
+<h3><?= by_e(by_t('EINST.H_ZURUECK')) ?></h3>
+<p class="sm-hilfe"><?= by_t('EINST.H_ZURUECK_TEXT') ?></p>
+<div class="sm-knopfreihe">
   <form action="index.php" method="post" enctype="multipart/form-data">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+    <input data-role="none" type="hidden" name="formular" value="zurueck">
     <input data-role="none" type="file" name="by_sicherung" accept=".json">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="by_zurueck" value="1"><?= by_t('EINST.K_ZURUECK') ?></button>
   </form>
@@ -1013,6 +1137,17 @@ if ($by_rahmen) {
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
 <div class="sm-seite<?= $by_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
+
+<!-- EINE gesammelte Legende fuer den ganzen Reiter (REGELN_2,
+     "Farblegende der Knoepfe"). Bis 0.9.5 standen hier zwei, jede ueber
+     ihrer eigenen Knopfreihe. Genannt sind die zwei Farben, die in
+     diesem Reiter vorkommen; gruen kommt nicht vor und bleibt weg.
+     Bei Orange steht der Token-Text: hier verfaellt kein Betrieb,
+     sondern es werden Adressen ungueltig. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-technik"></i> <?= by_t('LEGENDE.TECHNIK') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= by_t('LEGENDE.AKTION_TOKEN') ?></span>
+</div>
 <h2><?= by_e(by_t('LOX.H_TITEL')) ?></h2>
 <p><?= by_t('LOX.EINLEITUNG') ?></p>
 
@@ -1062,9 +1197,6 @@ if ($by_rahmen) {
 <?php } ?>
 <h3><?= by_e(by_t('LOX.H_ALLES')) ?></h3>
 <p><?= by_t('LOX.ALLES_TEXT') ?></p>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?= by_t('LEGENDE.TECHNIK') ?></span>
-</div>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="formular" value="vorlage">
@@ -1102,7 +1234,7 @@ if ($by_rahmen) {
 <tr><th><?= by_e(by_t('LOX.T_BEFEHL')) ?></th><th><?= by_e(by_t('LOX.T_ADRESSE')) ?></th></tr>
 <?php foreach (by_befehle() as $by_aktion => $by_eig) { ?>
 <tr><td><?= by_t($by_eig['bez']) ?></td>
-    <td><span class="sm-mono">/plugins/<?= by_e($by_p['plugin']) ?>/index.php?token=<?= by_e($by_token) ?>&amp;aktion=<?= by_e($by_aktion) ?><?= $by_aktion === 'abruf' ? '' : '&amp;fahrzeug=1' ?><?php
+    <td><span class="sm-mono"><?= by_e($by_pfad) ?>?token=<?= by_e($by_token) ?>&amp;aktion=<?= by_e($by_aktion) ?><?= $by_aktion === 'abruf' ? '' : '&amp;fahrzeug=1' ?><?php
     if ($by_eig['zusatz'] === 'temp') { echo '&amp;temp=&lt;v&gt;'; }
     elseif ($by_eig['zusatz'] === 'stufe') { echo '&amp;stufe=&lt;v&gt;'; } ?></span></td></tr>
 <?php } ?>
@@ -1120,9 +1252,6 @@ if ($by_rahmen) {
 <tr><td><?= by_e(by_t('LOX.T_SELBSTTEST')) ?></td>
     <td><span class="sm-mono"><?= by_e($by_basis) ?>?selftest=1&amp;token=<?= by_e($by_token) ?></span></td></tr>
 </table>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?= by_t('LEGENDE.AKTION_TOKEN') ?></span>
-</div>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="formular" value="token">
