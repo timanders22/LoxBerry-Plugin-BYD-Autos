@@ -1125,12 +1125,15 @@ if ($by_rahmen) {
 <h2><?= by_e(by_t('MQTT.H_THEMEN')) ?></h2>
 <p class="sm-hilfe"><?= by_t('MQTT.THEMEN_ERKLAERUNG') ?></p>
 <table class="sm-tbl">
-<tr><th><?= by_e(by_t('MQTT.T_THEMA')) ?></th><th><?= by_e(by_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
-<?php foreach (by_mqtt_themen() as $by_thema => $by_schluessel) { ?>
+<tr><th><?= by_e(by_t('MQTT.T_THEMA')) ?></th><th><?= by_e(by_t('MQTT.T_BEDEUTUNG')) ?></th><th><?= by_e(by_t('MQTT.T_RETAIN')) ?></th></tr>
+<?php $by_retain = by_mqtt_retain();
+      foreach (by_mqtt_themen() as $by_thema => $by_schluessel) { ?>
 <tr><td><span class="sm-mono"><?= by_e($by_cfg['mqtt_topic'] . '/' . $by_thema) ?></span></td>
-    <td><?= by_t($by_schluessel) ?></td></tr>
+    <td><?= by_t($by_schluessel) ?></td>
+    <td><?= by_e(by_t(in_array($by_thema, $by_retain, true) ? 'ALLG.JA' : 'ALLG.NEIN')) ?></td></tr>
 <?php } ?>
 </table>
+<p class="sm-hilfe"><?= by_t('MQTT.RETAIN_ERKLAERUNG') ?></p>
 <p class="sm-hilfe"><?= by_t('MQTT.PLATZHALTER') ?></p>
 <div class="sm-hinweis"><?= by_t('MQTT.UMBENENNUNG') ?></div>
 </div>

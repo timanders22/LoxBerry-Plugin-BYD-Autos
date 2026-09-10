@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.8
+Version 0.9.9
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -31,6 +31,97 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.9
+
+Eine Messrunde am LoxBerry — ohne BYD-Konto, das es hier nicht gibt — und
+drei Befunde daraus.
+
+### Zustände gehen zurückbehalten hinaus
+
+Bis 0.9.8 ging jedes Thema mit `publish` über den UDP-Eingang des
+MQTT-Gateways. Gateway V1 legt so ein Thema **nicht** retained im Broker ab (am
+Gerät belegt, 06.09.2026). Nach einem Neustart des Miniservers oder des
+Gateways standen damit auch Schloss und Zündung leer, bis der nächste Abruf
+kam.
+
+Jetzt gilt der Hausstandard vom 03.09.2026. **Zustände** gehen mit `retain`
+hinaus: Lade-, Fahr- und Onlinezustand, Zündung, Schloss, beide Heizungen,
+`LAEDT`, `KABEL`, `ZUHAUSE`, `FEHLFOLGE` und die Zahl der Fahrzeuge.
+**Messwerte mit Zeitbezug** gehen ohne: Ladezustand, Kilometerstand,
+Reichweite, Tempo, Restzeit, Verbrauch, geladene Menge, Standort — und die
+Ladeempfehlung, die an einem Preis der Stunde hängt. Das **Lebenszeichen**
+(`ts`, `ok` und `OK` je Fahrzeug) geht nie zurückbehalten: retained zeigte es
+nach dem Tod des Dienstes für immer „lebt". Die Themen-Tabelle im Reiter MQTT
+hat dafür eine eigene Spalte.
+
+Eine Folge, die man kennen muss: ein zurückbehaltener Zustand bleibt im Broker
+stehen, auch wenn der Dienst ausfällt. Ob er frisch ist, sagen `ALTER` und
+`OK` — so steht es im Abschnitt *Ausfallerkennung*, und daran ändert sich
+nichts.
+
+### Der Grund einer abgelehnten Broker-Anmeldung steht wieder im Klartext
+
+paho 2.x — auf dem LoxBerry steckt 2.1.0 — liefert für eine abgelehnte
+Anmeldung die Ursachencodes von MQTT 5 (134, 135) statt der von MQTT 3.1.1
+(4, 5). 0.9.8 kannte nur die alten Nummern; am Gerät stand deshalb „Code 135"
+ohne Bedeutung. Das Verhalten war richtig — der Horcher meldete nie
+„verbunden" —, nur die Erklärung fehlte. Am echten Mosquitto gemessen:
+falsches Kennwort **und** anonyme Anmeldung ergeben beide 135, „nicht
+berechtigt".
+
+Der Prüfstand, der das hätte finden sollen, verlangte nur *irgendeinen*
+Fehlertext. Er verlangt jetzt die Bedeutung — und fällt gegen 0.9.8 nur unter
+paho 2.1.0 durch, nicht unter paho 1.6.1 auf einem Arbeitsplatz. Ohne die
+Messung am Gerät wäre der Befund unsichtbar geblieben.
+
+### Kleinigkeit im Cron-Wächter
+
+Der Kommentar in `cron/cron.01min` nannte den Platzhalter des Installers beim
+Namen. Der Installer ersetzt ihn in der ganzen Datei — auf dem Gerät erklärte
+der Kommentar danach den fertigen Pfad als „Platzhalter".
+
+### Eine Meldung im Installationsprotokoll stimmte nicht
+
+`preupgrade.sh` schrieb bei jedem Update „Laufender Dienst angehalten." ins
+Protokoll — auch wenn gar kein Dienst lief. Die Antwort von `dienst.sh stop`
+(„laeuft nicht") ging nach `/dev/null`, und die Meldung hing an nichts. Der
+Merker, der weiß, ob der Dienst lief, steht zwei Zeilen darüber; an ihm hängt
+die Meldung jetzt. Aufgefallen am Protokoll des ersten echten Upgrades am
+Gerät.
+
+### Am LoxBerry gemessen (11.09.2026)
+
+LoxBerry 4.0.0.15, Python 3.13.5, pybyd 0.0.73, paho 2.1.0. Installiert war
+0.9.8, byteweise gleich mit dem Ordner bis auf die Platzhalter, die der
+Installer ersetzt.
+
+* Der Horcher am **echten** Mosquitto: mit den Zugangsdaten aus der
+  `general.json` verbindet er und hört fremde Themen mit — vier
+  zurückbehaltene Werte des Abfahrtsassistenten kamen sofort an. Falsches
+  Kennwort und anonym: abgewiesen, kein einziges Mal „verbunden".
+* `abfahrt/ABFAHRT_IN` geht beim Abfahrtsassistenten **nicht** retained. Nach
+  einem Neustart des BYD-Dienstes fehlt der Wert bis zum nächsten Vollversand
+  des Assistenten, und die Vorklimatisierung löst bis dahin nicht aus — die
+  gewollte Richtung des Fehlers.
+* `byd.py --selbsttest`: alle zehn Befehlsmethoden sind in pybyd 0.0.73
+  vorhanden. Ob sie am Fahrzeug wirken, ist damit nicht gesagt.
+* Der Wächter entscheidet unter der Shell des Geräts (dash) richtig zwischen
+  „arbeitet", „hängt" und „kein Urteil".
+* Der Reiter Test, erstmals auf dem Gerät gerendert: 17 von 22 bestanden; alle
+  fünf Kreuze folgen daraus, dass kein BYD-Konto hinterlegt ist.
+* Der Endpunkt antwortet mit Token `SELFTEST;OK=1`, ohne und mit falschem
+  Token `403`.
+* Ohne Zugangsdaten verweigert `dienst.sh start` den Start und hinterlässt
+  keine Spur.
+* **Das erste echte Upgrade am Gerät, 0.9.8 → 0.9.9:** der Installer hat
+  `verlauf/ladungen.csv` gelöscht (Protokoll: `removed …/verlauf/ladungen.csv`)
+  und ebenso `byd.json` und `zugang.json`. `preupgrade.sh` hatte die
+  Ladehistorie vorher gesichert, `postinstall.sh` hat sie zurückgespielt —
+  byteweise gleich, mit derselben Zeitangabe —, und beide Konfigurationsdateien
+  aus ihrer Zweitschrift. Das Token ist unverändert, die Sicherung neben dem
+  Konfigordner danach wieder fort. Damit ist am Gerät belegt, was 0.9.5 falsch
+  versprochen und 0.9.6 gebaut hat.
 
 ## Neu in 0.9.7
 
@@ -314,9 +405,9 @@ auch nicht prüfen. Sie stehen hier als Auftrag, nicht als Ergebnis:
    Der Knopf *Feldzuordnung vorschlagen* beantwortet das in einem Aufruf; was
    dabei herauskommt, gehört in die Kandidatenlisten in `bin/byd.py` und die
    Herkunft des Feldes von `doku` auf `bestand` gesetzt.
-3. Ob die **Befehlsmethoden** in der installierten pybyd-Fassung so heißen wie
-   erwartet, und mit welchen Parametern. Der Selbsttest listet auf, was sie
-   anbietet.
+3. Mit welchen **Parametern** die Befehlsmethoden aufzurufen sind. Dass es
+   sie in pybyd 0.0.73 gibt, ist am Gerät gemessen (11.09.2026: alle zehn
+   vorhanden) — ob BYD sie so annimmt, nicht.
 4. Welche **Stufen** Sitz- und Batterieheizung kennen. Nicht dokumentiert.
 5. Ob `left_front_door_lock` wirklich nur die **Fahrertür** meint. Das Feld
    heißt so; ob die Schnittstelle darin den Zustand des ganzen Fahrzeugs führt,
@@ -326,10 +417,11 @@ auch nicht prüfen. Sie stehen hier als Auftrag, nicht als Ergebnis:
 6. Was die Kennzahlen von `vehicle_state`, `online_state`, `engine_status`,
    `battery_heat_state` und `main_seat_heat_state` im Einzelnen bedeuten. Sie
    gehen als **Rohwert** nach Loxone; erfunden wird keine Umrechnung.
-7. Ob die **Vorklimatisierung** am Fahrzeug ankommt. Gemessen ist nur, welche
+7. Ob die **Vorklimatisierung** am Fahrzeug ankommt. Gemessen ist, welche
    Themen der Abfahrtsassistent führt (`ABFAHRT_IN` und `OK` unter seinem
-   Präfix, aus `abfahrt_lib.php`) — nicht, dass BYD den Klimabefehl annimmt.
-   Der Trockenlauf beantwortet die zweite Hälfte, ohne das Auto zu bewegen.
+   Präfix) und dass der Horcher sie am echten Broker empfängt (11.09.2026) —
+   nicht, dass BYD den Klimabefehl annimmt. Der Trockenlauf beantwortet die
+   zweite Hälfte, ohne das Auto zu bewegen.
 8. Ob die **Erkennung der Ladevorgänge** am echten Fahrzeug trägt. Sie hängt
    ganz an `LAEDT`, und `LAEDT` ist selbst ein ungeprüftes Feld: liefert die
    Schnittstelle dort etwas anderes als erwartet, entsteht **keine** falsche
