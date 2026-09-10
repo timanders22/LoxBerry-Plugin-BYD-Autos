@@ -307,6 +307,19 @@ GRENZE_FREIGABE = 60
 BEFEHLE_JE_LAUF = 20
 BEFEHL_HOECHSTALTER = 300
 
+# Klartext der Ablehnungsgruende beim Anmelden am Broker, fuer BEIDE
+# Zaehlweisen: MQTT 3.1.1 (paho 1.x, Codes 1-5) und die Ursachencodes von
+# MQTT 5, auf die paho 2.x dieselben Faelle abbildet (132-136). Am Geraet
+# steht paho 2.1.0 (gemessen 11.09.2026) - bis 0.9.8 kannte der Horcher nur
+# 4 und 5, und dort stand deshalb nur "Code 135" ohne Bedeutung.
+CONNACK_KLARTEXT = {
+    1: "Protokollfassung abgelehnt", 132: "Protokollfassung abgelehnt",
+    2: "Client-Kennung abgelehnt", 133: "Client-Kennung abgelehnt",
+    3: "Broker nicht verfuegbar", 136: "Broker nicht verfuegbar",
+    4: "Benutzer oder Passwort falsch", 134: "Benutzer oder Passwort falsch",
+    5: "nicht berechtigt", 135: "nicht berechtigt",
+}
+
 _LAUF = True
 _LOG = logging.getLogger("bydautos")
 _LETZTE_MELDUNG: dict[str, float] = {}
@@ -435,6 +448,38 @@ ABGELEITET = {
     "LADEEMPF": {"einheit": "", "quelle": "gerechnet", "zeile": 1},
     "LADEKWH": {"einheit": "kWh", "quelle": "gerechnet", "zeile": 1},
 }
+
+# Welche Fahrzeugfelder gehen ZURUECKBEHALTEN (retain) hinaus?
+#
+# Hausstandard seit 03.09.2026 (Regeln/07): Zustaende retained, Messwerte mit
+# Zeitbezug nicht, das Lebenszeichen nie. Bis 0.9.8 ging hier ALLES mit
+# "publish" hinaus. Am Geraet belegt (Regeln/07, 06.09.2026): ein "publish"
+# ueber den UDP-Eingang von Gateway V1 liegt danach NICHT retained im Broker,
+# ein "retain" schon. Nach einem Neustart des Miniservers oder des Gateways
+# standen damit alle Eingaenge bis zum naechsten Abruf leer - auch Schloss
+# und Zuendung, die sich stundenlang nicht aendern.
+#
+# Retained: Lade-, Fahr- und Onlinezustand, Zuendung, Schloss, beide
+# Heizungen, laedt/Kabel, Zuhause und der Stoerungszaehler (ein Fehlerflag).
+# NICHT retained, und warum:
+#   SOC, KM, REICHW, TEMPO, RESTMIN, VERBRAUCH, LADEKWH, BREITE, LAENGE -
+#     Messwerte mit Zeitbezug; ein alter Wert saehe nach einem Ausfall
+#     aktuell aus.
+#   LADEEMPF - haengt an einem Preis der Stunde; eine zurueckbehaltene 1
+#     wirkte nach einem Neustart weiter, obwohl niemand mehr widerspricht.
+#   OK - sagt, ob DIESER Abruf etwas gebracht hat; zurueckbehalten hiesse
+#     es nach dem Tod des Dienstes fuer immer "ok".
+#   ts und ok (Sammelthemen) - das Lebenszeichen; retained zeigte es immer
+#     "lebt".
+# Die Zahl der Fahrzeuge (Thema "fahrzeuge") ist ein Zustand und geht
+# retained; das steht in abbild_schreiben().
+#
+# Gegenstueck in der Oberflaeche: by_mqtt_retain() in by_lib.php. Dass beide
+# dasselbe sagen, prueft Pruefung-BYD-Autos-0.9.9/retain_themen.py.
+RETAIN_FELDER = frozenset({
+    "LADEZUST", "FAHRZUST", "ONLINE", "ZUENDUNG", "SCHLOSSVL", "BATTHEIZ",
+    "SITZHEIZ", "LAEDT", "KABEL", "ZUHAUSE", "FEHLFOLGE",
+})
 
 # Bedeutung von charge_state.
 #
@@ -711,7 +756,8 @@ def mqtt_zustand() -> dict:
     }
 
 
-def mqtt_senden(paare: dict, praefix: str) -> tuple[int, int]:
+def mqtt_senden(paare: dict, praefix: str,
+                retain=frozenset()) -> tuple[int, int]:
     """Rueckgabe: (versucht, gescheitert).
 
     Beide Zahlen, nicht eine: ein Zaehler, der Schleifendurchlaeufe zaehlt
@@ -746,7 +792,12 @@ def mqtt_senden(paare: dict, praefix: str) -> tuple[int, int]:
                 continue
             versucht += 1
             try:
-                s.sendto(("publish %s/%s %s" % (praefix, k, mqtt_wert_saeubern(v))
+                # Gateway V1 kennt am UDP-Eingang "publish" und "retain"
+                # (mqttgateway.pl, am Geraet nachgelesen, Regeln/07). Welche
+                # Themen retained gehen, entscheidet der Aufrufer.
+                befehl = "retain" if k in retain else "publish"
+                s.sendto(("%s %s/%s %s" % (befehl, praefix, k,
+                                           mqtt_wert_saeubern(v))
                           ).encode("utf-8"), ("127.0.0.1", z["udpport"]))
             except OSError:
                 schlecht += 1
@@ -995,11 +1046,18 @@ class Horcher:
             return
         if rc != 0:
             self.verbunden = False
+            # Klartext fuer BEIDE Zaehlweisen. paho 1.x liefert die Codes aus
+            # MQTT 3.1.1 (1-5), paho 2.x bildet dieselben Faelle auf die
+            # Ursachencodes von MQTT 5 ab (132-136). Bis 0.9.8 kannte diese
+            # Stelle nur 4 und 5 - am Geraet (paho 2.1.0, 11.09.2026) stand
+            # deshalb nur "Code 135", ohne Bedeutung. Gemessen am echten
+            # Mosquitto: falsches Kennwort UND anonyme Anmeldung ergeben beide
+            # 135 (nicht berechtigt), nicht 134.
+            grund = CONNACK_KLARTEXT.get(rc, "")
             self.fehler = ("Der Broker hat die Anmeldung ABGELEHNT (Code %d%s). "
                            "Es wird nichts empfangen. Stehen Brokeruser und "
                            "Brokerpass in der general.json des LoxBerry?"
-                           % (rc, " - nicht berechtigt" if rc == 5 else
-                              (" - Benutzer oder Passwort falsch" if rc == 4 else "")))
+                           % (rc, (" - " + grund) if grund else ""))
             melde_gebremst("horcher_connack", self.fehler, 900)
             return
         self.verbunden = True
@@ -2347,7 +2405,13 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
         # ist. Was es NICHT sagt: wie lange dieses Fahrzeug schon ausfaellt.
         # Diese Dauer ist in Loxone aus dem Verlauf von OK zu bilden.
         paare["fahrzeug%s/OK" % nummer] = fz_ok
-    versucht, schlecht = mqtt_senden(paare, praefix)
+    # Welche Themen zurueckbehalten hinausgehen - Begruendung je Feld bei
+    # RETAIN_FELDER. Die Fahrzeugzahl ist ein Zustand; ok und ts sind das
+    # Lebenszeichen und gehen nie retained.
+    retain = {"fahrzeuge"} | {k for k in paare
+                              if k.startswith("fahrzeug") and "/" in k
+                              and k.split("/", 1)[1] in RETAIN_FELDER}
+    versucht, schlecht = mqtt_senden(paare, praefix, retain)
     lox["mqtt_versucht"] = versucht
     lox["mqtt_gescheitert"] = schlecht
     return lox

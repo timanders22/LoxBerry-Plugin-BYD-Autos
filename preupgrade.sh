@@ -104,9 +104,20 @@ fi
 # Pruefung, dass die Prozessnummer wirklich zu unserem Skript gehoert. Ein
 # blankes "kill $(cat pid)" traefe bei wiederverwendeter Nummer einen fremden
 # Prozess.
+#
+# Die Meldung haengt am Merker aus Schritt 1 und nicht am Aufruf. Bis 0.9.9
+# stand hier ein bedingungsloses "Laufender Dienst angehalten." - auch dann,
+# wenn gar kein Dienst lief; die Antwort von dienst.sh ("laeuft nicht") ging
+# nach /dev/null. Aufgefallen am ersten echten Upgrade am Geraet
+# (11.09.2026): der Dienst war gestoppt, das Protokoll meldete ihn angehalten.
+# Angehalten wird trotzdem in jedem Fall - stop entfernt auch den Sollmerker.
 if [ -x "$PBIN/dienst.sh" ]; then
     "$PBIN/dienst.sh" stop >/dev/null 2>&1
-    echo "<INFO> Laufender Dienst angehalten."
+    if [ -f "$MERKER" ]; then
+        echo "<INFO> Laufender Dienst angehalten."
+    else
+        echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
+    fi
 fi
 
 # ---------- 3. Konfiguration sichern ----------

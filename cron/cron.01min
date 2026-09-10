@@ -1,9 +1,14 @@
 #!/bin/sh
 # BYD Autos - Waechter, minuetlich.
-# Startet den Dienst neu, wenn er laufen soll, aber nicht laeuft.
+# Startet den Dienst neu, wenn er laufen soll, aber nicht laeuft oder haengt.
 #
-# REPLACELBPBINDIR wird bei der Installation durch den bin-Pfad des Plugins
-# ersetzt. Bewusst keine feste Zahl von ".." - gemessen legt LoxBerry die
-# Cron-Datei nach <Wurzel>/system/cron/cron.01min/<plugin>, also drei Ebenen
-# unter der Wurzel; ein $SELF/../.. landete damit auf <Wurzel>/system.
+# Der Pfad in der letzten Zeile ist ein Platzhalter des Installers; er wird
+# bei der Installation durch den bin-Pfad des Plugins ersetzt. Sein Name steht
+# hier absichtlich NICHT ausgeschrieben: der Installer ersetzt ihn in der
+# ganzen Datei, auch im Kommentar - bis 0.9.8 stand danach an dieser Stelle
+# ein Satz, der den fertigen Pfad als "Platzhalter" erklaerte.
+#
+# Bewusst keine feste Zahl von ".." - gemessen legt LoxBerry die Cron-Datei
+# nach <Wurzel>/system/cron/cron.01min/<plugin>, also drei Ebenen unter der
+# Wurzel; ein $SELF/../.. landete damit auf <Wurzel>/system.
 "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>&1

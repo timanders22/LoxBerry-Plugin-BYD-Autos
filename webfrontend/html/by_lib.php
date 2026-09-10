@@ -1279,6 +1279,23 @@ function by_mqtt_themen()
     return $aus;
 }
 
+/* Welche Themen gehen ZURUECKBEHALTEN (retain) hinaus? Gegenstueck zu
+ * RETAIN_FELDER in bin/byd.py - dort steht die Begruendung je Feld. Die
+ * Oberflaeche zeigt es in der Themen-Tabelle, weil der Hausstandard das
+ * verlangt: wer ein Thema anlegt, schreibt dazu, ob es retained ist
+ * (Regeln/07). Dass beide Listen dasselbe sagen, prueft
+ * Pruefung-BYD-Autos-0.9.9/retain_themen.py. */
+function by_mqtt_retain()
+{
+    $aus = array('fahrzeuge');
+    foreach (array('LADEZUST', 'FAHRZUST', 'ONLINE', 'ZUENDUNG', 'SCHLOSSVL',
+                   'BATTHEIZ', 'SITZHEIZ', 'LAEDT', 'KABEL', 'ZUHAUSE',
+                   'FEHLFOLGE') as $name) {
+        $aus[] = 'fahrzeugN/' . $name;
+    }
+    return $aus;
+}
+
 /* ==================================================================
  * Befehlstabelle
  *
