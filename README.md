@@ -1,11 +1,12 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.9
+Version 0.9.10
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
 Geschwindigkeit, Fahrzeugzustand, Erreichbarkeit, Zündung, Türschloss der
-Fahrertür, Sitz- und Batterieheizung sowie den Standort. Auf Wunsch lassen sich
+Fahrertür, Sitz- und Batterieheizung, die vier Reifendrücke, den
+Durchschnittsverbrauch laut Fahrzeug sowie den Standort. Auf Wunsch lassen sich
 Verriegelung, Klimatisierung, Sitz- und Batterieheizung schalten, das Fahrzeug
 suchen lassen, blinken und die Fenster schließen. Dazu kommen fünf
 **gerechnete** Felder, eine Liste der erkannten Ladevorgänge, eine
@@ -31,6 +32,69 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.10
+
+Alles in dieser Fassung geht auf **Issue #1** zurück — die erste Rückmeldung
+von einem fremden Fahrzeug, einem **BYD Seal U Design**. Der Melder hat die
+Rohausgabe aus *Test → Rohdaten der Gegenstelle anzeigen* mitgeschickt, und
+damit ließ sich etwas messen statt raten.
+
+### Die Reichweite blieb leer — und das war ein Fehler, keine Lücke
+
+Der Reiter *Test* meldete dort „21 von 23 Feldern aufgelöst — REICHW, TEMPO".
+In denselben Rohdaten stand aber `"enduranceMileage": 232`. Die
+Kandidatenliste für `REICHW` kannte fünf Schreibweisen — **diese nicht**.
+
+`endurance_mileage` und `enduranceMileage` stehen jetzt **vorn** in der Liste,
+`ev_endurance` dahinter. Die bisherigen fünf Namen bleiben stehen: sie sind für
+andere Modelle belegt, und eine Kandidatenliste ist kein Entweder-oder.
+
+**`TEMPO` bleibt offen.** Die Rohausgabe im Issue ist ein Auszug; ein Feld für
+die Geschwindigkeit ist darin nicht zu sehen. Geraten wird hier nichts — wer
+den Namen in seinen Rohdaten findet, möge ihn melden.
+
+### Vier Reifendrücke
+
+`REIFENVL`, `REIFENVR`, `REIFENHL`, `REIFENHR` — vorne links, vorne rechts,
+hinten links, hinten rechts. Die Namen der Gegenstelle stammen aus derselben
+Rohausgabe, `"leftFrontTirepressure": 2.7`.
+
+Die **Einheit ist nicht belegt**. Die Schnittstelle nennt keine; 2,7 ist als
+bar plausibel und als psi unmöglich, deshalb steht „bar" da. Das Feld trägt
+`quelle = doku` — wer es am Bordcomputer gegenhält und bestätigt, darf es auf
+`bestand` setzen, vorher niemand.
+
+### Durchschnittsverbrauch laut Fahrzeug
+
+`VERBRBYD`, in kWh/100 km. Der Rohwert ist **keine Zahl**, sondern eine
+Zeichenkette mit eingebauter Einheit: `"totalEnergy": "17.6kW·h/100km"`. Die
+übliche Umwandlung gibt dafür nichts zurück — `float()` scheitert an der
+Einheit —, das Feld wäre als gewöhnlicher Eintrag dauerhaft leer geblieben.
+Herausgelöst wird jetzt die führende Zahl; steht dort keine, entsteht **kein**
+Wert und keine 0.
+
+`VERBRAUCH` daneben bleibt, was es war: der vom Plugin aus Ladezustand und
+Kilometerstand **gerechnete** Wert der letzten Fahrt. Zwei Zahlen, zwei
+Herkünfte — deshalb zwei Felder und kein Überschreiben. Wer beide in Loxone
+legt, sieht, wie weit die Bordrechnung und die Rechnung aus dem Ladezustand
+auseinanderliegen.
+
+### Ein Feld, das absichtlich fehlt
+
+In derselben Rohausgabe steht `"energyConsumption": "33.3"`. Die Zahl ist
+lesbar, ihre **Bedeutung nicht**: 33,3 könnte eine geladene Energiemenge in
+kWh sein, ein Verbrauch einer einzelnen Fahrt oder etwas Drittes. Ein Feld mit
+geratener Bedeutung ist schlimmer als keins — es sieht in Loxone genauso
+richtig aus wie ein belegtes. Es bleibt draußen, bis jemand sagt, was sein
+Bordcomputer an dieser Stelle anzeigt.
+
+### Was Sie nach dem Update tun sollten
+
+Die fünf neuen Felder hängen **am Ende** der Statuszeile. Das verschiebt keine
+vorhandene Befehlserkennung — aber die Loxone-Vorlage im Reiter *Einbindung in
+Loxone* ist neu zu erzeugen, wenn Sie die neuen Werte im Miniserver haben
+wollen.
 
 ## Neu in 0.9.9
 
