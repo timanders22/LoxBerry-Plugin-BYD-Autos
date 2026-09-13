@@ -1188,6 +1188,33 @@ function by_felder()
                              'zeile' => 0, 'quelle' => 'doku',    'min' => -90,  'max' => 90),
         'LAENGE'    => array('einheit' => '',     'bez' => 'BY_FELD.LAENGE',
                              'zeile' => 0, 'quelle' => 'doku',    'min' => -180, 'max' => 180),
+        /* --------------------------------------------------------------
+         * NEU 13.09.2026 - und deshalb hier ganz unten. Die Reihenfolge
+         * dieser Tabelle ist die Reihenfolge der Statuszeile; angehaengt
+         * verschiebt nichts, eingefuegt verschiebt bei jedem Anwender jede
+         * Befehlserkennung.
+         *
+         * Reifendruecke: die Namen der Gegenstelle stammen aus der
+         * Rohausgabe eines BYD Seal U Design (Issue #1, hannschuach),
+         * "leftFrontTirepressure": 2.7. Die EINHEIT ist nicht belegt -
+         * 2,7 ist als bar plausibel und als psi unmoeglich. 'doku' bleibt
+         * stehen, bis jemand es am Bordcomputer gegenhaelt.
+         *
+         * VERBRBYD ist der Durchschnittsverbrauch, den das FAHRZEUG selbst
+         * ausweist ("totalEnergy": "17.6kW-h/100km"). VERBRAUCH weiter oben
+         * bleibt der vom Plugin GERECHNETE Wert der letzten Fahrt. Zwei
+         * Zahlen, zwei Herkuenfte, zwei Felder.
+         * -------------------------------------------------------------- */
+        'REIFENVL'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENVL',
+                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+        'REIFENVR'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENVR',
+                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+        'REIFENHL'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENHL',
+                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+        'REIFENHR'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENHR',
+                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+        'VERBRBYD'  => array('einheit' => 'kWh/100km', 'bez' => 'BY_FELD.VERBRBYD',
+                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 100),
     );
 }
 

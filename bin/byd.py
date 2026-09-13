@@ -380,7 +380,16 @@ FELDER = {
         "einheit": "km", "quelle": "doku", "zeile": 1,
     },
     "REICHW": {
-        "kandidaten": ("range", "remaining_range", "elec_mileage", "electric_range",
+        # endurance_mileage steht VORN - ERGAENZT 13.09.2026.
+        #
+        # Bis 0.9.9 fehlte dieser Name. Auf einem BYD Seal U Design blieb
+        # REICHW deshalb leer: der Reiter Test meldete "21 von 23 Feldern
+        # aufgeloest - REICHW, TEMPO", waehrend die Rohdaten derselben
+        # Gegenstelle "enduranceMileage": 232 fuehrten. Gemeldet in Issue #1
+        # (hannschuach, 10.09.2026) samt Rohausgabe; die uebrigen vier Namen
+        # bleiben stehen, weil sie fuer andere Modelle belegt sind.
+        "kandidaten": ("endurance_mileage", "enduranceMileage", "ev_endurance",
+                       "range", "remaining_range", "elec_mileage", "electric_range",
                        "range_detail_list.0.range"),
         "einheit": "km", "quelle": "doku", "zeile": 1,
     },
@@ -428,6 +437,33 @@ FELDER = {
         "kandidaten": ("longitude", "lon", "lng"),
         "einheit": "", "quelle": "doku", "zeile": 0,
     },
+    # ---- Reifendruecke, NEU 13.09.2026 -----------------------------------
+    # Die vier Namen stammen aus der Rohausgabe eines BYD Seal U Design
+    # (Issue #1, hannschuach): "leftFrontTirepressure": 2.7. Beachte das
+    # kleine p in "Tirepressure" - hole() vergleicht ohne Unterstriche und
+    # ohne Gross-/Kleinschreibung, deshalb traegt beide Schreibweisen
+    # dieselbe Zeile.
+    #
+    # Die EINHEIT ist NICHT belegt. Die Schnittstelle nennt keine; 2,7 ist
+    # als bar plausibel und als psi unmoeglich, deshalb steht hier "bar".
+    # Wer es an seinem Fahrzeug gegen den Bordcomputer haelt und es
+    # bestaetigt, setzt quelle auf 'bestand' - vorher nicht.
+    "REIFENVL": {
+        "kandidaten": ("left_front_tire_pressure", "leftFrontTirepressure"),
+        "einheit": "bar", "quelle": "doku", "zeile": 1,
+    },
+    "REIFENVR": {
+        "kandidaten": ("right_front_tire_pressure", "rightFrontTirepressure"),
+        "einheit": "bar", "quelle": "doku", "zeile": 1,
+    },
+    "REIFENHL": {
+        "kandidaten": ("left_rear_tire_pressure", "leftRearTirepressure"),
+        "einheit": "bar", "quelle": "doku", "zeile": 1,
+    },
+    "REIFENHR": {
+        "kandidaten": ("right_rear_tire_pressure", "rightRearTirepressure"),
+        "einheit": "bar", "quelle": "doku", "zeile": 1,
+    },
 }
 
 # Werte, die das Plugin selbst bildet - sie stehen nicht in der Antwort und
@@ -447,6 +483,18 @@ ABGELEITET = {
     "VERBRAUCH": {"einheit": "kWh/100km", "quelle": "gerechnet", "zeile": 1},
     "LADEEMPF": {"einheit": "", "quelle": "gerechnet", "zeile": 1},
     "LADEKWH": {"einheit": "kWh", "quelle": "gerechnet", "zeile": 1},
+    # Der Durchschnittsverbrauch, den das FAHRZEUG selbst ausweist - NEU
+    # 13.09.2026. Er steht hier unter ABGELEITET und nicht unter FELDER,
+    # weil der Rohwert KEINE Zahl ist: "totalEnergy": "17.6kW\u00b7h/100km"
+    # (Rohausgabe eines Seal U Design, Issue #1). zahl() gibt dafuer None
+    # zurueck - float("17.6kW\u00b7h/100km") scheitert -, das Feld bliebe
+    # als FELDER-Eintrag also dauerhaft leer. Herausgeloest wird die
+    # fuehrende Zahl in fahrzeug_abbilden().
+    #
+    # VERBRAUCH daneben bleibt, was es war: der vom Plugin aus SOC und
+    # Kilometerstand GERECHNETE Wert der letzten Fahrt. Zwei Zahlen, zwei
+    # Herkuenfte - deshalb zwei Felder und kein Ueberschreiben.
+    "VERBRBYD": {"einheit": "kWh/100km", "quelle": "doku", "zeile": 1},
 }
 
 # Welche Fahrzeugfelder gehen ZURUECKBEHALTEN (retain) hinaus?
@@ -1359,6 +1407,44 @@ def zahl(wert):
     return int(f) if f == int(f) else f
 
 
+def zahl_vorn(wert):
+    """Fuehrende Zahl aus einer Zeichenkette, die ihre Einheit mitfuehrt.
+
+    Gebraucht fuer Rohwerte wie "17.6kW\u00b7h/100km" (Durchschnittsverbrauch,
+    Rohausgabe eines Seal U Design). zahl() gibt dafuer None zurueck, weil
+    float() an der Einheit scheitert.
+
+    BEWUSST OHNE re: dieses Modul importiert re nur LOKAL in einer Funktion
+    (siehe unten, noqa PLC0415). Ein re.match hier haette bei JEDEM Abruf
+    einen NameError geworfen - also von Hand, mit den Mitteln, die hier oben
+    zur Verfuegung stehen.
+
+    Steht vorn keine Zahl, ist das Ergebnis None - nicht 0.
+    """
+    if wert is None or isinstance(wert, bool):
+        return None
+    if isinstance(wert, (int, float)):
+        return zahl(wert)
+    s = str(wert).strip()
+    i = 0
+    if i < len(s) and s[i] in "+-":
+        i += 1
+    punkt = False
+    while i < len(s):
+        c = s[i]
+        if c.isdigit():
+            i += 1
+        elif c in ".," and not punkt:
+            punkt = True
+            i += 1
+        else:
+            break
+    kopf = s[:i]
+    if kopf in ("", "+", "-", ".", ",", "+.", "-.", "+,", "-,"):
+        return None
+    return zahl(kopf)
+
+
 # ---------------------------------------------------------------------------
 # Fehlermeldungen, die sagen, wer geantwortet hat
 # ---------------------------------------------------------------------------
@@ -1589,6 +1675,12 @@ def fahrzeug_abbilden(stamm: dict, echtzeit: dict, gps: dict) -> dict:
         d["RESTMIN"] = None
     else:
         d["RESTMIN"] = int((std or 0) * 60 + (minu or 0))
+
+    # Durchschnittsverbrauch des Fahrzeugs. Der Rohwert traegt seine Einheit
+    # in der Zeichenkette ("17.6kW\u00b7h/100km"), deshalb wird die fuehrende
+    # Zahl herausgeloest. Steht dort keine, entsteht KEIN Wert - nicht 0.
+    roh_verbr, _ = hole(roh, ("total_energy", "totalEnergy"))
+    d["VERBRBYD"] = zahl_vorn(roh_verbr)
 
     # ---- Stammangaben fuer die Oberflaeche (nicht fuer Loxone) ----
     for ziel, kandidaten in (
