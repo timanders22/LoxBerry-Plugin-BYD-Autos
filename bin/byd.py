@@ -362,9 +362,17 @@ def herzschlag(erzwingen: bool = False) -> None:
 #   quelle      'doku'    aus einer offenen Quelle uebernommen, an KEINEM
 #                         Fahrzeug dieses Hauses gemessen
 #               'bestand' im Betrieb gegen eine echte Antwort geprueft
-#               (Stand 20.08.2026: alle 'doku'. Wer ein Feld an seinem
-#               Fahrzeug bestaetigt hat, aendert es hier auf 'bestand' -
-#               der Reiter Test zaehlt beide getrennt.)
+#               (Stand 15.09.2026: die Felder unten, die 'bestand' tragen,
+#               sind in der anonymisierten Rohausgabe eines BYD Seal U
+#               Design vom 14.09.2026 aufgeloest worden - Issue #1,
+#               Melder. Die Messung laeuft ueber hole() selbst und
+#               laesst sich wiederholen:
+#               Pruefung-BYD-Autos-0.9.11/rohdaten_messen.py.
+#               'bestand' sagt: DIESER Schluesselname kam in einer echten
+#               Antwort vor und trug einen Wert. Es sagt NICHT, was die
+#               Zahl bedeutet - wo die Schnittstelle nur eine Kennzahl
+#               liefert, steht das in der Bezeichnung und in der Hilfe.
+#               Der Reiter Test zaehlt beide getrennt.)
 #   zeile       1 = geht in die Statuszeile fuer Loxone, 0 = nur MQTT und JSON
 #
 # Ein Feld, das niemand gemessen hat, darf nicht aussehen wie eines, das
@@ -373,11 +381,11 @@ def herzschlag(erzwingen: bool = False) -> None:
 FELDER = {
     "SOC": {
         "kandidaten": ("elec_percent", "elecPercent", "soc", "battery_percent"),
-        "einheit": "%", "quelle": "doku", "zeile": 1,
+        "einheit": "%", "quelle": "bestand", "zeile": 1,
     },
     "KM": {
         "kandidaten": ("total_mileage", "totalMileage", "mileage", "odometer"),
-        "einheit": "km", "quelle": "doku", "zeile": 1,
+        "einheit": "km", "quelle": "bestand", "zeile": 1,
     },
     "REICHW": {
         # endurance_mileage steht VORN - ERGAENZT 13.09.2026.
@@ -391,51 +399,51 @@ FELDER = {
         "kandidaten": ("endurance_mileage", "enduranceMileage", "ev_endurance",
                        "range", "remaining_range", "elec_mileage", "electric_range",
                        "range_detail_list.0.range"),
-        "einheit": "km", "quelle": "doku", "zeile": 1,
+        "einheit": "km", "quelle": "bestand", "zeile": 1,
     },
     "TEMPO": {
         "kandidaten": ("speed",),
-        "einheit": "km/h", "quelle": "doku", "zeile": 1,
+        "einheit": "km/h", "quelle": "bestand", "zeile": 1,
     },
     "LADEZUST": {
         # Der Rohwert, nicht umgerechnet. Bedeutung siehe LADEN/KABEL unten.
         "kandidaten": ("charge_state", "chargeState"),
-        "einheit": "", "quelle": "doku", "zeile": 1,
+        "einheit": "", "quelle": "bestand", "zeile": 1,
     },
     "FAHRZUST": {
         "kandidaten": ("vehicle_state", "vehicleState"),
-        "einheit": "", "quelle": "doku", "zeile": 1,
+        "einheit": "", "quelle": "bestand", "zeile": 1,
     },
     "ONLINE": {
         "kandidaten": ("online_state", "onlineState"),
-        "einheit": "", "quelle": "doku", "zeile": 1,
+        "einheit": "", "quelle": "bestand", "zeile": 1,
     },
     "ZUENDUNG": {
         "kandidaten": ("engine_status", "engineStatus"),
-        "einheit": "", "quelle": "doku", "zeile": 1,
+        "einheit": "", "quelle": "bestand", "zeile": 1,
     },
     "SCHLOSSVL": {
         # BEZEICHNUNG WOERTLICH: die Schnittstelle fuehrt genau EIN Tuerschloss,
         # das der Fahrertuer (links vorn). Das ist NICHT "Fahrzeug verriegelt" -
         # ein Name, der beides verwischt, ist eine stille Falschaussage.
         "kandidaten": ("left_front_door_lock", "leftFrontDoorLock"),
-        "einheit": "", "quelle": "doku", "zeile": 1,
+        "einheit": "", "quelle": "bestand", "zeile": 1,
     },
     "BATTHEIZ": {
         "kandidaten": ("battery_heat_state", "batteryHeatState"),
-        "einheit": "", "quelle": "doku", "zeile": 1,
+        "einheit": "", "quelle": "bestand", "zeile": 1,
     },
     "SITZHEIZ": {
         "kandidaten": ("main_seat_heat_state", "mainSeatHeatState"),
-        "einheit": "", "quelle": "doku", "zeile": 1,
+        "einheit": "", "quelle": "bestand", "zeile": 1,
     },
     "BREITE": {
         "kandidaten": ("latitude", "lat"),
-        "einheit": "", "quelle": "doku", "zeile": 0,
+        "einheit": "", "quelle": "bestand", "zeile": 0,
     },
     "LAENGE": {
         "kandidaten": ("longitude", "lon", "lng"),
-        "einheit": "", "quelle": "doku", "zeile": 0,
+        "einheit": "", "quelle": "bestand", "zeile": 0,
     },
     # ---- Reifendruecke, NEU 13.09.2026 -----------------------------------
     # Die vier Namen stammen aus der Rohausgabe eines BYD Seal U Design
@@ -450,19 +458,107 @@ FELDER = {
     # bestaetigt, setzt quelle auf 'bestand' - vorher nicht.
     "REIFENVL": {
         "kandidaten": ("left_front_tire_pressure", "leftFrontTirepressure"),
-        "einheit": "bar", "quelle": "doku", "zeile": 1,
+        "einheit": "bar", "quelle": "bestand", "zeile": 1,
     },
     "REIFENVR": {
         "kandidaten": ("right_front_tire_pressure", "rightFrontTirepressure"),
-        "einheit": "bar", "quelle": "doku", "zeile": 1,
+        "einheit": "bar", "quelle": "bestand", "zeile": 1,
     },
     "REIFENHL": {
         "kandidaten": ("left_rear_tire_pressure", "leftRearTirepressure"),
-        "einheit": "bar", "quelle": "doku", "zeile": 1,
+        "einheit": "bar", "quelle": "bestand", "zeile": 1,
     },
     "REIFENHR": {
         "kandidaten": ("right_rear_tire_pressure", "rightRearTirepressure"),
-        "einheit": "bar", "quelle": "doku", "zeile": 1,
+        "einheit": "bar", "quelle": "bestand", "zeile": 1,
+    },
+    # ---- Aus einer echten Antwort, NEU 15.09.2026 ------------------------
+    # Alle Namen hier unten sind in der anonymisierten Rohausgabe eines BYD
+    # Seal U Design vom 14.09.2026 aufgeloest worden (Issue #1, Melder).
+    # Sie tragen deshalb 'bestand' - der Schluessel kam vor und trug einen
+    # Wert.
+    #
+    # Was damit NICHT gesagt ist: was die Zahlen BEDEUTEN. Ein Tuerschloss
+    # meldete 2, ein Fenster 1, die Fahrstufe 3; eine Tabelle dazu nennt die
+    # Schnittstelle nicht. Deshalb heissen sie in der Oberflaeche
+    # ausdruecklich "als Kennzahl der Schnittstelle" - genauso wie das
+    # bestehende SCHLOSSVL. Wer sie in Loxone legt, haelt sie einmal gegen
+    # das Fahrzeug.
+    #
+    # ANGEHAENGT, nicht eingefuegt: die Reihenfolge der Statuszeile ergibt
+    # sich aus by_felder() in by_lib.php, und dort stehen sie ebenfalls am
+    # Ende. Kein bestehendes Feld wandert.
+    # Innenraumtemperatur. Messwert, deshalb nicht retained.
+    "INNENTEMP": {
+        "kandidaten": ("temp_in_car", "tempInCar"),
+        "einheit": "\u00b0C", "quelle": "bestand", "zeile": 1,
+    },
+    # Fahrstufe als Kennzahl - die Schnittstelle nennt keine Tabelle dazu.
+    "FAHRSTUFE": {
+        "kandidaten": ("power_gear", "powerGear"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "SCHLOSSVR": {
+        "kandidaten": ("right_front_door_lock", "rightFrontDoorLock"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "SCHLOSSHL": {
+        "kandidaten": ("left_rear_door_lock", "leftRearDoorLock"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "SCHLOSSHR": {
+        "kandidaten": ("right_rear_door_lock", "rightRearDoorLock"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "TUERVL": {
+        "kandidaten": ("left_front_door", "leftFrontDoor"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "TUERVR": {
+        "kandidaten": ("right_front_door", "rightFrontDoor"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "TUERHL": {
+        "kandidaten": ("left_rear_door", "leftRearDoor"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "TUERHR": {
+        "kandidaten": ("right_rear_door", "rightRearDoor"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "KOFFER": {
+        "kandidaten": ("trunk_lid", "trunkLid"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "FENSTERVL": {
+        "kandidaten": ("left_front_window", "leftFrontWindow"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "FENSTERVR": {
+        "kandidaten": ("right_front_window", "rightFrontWindow"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "FENSTERHL": {
+        "kandidaten": ("left_rear_window", "leftRearWindow"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "FENSTERHR": {
+        "kandidaten": ("right_rear_window", "rightRearWindow"),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    "DACHFENSTER": {
+        "kandidaten": ("skylight",),
+        "einheit": "", "quelle": "bestand", "zeile": 1,
+    },
+    # Die Einheitenkennung der Reifendruecke. Sie steht NUR ueber MQTT und
+    # aktion=json zur Verfuegung (zeile 0): in der Statuszeile waere sie
+    # eine Zahl mehr, die niemand liest. Gemessen 1 an einem Fahrzeug,
+    # dessen App bar anzeigt (Melder, 14.09.2026) - EIN Fahrzeug,
+    # also keine Tabelle. Wer eine andere Kennung meldet, bringt die
+    # Einheit der vier Druckfelder ins Reine.
+    "REIFENEH": {
+        "kandidaten": ("tire_press_unit", "tirePressUnit"),
+        "einheit": "", "quelle": "bestand", "zeile": 0,
     },
 }
 
@@ -494,7 +590,27 @@ ABGELEITET = {
     # VERBRAUCH daneben bleibt, was es war: der vom Plugin aus SOC und
     # Kilometerstand GERECHNETE Wert der letzten Fahrt. Zwei Zahlen, zwei
     # Herkuenfte - deshalb zwei Felder und kein Ueberschreiben.
-    "VERBRBYD": {"einheit": "kWh/100km", "quelle": "doku", "zeile": 1},
+    "VERBRBYD": {"einheit": "kWh/100km", "quelle": "bestand", "zeile": 1},
+    # Der Durchschnittsverbrauch der letzten 50 km - NEU 15.09.2026.
+    #
+    # Die Bedeutung ist BELEGT, nicht geraten: Melder hat den Wert in
+    # der BYD-App nachgesehen ("durchschnittlicher Energieverbrauch der
+    # letzten 50 gefahrenen km", Issue #1, 14.09.2026), und die Antwort
+    # selbst nennt ihn beim Namen - derselbe Zahlenwert steht dort als
+    # "recent_50km_energy": "15.4kW\u00b7h/100km", "recent_50km_energy_ev":
+    # 15.4 mit "recent_50km_energy_ev_unit": "kWh/100km" und schlicht als
+    # "energy_consumption": "15.4".
+    #
+    # Er steht hier unter ABGELEITET und nicht unter FELDER, weil die
+    # Kandidaten sich in der FORM unterscheiden: teils Zahl, teils
+    # Zeichenkette mit Zahl, teils Zeichenkette mit eingebauter Einheit.
+    # zahl_vorn() nimmt alle drei; zahl() nur die ersten beiden.
+    #
+    # VERBRBYD daneben ist der KUMULIERTE Durchschnitt des Fahrzeugs
+    # (17.5 kWh/100 km), VERBRAUCH der vom Plugin aus Ladezustand und
+    # Kilometerstand gerechnete Wert der letzten Fahrt. Drei Zahlen, drei
+    # Herkuenfte - deshalb drei Felder und kein Ueberschreiben.
+    "VERBR50": {"einheit": "kWh/100km", "quelle": "bestand", "zeile": 1},
 }
 
 # Welche Fahrzeugfelder gehen ZURUECKBEHALTEN (retain) hinaus?
@@ -527,6 +643,17 @@ ABGELEITET = {
 RETAIN_FELDER = frozenset({
     "LADEZUST", "FAHRZUST", "ONLINE", "ZUENDUNG", "SCHLOSSVL", "BATTHEIZ",
     "SITZHEIZ", "LAEDT", "KABEL", "ZUHAUSE", "FEHLFOLGE",
+    # NEU 15.09.2026, nach derselben Regel: Zustaende ja, Messwerte nein.
+    # Tueren, Schloesser, Fenster, Heckklappe, Schiebedach und die Fahrstufe
+    # aendern sich selten und sollen einen Neustart des Miniservers
+    # ueberstehen; die Einheitenkennung der Reifendruecke ist eine
+    # Einstellung des Fahrzeugs und aendert sich fast nie.
+    "SCHLOSSVR", "SCHLOSSHL", "SCHLOSSHR",
+    "TUERVL", "TUERVR", "TUERHL", "TUERHR", "KOFFER",
+    "FENSTERVL", "FENSTERVR", "FENSTERHL", "FENSTERHR", "DACHFENSTER",
+    "FAHRSTUFE", "REIFENEH",
+    # NICHT retained: INNENTEMP und VERBR50 - Messwerte mit Zeitbezug. Ein
+    # alter Wert saehe nach einem Ausfall aktuell aus.
 })
 
 # Bedeutung von charge_state.
@@ -1385,6 +1512,32 @@ def hole(roh: dict, kandidaten) -> tuple[object, str]:
     return (None, "")
 
 
+def einmischen(ziel: dict, quelle: dict) -> None:
+    """Legt 'quelle' ueber 'ziel' - aber ein None loescht nie einen Wert.
+
+    GEMESSEN am 14.09.2026 an der anonymisierten Rohausgabe eines BYD Seal U
+    Design (Issue #1, Melder): der Echtzeit-Abschnitt fuehrt
+    "speed": 84, der GPS-Abschnitt fuehrt denselben Schluessel als
+    "speed": null. Ein gewoehnliches dict.update() setzt damit die 84 wieder
+    auf None - und TEMPO blieb bei JEDEM Abruf leer, auch waehrend der Fahrt.
+    Der Reiter Test meldete "21 von 23 Feldern aufgeloest - REICHW, TEMPO";
+    bei TEMPO war es kein fehlendes Feld, sondern ein zerstoerter Wert.
+
+    Genau EIN Schluessel war in dieser Antwort betroffen - nachgezaehlt ueber
+    alle drei Abschnitte (Pruefung-BYD-Autos-0.9.11/rohdaten_messen.py).
+
+    Ein None kostet dabei nichts: hole() ueberspringt einen Kandidaten mit
+    dem Wert None ohnehin und geht zum naechsten. Ein Abschnitt, der einen
+    Schluessel gar nicht fuehrt, und einer, der ihn mit None fuehrt, sind
+    fuer die Feldaufloesung also dasselbe - deshalb darf der frueher
+    gemessene Wert stehen bleiben.
+    """
+    for schluessel, wert in quelle.items():
+        if wert is None and ziel.get(schluessel) is not None:
+            continue
+        ziel[schluessel] = wert
+
+
 def zahl(wert):
     """Zahl aus einem Rohwert, oder None. Keine Umwandlung ins Blaue:
     NaN und Unendlich sind KEINE Messwerte (w != w ist der Test, der immer
@@ -1644,9 +1797,11 @@ def fahrzeug_abbilden(stamm: dict, echtzeit: dict, gps: dict) -> dict:
     bleibt leer; welcher Kandidat getroffen hat, steht in 'getroffen'.
     """
     roh: dict = {}
-    roh.update(stamm)
-    roh.update(echtzeit)   # Echtzeit sticht Stammdaten (totalMileage steht in beiden)
-    roh.update(gps)
+    einmischen(roh, stamm)
+    einmischen(roh, echtzeit)  # Echtzeit sticht Stammdaten (totalMileage steht in beiden)
+    einmischen(roh, gps)       # ... aber ein None loescht nie einen gemessenen Wert:
+                               # der GPS-Abschnitt fuehrt "speed": null (siehe
+                               # einmischen(), gemessen 14.09.2026)
 
     d: dict = {}
     getroffen: dict = {}
@@ -1681,6 +1836,22 @@ def fahrzeug_abbilden(stamm: dict, echtzeit: dict, gps: dict) -> dict:
     # Zahl herausgeloest. Steht dort keine, entsteht KEIN Wert - nicht 0.
     roh_verbr, _ = hole(roh, ("total_energy", "totalEnergy"))
     d["VERBRBYD"] = zahl_vorn(roh_verbr)
+
+    # Der Durchschnitt der letzten 50 km. Dieselbe Vorsicht, und aus
+    # demselben Grund: die Antwort fuehrt denselben Wert unter mehreren
+    # Namen und in drei Formen - 15.4 als Zahl, "15.4" als Zeichenkette und
+    # "15.4kW\u00b7h/100km" mit eingebauter Einheit. Die Reihenfolge der
+    # Kandidaten ist die Rangfolge: erst die Namen, die den Zeitraum selbst
+    # nennen, dann die allgemeineren.
+    roh_50, _ = hole(roh, ("recent_50km_energy_ev", "recent50kmEnergyEv",
+                           "recent_50km_energy", "recent50kmEnergy",
+                           "nearest_energy_consumption_ev",
+                           "nearestEnergyConsumptionEv",
+                           "nearest_energy_consumption",
+                           "nearestEnergyConsumption",
+                           "energy_consumption_ev", "energyConsumptionEv",
+                           "energy_consumption", "energyConsumption"))
+    d["VERBR50"] = zahl_vorn(roh_50)
 
     # ---- Stammangaben fuer die Oberflaeche (nicht fuer Loxone) ----
     for ziel, kandidaten in (

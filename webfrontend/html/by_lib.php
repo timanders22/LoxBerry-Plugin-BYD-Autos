@@ -1118,7 +1118,15 @@ function by_abo_text()
  *   zeile    1 = in der Statuszeile, 0 = nur MQTT und aktion=json
  *   quelle   'doku'    aus einer offenen Quelle, an KEINEM Fahrzeug dieses
  *                      Hauses gemessen
- *            'bestand' im Betrieb gegen eine echte Antwort geprueft
+ *            'bestand' im Betrieb gegen eine echte Antwort geprueft.
+ *                      Stand 15.09.2026: die Felder, die das hier tragen,
+ *                      sind in der anonymisierten Rohausgabe eines BYD
+ *                      Seal U Design vom 14.09.2026 aufgeloest worden
+ *                      (Issue #1, Melder). 'bestand' sagt: dieser
+ *                      Schluessel kam in einer echten Antwort vor und trug
+ *                      einen Wert - NICHT, was die Zahl bedeutet. Wo die
+ *                      Schnittstelle nur eine Kennzahl liefert, sagt das
+ *                      die Bezeichnung.
  *   min/max  Grenzen fuer die Importdatei; null heisst "keine Angabe"
  *
  * NEUE FELDER GEHOEREN ANS ENDE. Sonst verschiebt sich die Reihenfolge in der
@@ -1131,33 +1139,33 @@ function by_felder()
         'OK'        => array('einheit' => '',     'bez' => 'BY_FELD.OK',
                              'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 1),
         'SOC'       => array('einheit' => '%',    'bez' => 'BY_FELD.SOC',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 100),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 100),
         'KM'        => array('einheit' => 'km',   'bez' => 'BY_FELD.KM',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 2000000),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 2000000),
         'REICHW'    => array('einheit' => 'km',   'bez' => 'BY_FELD.REICHW',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 1500),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 1500),
         'LAEDT'     => array('einheit' => '',     'bez' => 'BY_FELD.LAEDT',
                              'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 1),
         'KABEL'     => array('einheit' => '',     'bez' => 'BY_FELD.KABEL',
                              'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 1),
         'LADEZUST'  => array('einheit' => '',     'bez' => 'BY_FELD.LADEZUST',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 255),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 255),
         'RESTMIN'   => array('einheit' => 'min',  'bez' => 'BY_FELD.RESTMIN',
                              'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 6000),
         'TEMPO'     => array('einheit' => 'km/h', 'bez' => 'BY_FELD.TEMPO',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 300),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 300),
         'FAHRZUST'  => array('einheit' => '',     'bez' => 'BY_FELD.FAHRZUST',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 255),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 255),
         'ONLINE'    => array('einheit' => '',     'bez' => 'BY_FELD.ONLINE',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 255),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 255),
         'ZUENDUNG'  => array('einheit' => '',     'bez' => 'BY_FELD.ZUENDUNG',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 255),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 255),
         'SCHLOSSVL' => array('einheit' => '',     'bez' => 'BY_FELD.SCHLOSSVL',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 255),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 255),
         'BATTHEIZ'  => array('einheit' => '',     'bez' => 'BY_FELD.BATTHEIZ',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 255),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 255),
         'SITZHEIZ'  => array('einheit' => '',     'bez' => 'BY_FELD.SITZHEIZ',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0,  'max' => 255),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0,  'max' => 255),
         'ALTER'     => array('einheit' => 's',    'bez' => 'BY_FELD.ALTER',
                              'zeile' => 1, 'quelle' => 'bestand', 'min' => -1, 'max' => 999999),
         /* --------------------------------------------------------------
@@ -1185,9 +1193,9 @@ function by_felder()
         // Statuszeile waere ein Wert mit Punkt zwischen Ganzzahlen - und die
         // Zeile wird von Loxone mit einer Befehlserkennung gelesen.
         'BREITE'    => array('einheit' => '',     'bez' => 'BY_FELD.BREITE',
-                             'zeile' => 0, 'quelle' => 'doku',    'min' => -90,  'max' => 90),
+                             'zeile' => 0, 'quelle' => 'bestand', 'min' => -90,  'max' => 90),
         'LAENGE'    => array('einheit' => '',     'bez' => 'BY_FELD.LAENGE',
-                             'zeile' => 0, 'quelle' => 'doku',    'min' => -180, 'max' => 180),
+                             'zeile' => 0, 'quelle' => 'bestand', 'min' => -180, 'max' => 180),
         /* --------------------------------------------------------------
          * NEU 13.09.2026 - und deshalb hier ganz unten. Die Reihenfolge
          * dieser Tabelle ist die Reihenfolge der Statuszeile; angehaengt
@@ -1206,15 +1214,69 @@ function by_felder()
          * Zahlen, zwei Herkuenfte, zwei Felder.
          * -------------------------------------------------------------- */
         'REIFENVL'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENVL',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
         'REIFENVR'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENVR',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
         'REIFENHL'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENHL',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
         'REIFENHR'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENHR',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
         'VERBRBYD'  => array('einheit' => 'kWh/100km', 'bez' => 'BY_FELD.VERBRBYD',
-                             'zeile' => 1, 'quelle' => 'doku',    'min' => 0, 'max' => 100),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 100),
+        /* --------------------------------------------------------------
+         * NEU 15.09.2026 - und wieder ganz unten, aus demselben Grund wie
+         * der Block darueber: die Reihenfolge dieser Tabelle ist die
+         * Reihenfolge der Statuszeile. Angehaengt verschiebt nichts.
+         *
+         * Jeder dieser Namen ist in einer ECHTEN Antwort aufgeloest worden
+         * (BYD Seal U Design, Issue #1, Melder, Rohausgabe vom
+         * 14.09.2026, anonymisiert). Gemessen wird das mit der Feldtabelle
+         * des Dienstes selbst - Pruefung-BYD-Autos-0.9.11/rohdaten_messen.py.
+         *
+         * INNENTEMP und VERBR50 sind Messwerte. Die uebrigen sind KENNZAHLEN
+         * der Schnittstelle: ein Tuerschloss meldete 2, ein Fenster 1, die
+         * Fahrstufe 3 - eine Tabelle dazu nennt die Gegenstelle nicht, und
+         * eine erfundene waere schlimmer als keine. Die Bezeichnung sagt es
+         * deshalb ausdruecklich, genau wie beim bestehenden SCHLOSSVL.
+         *
+         * REIFENEH traegt 'zeile' => 0: die Einheitenkennung der
+         * Reifendruecke geht nur ueber MQTT und aktion=json hinaus. In der
+         * Statuszeile waere sie eine Zahl mehr, die niemand liest.
+         * -------------------------------------------------------------- */
+        'INNENTEMP'   => array('einheit' => "\xc2\xb0C", 'bez' => 'BY_FELD.INNENTEMP',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => -50, 'max' => 80),
+        'VERBR50'     => array('einheit' => 'kWh/100km', 'bez' => 'BY_FELD.VERBR50',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 100),
+        'FAHRSTUFE'   => array('einheit' => '', 'bez' => 'BY_FELD.FAHRSTUFE',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'SCHLOSSVR'   => array('einheit' => '', 'bez' => 'BY_FELD.SCHLOSSVR',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'SCHLOSSHL'   => array('einheit' => '', 'bez' => 'BY_FELD.SCHLOSSHL',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'SCHLOSSHR'   => array('einheit' => '', 'bez' => 'BY_FELD.SCHLOSSHR',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'TUERVL'      => array('einheit' => '', 'bez' => 'BY_FELD.TUERVL',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'TUERVR'      => array('einheit' => '', 'bez' => 'BY_FELD.TUERVR',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'TUERHL'      => array('einheit' => '', 'bez' => 'BY_FELD.TUERHL',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'TUERHR'      => array('einheit' => '', 'bez' => 'BY_FELD.TUERHR',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'KOFFER'      => array('einheit' => '', 'bez' => 'BY_FELD.KOFFER',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'FENSTERVL'   => array('einheit' => '', 'bez' => 'BY_FELD.FENSTERVL',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'FENSTERVR'   => array('einheit' => '', 'bez' => 'BY_FELD.FENSTERVR',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'FENSTERHL'   => array('einheit' => '', 'bez' => 'BY_FELD.FENSTERHL',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'FENSTERHR'   => array('einheit' => '', 'bez' => 'BY_FELD.FENSTERHR',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'DACHFENSTER' => array('einheit' => '', 'bez' => 'BY_FELD.DACHFENSTER',
+                               'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
+        'REIFENEH'    => array('einheit' => '', 'bez' => 'BY_FELD.REIFENEH',
+                               'zeile' => 0, 'quelle' => 'bestand', 'min' => 0, 'max' => 255),
     );
 }
 
@@ -1317,7 +1379,18 @@ function by_mqtt_retain()
     $aus = array('fahrzeuge');
     foreach (array('LADEZUST', 'FAHRZUST', 'ONLINE', 'ZUENDUNG', 'SCHLOSSVL',
                    'BATTHEIZ', 'SITZHEIZ', 'LAEDT', 'KABEL', 'ZUHAUSE',
-                   'FEHLFOLGE') as $name) {
+                   'FEHLFOLGE',
+                   /* NEU 15.09.2026, nach derselben Regel: Zustaende ja,
+                    * Messwerte nein. Tueren, Schloesser, Fenster,
+                    * Heckklappe, Schiebedach und Fahrstufe aendern sich
+                    * selten und sollen einen Neustart des Miniservers
+                    * ueberstehen; die Einheitenkennung der Reifendruecke
+                    * ist eine Einstellung des Fahrzeugs. NICHT dabei:
+                    * INNENTEMP und VERBR50 - Messwerte mit Zeitbezug. */
+                   'SCHLOSSVR', 'SCHLOSSHL', 'SCHLOSSHR',
+                   'TUERVL', 'TUERVR', 'TUERHL', 'TUERHR', 'KOFFER',
+                   'FENSTERVL', 'FENSTERVR', 'FENSTERHL', 'FENSTERHR',
+                   'DACHFENSTER', 'FAHRSTUFE', 'REIFENEH') as $name) {
         $aus[] = 'fahrzeugN/' . $name;
     }
     return $aus;

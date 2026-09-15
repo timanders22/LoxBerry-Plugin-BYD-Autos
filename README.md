@@ -1,12 +1,14 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.10
+Version 0.9.11
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
-Geschwindigkeit, Fahrzeugzustand, Erreichbarkeit, Zündung, Türschloss der
-Fahrertür, Sitz- und Batterieheizung, die vier Reifendrücke, den
-Durchschnittsverbrauch laut Fahrzeug sowie den Standort. Auf Wunsch lassen sich
+Geschwindigkeit, Fahrzeugzustand, Erreichbarkeit, Zündung, die vier
+Türschlösser, die vier Türen, Heckklappe, die vier Fenster und das
+Schiebedach, Sitz- und Batterieheizung, Fahrstufe, Innenraumtemperatur, die
+vier Reifendrücke, zwei Durchschnittsverbräuche des Fahrzeugs sowie den
+Standort. Auf Wunsch lassen sich
 Verriegelung, Klimatisierung, Sitz- und Batterieheizung schalten, das Fahrzeug
 suchen lassen, blinken und die Fenster schließen. Dazu kommen fünf
 **gerechnete** Felder, eine Liste der erkannten Ladevorgänge, eine
@@ -17,8 +19,13 @@ schreibenden Befehl.
 >
 > **BYD veröffentlicht keine Beschreibung seiner Schnittstelle.** Das Plugin
 > wurde ohne BYD-Konto und ohne Fahrzeug gebaut. Was es über Feldnamen und
-> Befehle weiß, stammt aus zwei offenen Quellen (unten benannt) und ist an
-> **keinem** Fahrzeug gemessen.
+> Befehle weiß, stammt aus zwei offenen Quellen (unten benannt).
+>
+> Seit 0.9.11 gilt das **für die Befehle allein**. Die **Feldnamen** sind
+> gegen die vollständige Rohausgabe eines BYD Seal U Design gehalten, die ein
+> Anwender beigesteuert hat (Issue #1, 14.09.2026): 33 von 33 Feldern der
+> Tabelle haben dort einen Schlüssel getroffen. Das belegt die **Namen** — was
+> die Kennzahlen dahinter *bedeuten*, belegt es nicht.
 >
 > Geprüft ist alles, was ohne Konto und ohne Auto prüfbar ist: PHP-Syntax gegen
 > beide Fassungen, die Oberfläche unter 7.4 und 8.4 gerendert, der
@@ -32,6 +39,117 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.11
+
+Wieder **Issue #1**, und wieder derselbe Melder: diesmal hat er die
+**vollständige** Rohausgabe seines BYD Seal U Design beigesteuert, alle drei
+Abschnitte. Damit ließ sich das nachrechnen, was 0.9.10 noch offenlassen
+musste — und dabei kam ein Fehler heraus, den man einem Auszug nicht ansieht.
+
+### `TEMPO` war kein fehlendes Feld, sondern ein zerstörter Wert
+
+Die Rohausgabe führt die Geschwindigkeit an zwei Stellen:
+
+```
+Abschnitt echtzeit:   "speed": 84
+Abschnitt gps:        "speed": null
+```
+
+Das Plugin legt die drei Abschnitte übereinander, und zwar in dieser
+Reihenfolge — Stammdaten, Echtzeit, GPS. Ein gewöhnliches `dict.update()`
+setzt damit die **84 wieder auf `null`**. `TEMPO` konnte deshalb nie einen
+Wert tragen, auch nicht während der Fahrt: nicht weil der Name fehlte,
+sondern weil der gemessene Wert eine Zeile später gelöscht wurde.
+
+Seit 0.9.11 löscht ein `null` keinen Wert mehr, der schon dasteht. Das kostet
+nichts: die Feldsuche überspringt einen Kandidaten mit dem Wert `null`
+ohnehin. Nachgezählt über alle drei Abschnitte war **genau ein** Schlüssel
+betroffen — `speed`.
+
+Gemessen mit `Pruefung-BYD-Autos-0.9.11/rohdaten_messen.py`, und zwar in
+beide Richtungen: mit der alten Mischung *muss* `TEMPO` leer bleiben, mit der
+neuen *muss* dort 84 stehen. Sonst misst das Werkzeug seinen eigenen Wunsch.
+
+### Der Verbrauch der letzten 50 km — das Feld, das 0.9.10 draußen ließ
+
+0.9.10 ließ `"energyConsumption": "33.3"` absichtlich weg: die Zahl war
+lesbar, ihre Bedeutung nicht. Jetzt ist sie belegt, und gleich doppelt. Der
+Melder hat sie in der BYD-App nachgesehen — *durchschnittlicher
+Energieverbrauch der letzten 50 gefahrenen Kilometer* —, und die vollständige
+Rohausgabe nennt denselben Zahlenwert beim Namen:
+
+```
+"energy_consumption":      "15.4"
+"recent_50km_energy":      "15.4kW·h/100km"
+"recent_50km_energy_ev":   15.4      "recent_50km_energy_ev_unit": "kWh/100km"
+```
+
+Das Feld heißt **`VERBR50`**, Einheit kWh/100 km. Damit stehen jetzt drei
+Verbrauchszahlen nebeneinander, und das ist Absicht:
+
+| Feld | Was es ist |
+|---|---|
+| `VERBR50` | Durchschnitt der **letzten 50 km**, vom Fahrzeug gerechnet |
+| `VERBRBYD` | Durchschnitt über die **ganze Laufleistung**, vom Fahrzeug gerechnet |
+| `VERBRAUCH` | Verbrauch der **letzten Fahrt**, vom **Plugin** aus Ladezustand und Kilometerstand gerechnet |
+
+### Die Reifendrücke stehen in bar — bestätigt
+
+Der Melder hat die Werte gegen die BYD-App gehalten: dort stehen sie in
+**bar**. Die vier Felder tragen deshalb nicht mehr `doku`, sondern `bestand`.
+
+Dazu kommt ein Fund aus der Rohausgabe: die Schnittstelle führt die Einheit
+selbst, als `"tire_press_unit": 1`. Bei diesem Fahrzeug — dessen App bar
+anzeigt — steht dort **1**. Das ist **ein** Fahrzeug und noch keine Tabelle,
+deshalb wird nichts umgerechnet; die Kennung geht als `REIFENEH` über MQTT
+hinaus, damit der nächste Melder sie mitschicken kann. In der Statuszeile
+steht sie nicht.
+
+### Zwölf weitere Werte, die in der Antwort standen und niemand las
+
+Alle aus derselben Rohausgabe, alle mit einem Schlüssel getroffen:
+
+| Feld | Quelle | Bei diesem Fahrzeug |
+|---|---|---|
+| `INNENTEMP` | `temp_in_car` | 23 °C |
+| `FAHRSTUFE` | `power_gear` | 3 |
+| `SCHLOSSVR`, `SCHLOSSHL`, `SCHLOSSHR` | `right_front_door_lock` usw. | je 2 |
+| `TUERVL`, `TUERVR`, `TUERHL`, `TUERHR` | `left_front_door` usw. | je 0 |
+| `KOFFER` | `trunk_lid` | 0 |
+| `FENSTERVL`, `FENSTERVR`, `FENSTERHL`, `FENSTERHR` | `left_front_window` usw. | je 1 |
+| `DACHFENSTER` | `skylight` | 1 |
+
+Bis 0.9.10 kannte das Plugin **ein** Türschloss, das der Fahrertür. Jetzt
+kennt es alle vier.
+
+Was diese Zahlen **bedeuten**, ist damit nicht gesagt: ein Türschloss meldete
+2, ein Fenster 1, die Fahrstufe 3 — eine Tabelle dazu nennt die Gegenstelle
+nicht. Die Felder heißen in der Oberfläche deshalb ausdrücklich „als Kennzahl
+der Schnittstelle", genau wie das bestehende `SCHLOSSVL`. Wer sie in Loxone
+legt, hält sie einmal gegen sein Fahrzeug.
+
+**Zurückbehalten** gehen die neuen Zustände (Türen, Schlösser, Fenster,
+Heckklappe, Schiebedach, Fahrstufe, Einheitenkennung); `INNENTEMP` und
+`VERBR50` nicht — Messwerte mit Zeitbezug.
+
+### Was die Spalte *Herkunft* jetzt zeigt
+
+Vor 0.9.10 trug jedes Feld vom Fahrzeug `doku`. Jetzt sind es von den 45
+Feldern der Tabelle **37 mit `bestand`**, weil ihr Schlüsselname in einer
+echten Antwort vorkam und einen Wert trug — gezählt, nicht geschätzt.
+
+`doku` bleiben genau drei, und mit Grund: `LAEDT`, `KABEL` und `RESTMIN`
+entstehen nicht aus einem Schlüssel, sondern aus der **Deutung** von
+Kennzahlen (welcher Ladezustand heißt „lädt"?) beziehungsweise aus Feldern,
+die bei diesem Fahrzeug leer standen, weil es nicht lud. Die übrigen fünf
+rechnet das Plugin selbst und heißen deshalb `gerechnet`.
+
+### Was Sie nach dem Update tun sollten
+
+Die neuen Felder hängen **am Ende** der Statuszeile — keine vorhandene
+Befehlserkennung verschiebt sich. Wer die neuen Werte im Miniserver haben
+will, erzeugt die Loxone-Vorlage im Reiter *Einbindung in Loxone* **neu**.
 
 ## Neu in 0.9.10
 
@@ -54,6 +172,10 @@ andere Modelle belegt, und eine Kandidatenliste ist kein Entweder-oder.
 die Geschwindigkeit ist darin nicht zu sehen. Geraten wird hier nichts — wer
 den Namen in seinen Rohdaten findet, möge ihn melden.
 
+> Nachtrag 0.9.11: der Name stimmte die ganze Zeit. `speed` stand in der
+> vollständigen Rohausgabe — und wurde vom GPS-Abschnitt wieder gelöscht.
+> Siehe oben, *Neu in 0.9.11*.
+
 ### Vier Reifendrücke
 
 `REIFENVL`, `REIFENVR`, `REIFENHL`, `REIFENHR` — vorne links, vorne rechts,
@@ -64,6 +186,9 @@ Die **Einheit ist nicht belegt**. Die Schnittstelle nennt keine; 2,7 ist als
 bar plausibel und als psi unmöglich, deshalb steht „bar" da. Das Feld trägt
 `quelle = doku` — wer es am Bordcomputer gegenhält und bestätigt, darf es auf
 `bestand` setzen, vorher niemand.
+
+> Nachtrag 0.9.11: genau das ist geschehen. Die BYD-App zeigt bar; die vier
+> Felder tragen jetzt `bestand`.
 
 ### Durchschnittsverbrauch laut Fahrzeug
 
@@ -88,6 +213,9 @@ kWh sein, ein Verbrauch einer einzelnen Fahrt oder etwas Drittes. Ein Feld mit
 geratener Bedeutung ist schlimmer als keins — es sieht in Loxone genauso
 richtig aus wie ein belegtes. Es bleibt draußen, bis jemand sagt, was sein
 Bordcomputer an dieser Stelle anzeigt.
+
+> Nachtrag 0.9.11: jemand hat es gesagt. Es ist der Durchschnitt der letzten
+> 50 km und heißt jetzt `VERBR50`.
 
 ### Was Sie nach dem Update tun sollten
 
@@ -465,10 +593,12 @@ Diese Punkte sind **nicht** geprüft und lassen sich ohne Konto und Fahrzeug
 auch nicht prüfen. Sie stehen hier als Auftrag, nicht als Ergebnis:
 
 1. Ob die **Anmeldung** an der BYD-Schnittstelle gelingt.
-2. Ob die **Feldnamen** dieser Feldtabelle bei einem echten Fahrzeug zutreffen.
-   Der Knopf *Feldzuordnung vorschlagen* beantwortet das in einem Aufruf; was
-   dabei herauskommt, gehört in die Kandidatenlisten in `bin/byd.py` und die
-   Herkunft des Feldes von `doku` auf `bestand` gesetzt.
+2. Ob die **Feldnamen** dieser Feldtabelle bei **weiteren Modellen**
+   zutreffen. An einem BYD Seal U Design sind sie gemessen (Issue #1,
+   14.09.2026, alle 33 getroffen) — an einem Atto 3, Dolphin, Han oder Tang
+   nicht. Der Knopf *Feldzuordnung vorschlagen* beantwortet das in einem
+   Aufruf; was dabei herauskommt, gehört in die Kandidatenlisten in
+   `bin/byd.py`.
 3. Mit welchen **Parametern** die Befehlsmethoden aufzurufen sind. Dass es
    sie in pybyd 0.0.73 gibt, ist am Gerät gemessen (11.09.2026: alle zehn
    vorhanden) — ob BYD sie so annimmt, nicht.
@@ -479,8 +609,11 @@ auch nicht prüfen. Sie stehen hier als Auftrag, nicht als Ergebnis:
    ein Name, der Fahrertür und Fahrzeug verwischt, wäre eine stille
    Falschaussage.
 6. Was die Kennzahlen von `vehicle_state`, `online_state`, `engine_status`,
-   `battery_heat_state` und `main_seat_heat_state` im Einzelnen bedeuten. Sie
-   gehen als **Rohwert** nach Loxone; erfunden wird keine Umrechnung.
+   `battery_heat_state`, `main_seat_heat_state`, den Tür-, Schloss- und
+   Fensterfeldern, `power_gear` und `tire_press_unit` im Einzelnen bedeuten.
+   Sie gehen als **Rohwert** nach Loxone; erfunden wird keine Umrechnung.
+   Gemessen ist nur, welche Zahl an einem Fahrzeug dastand — nicht, wofür sie
+   steht.
 7. Ob die **Vorklimatisierung** am Fahrzeug ankommt. Gemessen ist, welche
    Themen der Abfahrtsassistent führt (`ABFAHRT_IN` und `OK` unter seinem
    Präfix) und dass der Horcher sie am echten Broker empfängt (11.09.2026) —
