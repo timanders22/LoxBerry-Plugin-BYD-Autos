@@ -1122,7 +1122,7 @@ function by_abo_text()
  *                      Stand 15.09.2026: die Felder, die das hier tragen,
  *                      sind in der anonymisierten Rohausgabe eines BYD
  *                      Seal U Design vom 14.09.2026 aufgeloest worden
- *                      (Issue #1, Melder). 'bestand' sagt: dieser
+ *                      (Issue #1). 'bestand' sagt: dieser
  *                      Schluessel kam in einer echten Antwort vor und trug
  *                      einen Wert - NICHT, was die Zahl bedeutet. Wo die
  *                      Schnittstelle nur eine Kennzahl liefert, sagt das
@@ -1203,7 +1203,7 @@ function by_felder()
          * Befehlserkennung.
          *
          * Reifendruecke: die Namen der Gegenstelle stammen aus der
-         * Rohausgabe eines BYD Seal U Design (Issue #1, Melder),
+         * Rohausgabe eines BYD Seal U Design (Issue #1),
          * "leftFrontTirepressure": 2.7. Die EINHEIT ist nicht belegt -
          * 2,7 ist als bar plausibel und als psi unmoeglich. 'doku' bleibt
          * stehen, bis jemand es am Bordcomputer gegenhaelt.
@@ -1229,7 +1229,7 @@ function by_felder()
          * Reihenfolge der Statuszeile. Angehaengt verschiebt nichts.
          *
          * Jeder dieser Namen ist in einer ECHTEN Antwort aufgeloest worden
-         * (BYD Seal U Design, Issue #1, Melder, Rohausgabe vom
+         * (BYD Seal U Design, Issue #1, Rohausgabe vom
          * 14.09.2026, anonymisiert). Gemessen wird das mit der Feldtabelle
          * des Dienstes selbst - Pruefung-BYD-Autos-0.9.11/rohdaten_messen.py.
          *

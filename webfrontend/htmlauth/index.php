@@ -996,11 +996,11 @@ if ($by_rahmen) {
 </div>
 <div class="sm-feld">
   <label for="heim_breite"><?= by_e(by_t('EINST.L_HEIM_BREITE')) ?></label>
-  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= by_e($by_cfg['heim_breite']) ?>" placeholder="48.137">
+  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= by_e($by_cfg['heim_breite']) ?>" placeholder="51.318">
 </div>
 <div class="sm-feld">
   <label for="heim_laenge"><?= by_e(by_t('EINST.L_HEIM_LAENGE')) ?></label>
-  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= by_e($by_cfg['heim_laenge']) ?>" placeholder="11.575">
+  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= by_e($by_cfg['heim_laenge']) ?>" placeholder="9.490">
   <div class="sm-hilfe"><?= by_t('EINST.H_HEIM') ?></div>
 </div>
 <div class="sm-feld">

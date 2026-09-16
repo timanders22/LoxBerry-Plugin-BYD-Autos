@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.11
+Version 0.9.12
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,22 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.12
+
+### Der Melder wird nicht mehr namentlich genannt
+
+Die Kommentare in `bin/byd.py` und `webfrontend/html/by_lib.php` nannten an
+zehn Stellen den GitHub-Namen des Anwenders, der die Rohausgaben zu 0.9.10 und
+0.9.11 beigesteuert hat. Sie verweisen jetzt nur noch auf **Issue #1**.
+
+Das ist keine Änderung am Verhalten: betroffen sind ausschließlich
+Kommentarzeilen, keine Zeile Code, keine Feldtabelle, keine Sprachdatei. Die
+Herkunftsangabe bleibt nachvollziehbar, das Issue steht öffentlich im selben
+Repositorium.
+
+Die veröffentlichten Fassungen **0.9.10 und 0.9.11 bleiben unverändert** — ein
+Tag, den fremde Anlagen schon geholt haben können, wird nicht bewegt.
 
 ## Neu in 0.9.11
 

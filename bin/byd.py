@@ -364,8 +364,8 @@ def herzschlag(erzwingen: bool = False) -> None:
 #               'bestand' im Betrieb gegen eine echte Antwort geprueft
 #               (Stand 15.09.2026: die Felder unten, die 'bestand' tragen,
 #               sind in der anonymisierten Rohausgabe eines BYD Seal U
-#               Design vom 14.09.2026 aufgeloest worden - Issue #1,
-#               Melder. Die Messung laeuft ueber hole() selbst und
+#               Design vom 14.09.2026 aufgeloest worden (Issue #1).
+#               Die Messung laeuft ueber hole() selbst und
 #               laesst sich wiederholen:
 #               Pruefung-BYD-Autos-0.9.11/rohdaten_messen.py.
 #               'bestand' sagt: DIESER Schluesselname kam in einer echten
@@ -394,7 +394,7 @@ FELDER = {
         # REICHW deshalb leer: der Reiter Test meldete "21 von 23 Feldern
         # aufgeloest - REICHW, TEMPO", waehrend die Rohdaten derselben
         # Gegenstelle "enduranceMileage": 232 fuehrten. Gemeldet in Issue #1
-        # (Melder, 10.09.2026) samt Rohausgabe; die uebrigen vier Namen
+        # (10.09.2026) samt Rohausgabe; die uebrigen vier Namen
         # bleiben stehen, weil sie fuer andere Modelle belegt sind.
         "kandidaten": ("endurance_mileage", "enduranceMileage", "ev_endurance",
                        "range", "remaining_range", "elec_mileage", "electric_range",
@@ -447,7 +447,7 @@ FELDER = {
     },
     # ---- Reifendruecke, NEU 13.09.2026 -----------------------------------
     # Die vier Namen stammen aus der Rohausgabe eines BYD Seal U Design
-    # (Issue #1, Melder): "leftFrontTirepressure": 2.7. Beachte das
+    # (Issue #1): "leftFrontTirepressure": 2.7. Beachte das
     # kleine p in "Tirepressure" - hole() vergleicht ohne Unterstriche und
     # ohne Gross-/Kleinschreibung, deshalb traegt beide Schreibweisen
     # dieselbe Zeile.
@@ -474,7 +474,7 @@ FELDER = {
     },
     # ---- Aus einer echten Antwort, NEU 15.09.2026 ------------------------
     # Alle Namen hier unten sind in der anonymisierten Rohausgabe eines BYD
-    # Seal U Design vom 14.09.2026 aufgeloest worden (Issue #1, Melder).
+    # Seal U Design vom 14.09.2026 aufgeloest worden (Issue #1).
     # Sie tragen deshalb 'bestand' - der Schluessel kam vor und trug einen
     # Wert.
     #
@@ -553,7 +553,7 @@ FELDER = {
     # Die Einheitenkennung der Reifendruecke. Sie steht NUR ueber MQTT und
     # aktion=json zur Verfuegung (zeile 0): in der Statuszeile waere sie
     # eine Zahl mehr, die niemand liest. Gemessen 1 an einem Fahrzeug,
-    # dessen App bar anzeigt (Melder, 14.09.2026) - EIN Fahrzeug,
+    # dessen App bar anzeigt (Issue #1, 14.09.2026) - EIN Fahrzeug,
     # also keine Tabelle. Wer eine andere Kennung meldet, bringt die
     # Einheit der vier Druckfelder ins Reine.
     "REIFENEH": {
@@ -593,7 +593,7 @@ ABGELEITET = {
     "VERBRBYD": {"einheit": "kWh/100km", "quelle": "bestand", "zeile": 1},
     # Der Durchschnittsverbrauch der letzten 50 km - NEU 15.09.2026.
     #
-    # Die Bedeutung ist BELEGT, nicht geraten: Melder hat den Wert in
+    # Die Bedeutung ist BELEGT, nicht geraten: der Melder hat den Wert in
     # der BYD-App nachgesehen ("durchschnittlicher Energieverbrauch der
     # letzten 50 gefahrenen km", Issue #1, 14.09.2026), und die Antwort
     # selbst nennt ihn beim Namen - derselbe Zahlenwert steht dort als
@@ -1516,7 +1516,7 @@ def einmischen(ziel: dict, quelle: dict) -> None:
     """Legt 'quelle' ueber 'ziel' - aber ein None loescht nie einen Wert.
 
     GEMESSEN am 14.09.2026 an der anonymisierten Rohausgabe eines BYD Seal U
-    Design (Issue #1, Melder): der Echtzeit-Abschnitt fuehrt
+    Design (Issue #1): der Echtzeit-Abschnitt fuehrt
     "speed": 84, der GPS-Abschnitt fuehrt denselben Schluessel als
     "speed": null. Ein gewoehnliches dict.update() setzt damit die 84 wieder
     auf None - und TEMPO blieb bei JEDEM Abruf leer, auch waehrend der Fahrt.
