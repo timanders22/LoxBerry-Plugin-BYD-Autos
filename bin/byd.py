@@ -970,9 +970,14 @@ def mqtt_senden(paare: dict, praefix: str,
                 # Gateway V1 kennt am UDP-Eingang "publish" und "retain"
                 # (mqttgateway.pl, am Geraet nachgelesen, Regeln/07). Welche
                 # Themen retained gehen, entscheidet der Aufrufer.
-                befehl = "retain" if k in retain else "publish"
-                s.sendto(("%s %s/%s %s" % (befehl, praefix, k,
-                                           mqtt_wert_saeubern(v))
+                # Ein LEERER Wert geht nie retained hinaus: eine leere Nutzlast
+                # loescht ein zurueckbehaltenes Thema im Broker (Regeln/07,
+                # am Broker belegt 14.09.2026). Ob die BYD-Schnittstelle fuer
+                # ein Retain-Feld je "" liefert, ist nicht gemessen - bis
+                # 0.9.12 fing nur None ab.
+                text = mqtt_wert_saeubern(v)
+                befehl = "retain" if (k in retain and text != "") else "publish"
+                s.sendto(("%s %s/%s %s" % (befehl, praefix, k, text)
                           ).encode("utf-8"), ("127.0.0.1", z["udpport"]))
             except OSError:
                 schlecht += 1

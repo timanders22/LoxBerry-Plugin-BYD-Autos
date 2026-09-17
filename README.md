@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.12
+Version 0.9.13
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -53,8 +53,14 @@ Kommentarzeilen, keine Zeile Code, keine Feldtabelle, keine Sprachdatei. Die
 Herkunftsangabe bleibt nachvollziehbar, das Issue steht öffentlich im selben
 Repositorium.
 
-Die veröffentlichten Fassungen **0.9.10 und 0.9.11 bleiben unverändert** — ein
-Tag, den fremde Anlagen schon geholt haben können, wird nicht bewegt.
+~~Die veröffentlichten Fassungen 0.9.10 und 0.9.11 bleiben unverändert.~~
+**Berichtigt am 16.09.2026:** Auf Wunsch des Hausherrn ist der Name auch aus
+der Geschichte des Repositoriums entfernt. Die Tags `v0.9.10` und `v0.9.11`
+tragen ihn nicht mehr; geändert wurden nur die betroffenen Kommentarzeilen,
+jeder andere Inhalt ist gleich. Weil der erste Commit eine Signatur trug, die
+beim Umschreiben nicht erhalten bleibt, haben **alle** Commits und Tags neue
+Prüfsummen. Tag-Namen und Download-Adressen bleiben gleich; eine Anlage, die
+schon installiert hat, ist nicht betroffen.
 
 ## Neu in 0.9.11
 
