@@ -68,5 +68,32 @@ if [ -f "$BASE/config/plugins/$PFOLDER.lief_vorher" ]; then
     echo "<INFO> Sollmerker gesetzt ist - bitte im Reiter Einstellungen starten."
 fi
 
+# ---------- Die Marke der laufenden Aktualisierung entfernen ----------
+# Dieses Skript ist das LETZTE, das LoxBerry in dieser Linie ruft: die
+# Reihenfolge ist preroot, preinstall, preupgrade, postinstall, postupgrade,
+# postroot - und ein postroot.sh gibt es hier nicht (gezaehlt am Ordner,
+# 18.09.2026).
+#
+# Entfernt wird NACH dem Wiederanlauf, den postinstall.sh erledigt, und nicht
+# davor: zwischen dem Entfernen und dem Augenblick, in dem der neue Dienst
+# dasteht, saehe ein Waechterlauf weder die Marke noch einen laufenden Dienst
+# und startete einen eigenen (an Chromecast4lox 1.3.10 in WSL gemessen,
+# 17.09.2026). Der Wiederanlauf selbst kommt mit BY_START_TROTZ_MARKE=1 an
+# der Marke vorbei.
+#
+# Entfernt wird IMMER - auch wenn der Wiederanlauf unterblieb, weil der
+# Dienst vorher schon aus war. Sonst bliebe die Plugin-Seite gesperrt, bis
+# die Frist von 3600 s abgelaufen ist.
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+if [ -f "$MARKE" ]; then
+    if rm -f "$MARKE" 2>/dev/null && [ ! -f "$MARKE" ]; then
+        echo "<OK> Die Sperre fuer Plugin-Seite und Dienststart ist aufgehoben."
+    else
+        echo "<WARNING> Die Marke $MARKE liess sich nicht entfernen."
+        echo "<WARNING> Plugin-Seite und Dienststart bleiben gesperrt, bis sie eine"
+        echo "<WARNING> Stunde alt ist. Sie darf von Hand geloescht werden."
+    fi
+fi
+
 echo "<OK> postupgrade abgeschlossen."
 exit 0

@@ -107,6 +107,15 @@ ist_unser_dienst() {
     ARGS=$(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null)
     [ "$(echo "$ARGS" | sed -n '2p')" = "$PBIN/byd.py" ] || return 1
     echo "$ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
+    # GENAU zwei Argumente. Ein DRITTES macht aus dem Treffer einen
+    # Einmallauf, keinen Dienst - "<venv>/bin/python3 <pfad>/byd.py
+    # --selbsttest" ist der Selbsttest des Plugins und laeuft Sekunden.
+    # Ohne diese Zeile beendete die Deinstallation ihn mit (in WSL gemessen
+    # am 18.09.2026, Pruefung-BYD-Autos-0.9.15, Fall D1: der Koeder
+    # "--selbsttest" war nach uninstall tot, der Koeder "tail -f <pfad>"
+    # ueberlebte). Der Dienst selbst startet immer mit genau zwei Argumenten
+    # (bin/dienst.sh, starten()).
+    [ -z "$(echo "$ARGS" | sed -n '3p')" ] || return 1
     return 0
 }
 
@@ -174,6 +183,20 @@ for f in byd.json zugang.json; do
     fi
 done
 rm -f "$PCONFIG/$PFOLDER.lief_vorher" 2>/dev/null
+
+# Die Marke der laufenden Aktualisierung. Sie liegt neben dem DATENordner,
+# nicht neben dem Konfigordner - LoxBerry entfernt beim Deinstallieren das
+# Verzeichnis data/plugins/<ordner>/, die Datei daneben bliebe liegen.
+#
+# Warum sie weg muss: solange sie gilt, sperrt die Plugin-Seite sich selbst
+# und dienst.sh startet nicht. Bricht eine Deinstallation mitten in einer
+# Aktualisierung ab oder wird das Plugin gleich darauf neu installiert, waere
+# die neue Installation bis zu einer Stunde lahmgelegt, ohne dass irgendwo
+# stuende, warum.
+if [ -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" ]; then
+    rm -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft" 2>/dev/null \
+        && echo "<OK> Marke der laufenden Aktualisierung entfernt."
+fi
 
 # Die Ladehistorie, die preupgrade.sh ueber ein Update traegt. Sie enthaelt
 # kein Geheimnis, wird also nicht ueberschrieben - aber sie muss weg: eine

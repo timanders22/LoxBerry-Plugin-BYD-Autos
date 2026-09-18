@@ -821,6 +821,38 @@ function by_pruefungen()
         !empty($cfg['steuerung_ein']) ? by_t('TEST.A_STEUERUNG_EIN')
                                       : by_t('TEST.A_STEUERUNG_AUS'));
 
+    /* ---- 24. Die Marke der laufenden Aktualisierung ----
+     * Zu jeder Regel gehoert das Werkzeug, das sie findet (CLAUDE.md,
+     * Abschnitt 6). Diese Zeile ist es fuer die Marke.
+     *
+     * Gilt die Marke, ist diese Seite gar nicht zu sehen - index.php zeigt
+     * dann nur den Hinweis. Die Zeile misst deshalb vor allem den anderen
+     * Fall: eine Marke, die LIEGENGEBLIEBEN ist. Sie entsteht, wenn eine
+     * Installation abbricht, bevor postupgrade.sh sie entfernt, und sie
+     * sperrt dann bis zu einer Stunde lang Seite und Dienststart. Ohne diese
+     * Zeile waere die Datei nirgends sichtbar - sie liegt neben dem
+     * Datenordner und traegt nur eine Zahl. */
+    $by_marke = by_upgrade_marke();
+    if (!is_file($by_marke)) {
+        $zeilen[] = by_pruefzeile(1, by_t('TEST.F_MARKE'), by_t('TEST.A_MARKE_KEINE'));
+    } else {
+        $by_roh = trim((string) @file_get_contents($by_marke));
+        if (!preg_match('/^[0-9]{1,12}$/', $by_roh)) {
+            $zeilen[] = by_pruefzeile(0, by_t('TEST.F_MARKE'),
+                sprintf(by_t('TEST.A_MARKE_UNLESBAR'), by_e($by_marke)));
+        } else {
+            $by_alter = time() - (int) $by_roh;
+            if (by_upgrade_laeuft()) {
+                $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_MARKE'),
+                    sprintf(by_t('TEST.A_MARKE_GILT'), (int) $by_alter));
+            } else {
+                $zeilen[] = by_pruefzeile(0, by_t('TEST.F_MARKE'),
+                    sprintf(by_t('TEST.A_MARKE_ALT'), (int) round($by_alter / 60),
+                        by_e($by_marke)));
+            }
+        }
+    }
+
     return $zeilen;
 }
 

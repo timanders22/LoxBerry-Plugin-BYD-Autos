@@ -58,6 +58,43 @@ PDATA="$BASE/data/plugins/$PFOLDER"
 PBIN="$BASE/bin/plugins/$PFOLDER"
 CFGDIR="$BASE/config/plugins/$PFOLDER"
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+
+# ---------- 0. Marke "Aktualisierung laeuft" ----------
+# Als Erstes, vor dem Anhalten und vor jeder Sicherung.
+#
+# Zwischen der neuen Cron-Datei und postinstall.sh liegt fast eine Minute
+# (am Geraet an der Einspeisebremse gemessen, 08.09.2026, Regeln/06). In
+# dieser Zeit sind config/plugins/<ordner>/ und data/plugins/<ordner>/ weg.
+#
+# Gemessen fuer DIESE Linie (WSL, 18.09.2026, Pruefung-BYD-Autos-0.9.15,
+# messe_luecke.sh): kein Startweg laeuft in der Luecke an - der Waechter aus
+# dem Cron findet seinen Merker soll_laufen nicht (Fall A1, 0 Prozesse nach
+# sechs Laeufen), und 'dienst.sh start' scheitert an der fehlenden
+# zugang.json (Fall A2). Die OBERFLAECHE dagegen richtet Schaden an: ein
+# Druck auf "Speichern" im Reiter Einstellungen schrieb in der Luecke
+#   {"benutzer":"...","passwort":"","pin":"","land":"DE"}
+# nach zugang.json UND zog das in die Zweitschrift nach (Fall A5). Danach
+# holte postinstall.sh genau diesen leeren Stand zurueck - Passwort und
+# Steuer-PIN des BYD-Kontos waren endgueltig fort (Fall A9).
+#
+# Solange die Marke gilt, zeigt die Oberflaeche nur einen Hinweis und
+# speichert nichts, und kein Startweg startet den Dienst. Sie liegt NEBEN
+# dem Datenordner, weil purge_installation den Ordner selbst loescht.
+# Aelter als 3600 s oder unlesbar gilt sie nicht - eine abgebrochene
+# Installation darf das Plugin nicht fuer immer stilllegen. Entfernt wird
+# sie vom LETZTEN Hakenskript, postupgrade.sh; postinstall.sh nimmt sie bei
+# einem Abbruch ueber seinen EXIT-Trap mit.
+mkdir -p "$BASE/data/plugins" 2>/dev/null
+date +%s > "$MARKE" 2>/dev/null
+if grep -Eq '^[0-9]+$' "$MARKE" 2>/dev/null; then
+    echo "<OK> Bis zum Ende der Installation speichert die Plugin-Seite nichts"
+    echo "<OK> und der Dienst wird nicht gestartet."
+else
+    echo "<WARNING> Die Marke fuer die laufende Aktualisierung liess sich nicht"
+    echo "<WARNING> anlegen: $MARKE"
+    echo "<WARNING> Bitte die Plugin-Seite erst nach dem Ende der Installation oeffnen."
+fi
 
 # ---------- 1. Lief der Dienst? ----------
 # Der Merker liegt NEBEN dem Konfigordner, und das ist zwingend.

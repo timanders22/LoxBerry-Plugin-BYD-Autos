@@ -61,6 +61,32 @@ PDATA="$BASE/data/plugins/$PFOLDER"
 PLOG="$BASE/log/plugins/$PFOLDER"
 PCONFIG="$BASE/config/plugins/$PFOLDER"
 VENV="$PBIN/venv"
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+
+# ---------- Die Marke bei einem Abbruch mitnehmen ----------
+# Im Regelfall entfernt sie postupgrade.sh - das letzte Hakenskript dieser
+# Linie, und es laeuft erst NACH dem Wiederanlauf weiter unten.
+#
+# Dieses Skript steigt aber an sieben Stellen mit "exit 1" aus (gezaehlt am
+# 18.09.2026: Wurzel, Ordner, Python, venv anlegen, venv-Interpreter,
+# pybyd-Installation, pybyd-Ladeprobe; die erste liegt vor diesem Trap, dort
+# steht die Wurzel noch nicht fest). Bliebe die Marke danach liegen, waere
+# die Plugin-Seite gesperrt und der Dienst gerade NICHT gestartet - eine
+# Stunde lang, ohne dass irgendwo stuende, warum. Deshalb ein EXIT-Trap, der
+# genau dann raeumt, wenn dieses Skript NICHT mit 0 endet.
+# Gemessen (bash 5.2, Regeln/06): eine Kommandoersetzung und eine
+# Unterschale loesen den EXIT-Trap nicht aus - die Marke faellt also nicht
+# zu frueh weg.
+by_marke_bei_abbruch() {
+    BY_RC=$?
+    if [ "$BY_RC" -ne 0 ] && [ -f "$MARKE" ]; then
+        rm -f "$MARKE" 2>/dev/null
+        echo "<WARNING> Die Installation ist abgebrochen. Die Sperre fuer"
+        echo "<WARNING> Plugin-Seite und Dienststart wurde wieder aufgehoben."
+    fi
+    return $BY_RC
+}
+trap by_marke_bei_abbruch EXIT
 
 # Fassung, gegen die dieses Plugin gebaut wurde. Auf einen Stand festgenagelt,
 # damit eine Installation von heute morgen und eine von heute abend dasselbe
@@ -264,7 +290,15 @@ MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
 if [ -f "$MERKER" ]; then
     rm -f "$MERKER"
     if [ -x "$PBIN/dienst.sh" ]; then
-        if "$PBIN/dienst.sh" start; then
+        # BY_START_TROTZ_MARKE=1: dienst.sh startet seit 0.9.15 nicht, solange
+        # die Marke aus preupgrade.sh gilt. Hier ist sie die eigene, und
+        # dieser Start ist der Wiederanlauf am Ende der Installation. Die
+        # Marke bleibt dabei LIEGEN und weist jeden anderen Starter ab, bis
+        # postupgrade.sh sie entfernt - sonst saehe ein Waechterlauf zwischen
+        # dem Entfernen und dem dastehenden Dienst weder das eine noch das
+        # andere und startete einen zweiten (Chromecast4lox 1.3.10, in WSL
+        # gemessen 17.09.2026).
+        if BY_START_TROTZ_MARKE=1 "$PBIN/dienst.sh" start; then
             echo "<OK> Der Dienst lief vor dem Update und wurde wieder gestartet."
         else
             echo "<INFO> Der Dienst lief vor dem Update, liess sich aber nicht wieder"

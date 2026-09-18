@@ -65,6 +65,53 @@ if ($by_home !== '' && is_file($by_home . '/libs/phplib/loxberry_system.php')) {
     $by_p = by_paths();
 }
 
+/* ================= Waehrend einer Aktualisierung: Hinweis, sonst nichts ====
+ *
+ * Diese Pruefung steht VOR allem anderen - vor der Reiterwahl, vor dem
+ * Wachposten, vor jedem Handler und vor dem ersten by_config(). Der Grund
+ * ist gemessen (WSL, 18.09.2026, Pruefung-BYD-Autos-0.9.15):
+ *
+ *   Fall A5: In der Luecke zwischen der neuen Cron-Datei und postinstall.sh
+ *   sind config/plugins/<ordner>/ und data/plugins/<ordner>/ weg. Ein Druck
+ *   auf "Speichern" im Reiter Einstellungen lief bis 0.9.14 durch: der
+ *   Formtoken stimmte (by_config() heilte byd.json aus der Zweitschrift),
+ *   und by_zugang_speichern() fand keine alte zugang.json vor. Das leere
+ *   Passwortfeld, das die Seite absichtlich beibehaelt, hatte damit nichts
+ *   zu behalten - geschrieben wurde
+ *       {"benutzer":"...","passwort":"","pin":"","land":"DE"}
+ *   und derselbe Stand in die Zweitschrift daneben.
+ *   Fall A9: postinstall.sh holte diesen leeren Stand Sekunden spaeter
+ *   zurueck und meldete "<OK> zugang.json aus der Sicherung
+ *   wiederhergestellt". Passwort und Steuer-PIN des BYD-Kontos waren damit
+ *   endgueltig fort - ohne eine einzige Zeile, die das gesagt haette.
+ *
+ * Gesperrt wird also nicht vorsorglich, sondern gegen einen gemessenen
+ * Verlust. Die Startwege dagegen laufen in der Luecke ohnehin nicht an
+ * (Faelle A1, A2, A6: je 0 Prozesse) - dort ist die Marke Vorsorge.
+ *
+ * Vorbild: Intercom 2.2.11 (sperrt, weil dort Stationen und Token
+ * verlorengingen) gegen Sprachsteuerung 0.11.7 (sperrt nicht, weil dort
+ * nichts verlorenging). Ob gesperrt wird, entscheidet die Messung, nicht
+ * die Regel (Regeln/06).
+ */
+if (by_upgrade_laeuft()) {
+    $by_rahmen_marke = class_exists('LBWeb', false);
+    if ($by_rahmen_marke) {
+        LBWeb::lbheader('BYD Autos', 'https://wiki.loxberry.de/', 'help.html');
+    }
+    echo '<div style="max-width:980px;margin:0 auto;'
+       . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
+       . '<h2 style="color:#6dac20">BYD Autos</h2>' . "\n"
+       . '<div style="border-radius:8px;padding:10px 14px;margin:12px 0;'
+       . 'background:#fdf3e3;border:1px solid #e0620d"><b>'
+       . by_e(by_t('UPGRADE.T_TITEL')) . '</b> ' . by_e(by_t('UPGRADE.T_TEXT'))
+       . '</div>' . "\n" . '</div>' . "\n";
+    if ($by_rahmen_marke) {
+        LBWeb::lbfooter();
+    }
+    exit;
+}
+
 /**
  * Die Reiter - EINE Quelle fuer Positivliste, Leiste und Bereiche.
  *

@@ -50,6 +50,10 @@ PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
 PID="$PDATA/dienst.pid"
 SOLL="$PDATA/soll_laufen"
+# Die Marke der laufenden Aktualisierung. Sie liegt NEBEN dem Datenordner:
+# purge_installation loescht den Ordner selbst, eine Marke darin waere genau
+# in der Lage fort, fuer die es sie gibt (Regeln/06).
+MARKE="$LBHOMEDIR/data/plugins/$PNAME.upgrade_laeuft"
 LOGDATEI="$PLOG/byd.log"
 # Eigene Datei fuer alles, was NEBEN dem Protokoll anfaellt: Meldungen des
 # Starts und alles, was das Programm nach stderr schreibt, bevor sein
@@ -86,6 +90,15 @@ laeuft() {
     ARGS=$(tr '\0' '\n' < "/proc/$P/cmdline" 2>/dev/null)
     [ "$(echo "$ARGS" | sed -n '2p')" = "$SKRIPT" ] || return 1
     echo "$ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
+    # Und GENAU zwei Argumente, kein drittes. Sonst ist es ein Einmallauf und
+    # kein Dienst: "<venv>/bin/python3 <pfad>/byd.py --selbsttest" laeuft
+    # Sekunden und gehoert niemandem. Hier greift das nur bei einer
+    # wiederverwendeten Prozessnummer aus der eigenen PID-Datei - in
+    # uninstall/uninstall, das ueber /proc sucht, war es am 18.09.2026
+    # messbar (Pruefung-BYD-Autos-0.9.15, Fall D1). Dieselbe Bauart bekommt
+    # dieselbe Bedingung, damit nicht die eine Stelle richtig und die andere
+    # falsch prueft.
+    [ -z "$(echo "$ARGS" | sed -n '3p')" ] || return 1
     return 0
 }
 
@@ -117,7 +130,53 @@ arbeitet() {
     [ $((JETZT - T)) -lt 300 ]
 }
 
+upgrade_laeuft() {
+    # Laeuft gerade eine Aktualisierung dieses Plugins?
+    #
+    # preupgrade.sh legt die Marke als Erstes an, postupgrade.sh - das letzte
+    # Hakenskript dieser Linie - entfernt sie NACH dem Wiederanlauf. Der
+    # Wiederanlauf selbst kommt aus postinstall.sh und setzt dazu
+    # BY_START_TROTZ_MARKE=1: dort ist die Marke die eigene.
+    #
+    # Warum die Marke waehrend des Starts liegen BLEIBT und nicht vorher
+    # faellt: zwischen dem Entfernen und dem Augenblick, in dem der neue
+    # Dienst dasteht, saehe ein Waechterlauf weder Marke noch Dienst und
+    # startete einen zweiten (an Chromecast4lox 1.3.10 in WSL gemessen,
+    # 17.09.2026: umgekehrte Reihenfolge vier Dienste, diese Reihenfolge
+    # einer).
+    #
+    # Drei Ausgaenge, und jeder ist Absicht:
+    #   keine Marke / kein gueltiger Inhalt -> sie gilt NICHT. Eine
+    #       abgebrochene Installation darf den Dienst nicht fuer immer
+    #       stilllegen; dasselbe leistet die Frist von 3600 s.
+    #   Marke da, Uhr nicht lesbar          -> sie GILT. Ein Schutz faellt
+    #       geschlossen aus (CLAUDE.md, Abschnitt 4). Ohne diesen Zweig
+    #       rechnete die Schale mit einer leeren Zeichenkette, das Alter
+    #       wuerde negativ, die Bedingung fiele durch - und der Dienst
+    #       startete mitten in der Aktualisierung.
+    #   Marke da, Alter zwischen -300 s und 3600 s -> sie GILT. Ein paar
+    #       Minuten "Zukunft" sind eine nachgestellte Uhr, keine Luege.
+    [ "${BY_START_TROTZ_MARKE:-0}" = "1" ] && return 1
+    [ -f "$MARKE" ] || return 1
+    SEIT=$(cat "$MARKE" 2>/dev/null)
+    case "$SEIT" in ''|*[!0-9]*) return 1 ;; esac
+    JETZT=$(date +%s 2>/dev/null)
+    case "$JETZT" in ''|*[!0-9]*) return 0 ;; esac
+    ALTER=$((JETZT - SEIT))
+    [ "$ALTER" -gt -300 ] && [ "$ALTER" -lt 3600 ]
+}
+
 starten() {
+    # Vor allem anderen: waehrend einer Aktualisierung wird nichts gestartet.
+    # Der Rueckgabewert ist 0 und kein Fehler - es ist nichts schiefgegangen,
+    # es ist nur nicht der Augenblick dafuer. Ein Fehler hier liesse den
+    # Waechter seinen Fehlversuchszaehler hochzaehlen und danach eine halbe
+    # Stunde bremsen, ausgerechnet nach dem Update.
+    if upgrade_laeuft; then
+        echo "Start uebersprungen: eine Aktualisierung dieses Plugins laeuft."
+        echo "        Der Dienst wird am Ende der Installation gestartet."
+        return 0
+    fi
     if laeuft; then
         echo "laeuft bereits (PID $(cat "$PID"))"
         return 0

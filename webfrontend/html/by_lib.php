@@ -126,6 +126,56 @@ function by_paths()
 }
 
 /**
+ * Die Marke "Aktualisierung laeuft".
+ *
+ * preupgrade.sh legt sie als Erstes an, postupgrade.sh - das letzte
+ * Hakenskript dieser Linie - entfernt sie nach dem Wiederanlauf des Dienstes.
+ * Sie liegt NEBEN dem Datenordner, weil purge_installation den Ordner selbst
+ * loescht.
+ *
+ * Warum die Oberflaeche sie liest: in der Luecke zwischen der neuen
+ * Cron-Datei und postinstall.sh sind config/plugins/<ordner>/ und
+ * data/plugins/<ordner>/ weg. Ein Druck auf "Speichern" im Reiter
+ * Einstellungen schrieb dann ueber by_zugang_speichern() eine zugang.json
+ * OHNE Passwort und OHNE Steuer-PIN - und zog diesen leeren Stand in die
+ * Zweitschrift nach. postinstall.sh holte danach genau ihn zurueck; die
+ * Zugangsdaten des BYD-Kontos waren endgueltig fort. In WSL gemessen
+ * (18.09.2026, Pruefung-BYD-Autos-0.9.15, Faelle A5 und A9).
+ */
+function by_upgrade_marke()
+{
+    $d = by_paths()['datadir'];
+    return dirname($d) . '/' . basename($d) . '.upgrade_laeuft';
+}
+
+/**
+ * Gilt die Marke gerade?
+ *
+ * Aelter als 3600 s, aus der Zukunft oder mit unlesbarem Inhalt: sie gilt
+ * NICHT - eine abgebrochene Installation darf die Seite nicht fuer immer
+ * stilllegen. Ein paar Minuten "Zukunft" sind eine nachgestellte Uhr und
+ * keine Luege; deshalb -300 statt 0.
+ *
+ * Dieselbe Frist und dieselben drei Ausgaenge wie in bin/dienst.sh
+ * (upgrade_laeuft) - eine Seite, die sperrt, waehrend der Dienst startet,
+ * waere so falsch wie umgekehrt.
+ */
+function by_upgrade_laeuft()
+{
+    $f = by_upgrade_marke();
+    $roh = @is_file($f) ? @file_get_contents($f) : false;
+    if ($roh === false) {
+        return false;
+    }
+    $roh = trim((string) $roh);
+    if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+        return false;
+    }
+    $alter = time() - (int) $roh;
+    return $alter > -300 && $alter < 3600;
+}
+
+/**
  * Voreinstellungen.
  *
  * Muessen zu VORGABEN in bin/byd.py passen. Der Reiter Test vergleicht beide
@@ -696,8 +746,20 @@ function by_dienst_pid()
      * ebenfalls den vollen Pfad als zweites Argument fuehrt. */
     $cmd = (string) @file_get_contents('/proc/' . $pid . '/cmdline');
     $argv = explode("\0", $cmd);
+    /* Die Befehlszeile endet auf ein Nullbyte; explode() haengt daran ein
+     * leeres Element. Es wird abgeschnitten, sonst zaehlte jeder Prozess ein
+     * Argument zu viel. */
+    while ($argv && end($argv) === '') {
+        array_pop($argv);
+    }
     $skript = by_paths()['bindir'] . '/byd.py';
-    if (isset($argv[0], $argv[1])
+    /* GENAU zwei Argumente. Ein drittes macht aus dem Treffer einen
+     * Einmallauf: "<venv>/bin/python3 <pfad>/byd.py --selbsttest" ist der
+     * Selbsttest und laeuft Sekunden. Hier wird nur angezeigt, nicht
+     * beendet - aber dieselbe Bauart steht in bin/dienst.sh und in
+     * uninstall/uninstall, und dort wird sie zum Signal. In WSL gemessen am
+     * 18.09.2026 (Pruefung-BYD-Autos-0.9.15, Fall D1). */
+    if (count($argv) === 2
         && $argv[1] === $skript
         && preg_match('#(^|/)python[0-9.]*$#', $argv[0])) {
         return $pid;

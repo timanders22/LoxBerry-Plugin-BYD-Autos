@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.13
+Version 0.9.15
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,83 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.15
+
+### Während einer Aktualisierung speichert die Oberfläche nichts mehr
+
+Beim Aktualisieren räumt der LoxBerry-Installer `config/plugins/bydautos/` und
+`data/plugins/bydautos/` ab, **bevor** `postinstall.sh` die Sicherungen
+zurückholt. Zwischen der neu angelegten Cron-Datei und `postinstall.sh` liegt
+am Gerät fast eine Minute. Wer die Plugin-Seite ausgerechnet in dieser Zeit
+öffnet, sieht eine leere Einrichtung — und ein Druck auf **Speichern** im
+Reiter Einstellungen hatte bis 0.9.14 diese Wirkung:
+
+* `zugang.json` wurde mit **leerem Passwort und leerer Steuer-PIN** neu
+  geschrieben. Das ist kein Fehler der Speicherfunktion: sie behält ein leer
+  abgesendetes Passwortfeld absichtlich bei — nur gab es in diesem Augenblick
+  nichts zu behalten.
+* Derselbe leere Stand wurde in die Zweitschrift
+  `config/plugins/bydautos.backup.zugang.json` nachgezogen.
+* `postinstall.sh` holte Sekunden später genau diesen leeren Stand zurück und
+  meldete `<OK> zugang.json aus der Sicherung wiederhergestellt`.
+
+Benutzername, Passwort und Steuer-PIN des BYD-Kontos waren damit endgültig
+fort, ohne dass irgendwo etwas davon gestanden hätte. In WSL nachgestellt und
+gemessen am 18.09.2026.
+
+Ab 0.9.15 legt `preupgrade.sh` als Erstes die Marke
+`data/plugins/bydautos.upgrade_laeuft` mit der Unixzeit an — **neben** den
+Datenordner, weil der Installer den Ordner selbst löscht. Solange sie gilt:
+
+* zeigt die Plugin-Seite nur einen Hinweis und nimmt kein Formular an,
+* startet `bin/dienst.sh` den Abrufdienst nicht.
+
+Das letzte Hakenskript dieser Linie, `postupgrade.sh`, entfernt die Marke —
+und zwar **nach** dem Wiederanlauf, den `postinstall.sh` erledigt. Andersherum
+sähe ein Wächterlauf zwischen dem Entfernen und dem dastehenden Dienst weder
+das eine noch das andere und startete einen zweiten. Der Wiederanlauf selbst
+kommt mit `BY_START_TROTZ_MARKE=1` an der Marke vorbei.
+
+Eine Marke, die älter als eine Stunde ist, aus der Zukunft stammt oder keine
+Unixzeit enthält, **gilt nicht** — eine abgebrochene Installation darf das
+Plugin nicht für immer stilllegen. Bricht `postinstall.sh` ab, räumt es sie
+über seinen `EXIT`-Trap gleich selbst weg; `uninstall` räumt sie ebenfalls ab.
+Lässt sich die Uhr nicht lesen, gilt die Marke — ein Schutz fällt geschlossen
+aus.
+
+Im Reiter **Test** steht dazu eine neue Zeile: *Liegt eine Marke
+„Aktualisierung läuft“?* Sie meldet vor allem den Fall, dass eine solche Marke
+nach einer abgebrochenen Installation liegengeblieben ist.
+
+### Ein Selbsttest ist kein Dienst — `uninstall` beendete ihn mit
+
+Beim Messen der Marke fiel eine zweite Stelle auf. Drei Stellen erkennen den
+eigenen Dienst argumentweise über `/proc/<pid>/cmdline`: `bin/dienst.sh`,
+`uninstall/uninstall` und die Oberfläche. Alle drei prüften, dass `argv[0]`
+ein Python ist und `argv[1]` genau `bin/byd.py` — aber keine prüfte, dass es
+**kein drittes Argument** gibt.
+
+Gemessen am 18.09.2026 in WSL (Fall D1): neben dem laufenden Dienst standen
+zwei Köder, die den Dienstpfad in ihrer Befehlszeile führen —
+`tail -f <pfad>/byd.py` und der Selbsttest
+`<venv>/bin/python3 <pfad>/byd.py --selbsttest`. `dienst.sh stop` ließ beide
+stehen und beendete nur den Dienst; `uninstall` ließ `tail` stehen und
+**beendete den Selbsttest mit**. Ein Einmallauf mit zusätzlichen Argumenten
+ist kein Dienst.
+
+Ab 0.9.15 verlangen alle drei Stellen genau zwei Argumente. Der Dienst selbst
+startet immer mit genau zweien.
+
+### Was die Marke hier NICHT abwendet
+
+Die Startwege dieses Plugins laufen in der Lücke ohnehin nicht an, und das ist
+gemessen, nicht angenommen: der minütliche Wächter steigt ohne seinen Merker
+`data/plugins/bydautos/soll_laufen` aus (sechs Läufe, null Prozesse), und
+`dienst.sh start` scheitert an der fehlenden `zugang.json`. Für den Dienststart
+ist die Marke **Vorsorge** — sie deckt den Systemstart mitten im Update und
+jeden künftigen Startweg ab. Der gemessene Schaden lag allein an der
+Oberfläche.
 
 ## Neu in 0.9.12
 
