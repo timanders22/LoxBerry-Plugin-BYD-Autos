@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.15
+Version 0.9.16
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,85 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.16
+
+Alle Änderungen dieser Fassung betreffen das Sichern und Zurückspielen und die
+Frage, wo die LoxBerry-Wurzel liegt. Sie sind in WSL nachgestellt und
+gemessen (18.09.2026), nicht am Gerät.
+
+### Eine abgeschnittene Datei ist nicht leer
+
+Ob eine Zweitschrift überschrieben oder zurückgespielt wird, entschied bis
+0.9.15 die **Größe**: `[ -s ]` und der Vergleich mit `{}`. Eine
+abgeschnittene `zugang.json` (Stromausfall, volle Karte) besteht beides.
+Gemessen:
+
+* `preupgrade.sh` kopierte eine abgeschnittene `zugang.json` oder `byd.json`
+  über die heile Zweitschrift, ebenso eine `zugang.json` mit leerem Passwort.
+  Passwort, Steuer-PIN bzw. Aktionstoken standen danach nirgends mehr.
+* `postinstall.sh` hielt eine abgeschnittene `zugang.json` und eine mit
+  leerem Passwort für brauchbar und spielte die heile Zweitschrift **nicht**
+  zurück. Eine abgeschnittene Zweitschrift spielte es dagegen zurück und
+  meldete `<OK> zugang.json aus der Sicherung wiederhergestellt`.
+* `postupgrade.sh` meldete bei abgeschnittener `byd.json`
+  `<OK> Die Konfiguration ist vorhanden.`
+* Die Oberfläche zog beim Speichern jeden Stand in die Zweitschrift nach,
+  auch einen ohne Passwort — etwa wenn `zugang.json` unlesbar war und das
+  Passwortfeld leer blieb.
+
+Ab 0.9.16 entscheidet der **Inhalt**: ein lesbares JSON-Objekt, und darin bei
+`zugang.json` Benutzername **und** Passwort, bei `byd.json` das
+Aktionstoken. Eine Zweitschrift mit Inhalt wird nie durch einen Stand ohne
+Inhalt ersetzt. Wird zurückgespielt, bleibt der verdrängte Stand als
+`<datei>.kaputt` (Rechte 0600) liegen. `postupgrade.sh` nennt jetzt auch, ob
+Benutzername und Passwort hinterlegt sind.
+
+### Die alte Sicherung fällt erst, wenn die neue steht
+
+Bricht ein Update ab, nachdem der Installer die Plugin-Ordner geräumt hat,
+und wird es erneut angestoßen, sind die Sicherungen neben dem Konfigordner
+die einzige Abschrift. Bis 0.9.15 löschte `preupgrade.sh` beim zweiten
+Anlauf
+
+* die gesicherte **Ladehistorie** (`bydautos.backup.verlauf.tar`) — sie
+  wurde vor allem anderen gelöscht, auch wenn gar keine neue entstehen
+  konnte;
+* den **Merker**, dass der Dienst vorher lief — danach startete ihn niemand
+  wieder (gemessen: 0 statt 1 Dienst nach dem Update).
+
+Und die beiden Zweitschriften wurden mit `cp -p` direkt überschrieben;
+scheiterte das Schreiben (volle Karte), blieben sie mit **0 Byte** zurück.
+
+Ab 0.9.16 entsteht jede neue Sicherung zuerst in einer Nebendatei, wird
+geprüft (Zweitschriften byteweise, die Ladehistorie an der Zahl der Dateien)
+und erst dann umbenannt. Der Merker wird in `preupgrade.sh` nur noch gesetzt,
+nie gelöscht; eingelöst wird er wie bisher von `postinstall.sh`.
+
+### Die LoxBerry-Wurzel wird gelesen, nicht geraten
+
+* `bin/dienst.sh` rechnete die Wurzel bis 0.9.15 **immer** drei Ebenen über
+  dem eigenen Ablageort und überschrieb dabei ein gesetztes `LBHOMEDIR`; den
+  Ordnernamen nahm es aus dem Verzeichnisnamen, und bei **jedem** Aufruf —
+  auch bei `status` — legte es die errechneten Ordner an. Aus einem
+  Prüfarchiv unter `<LoxBerry-Wurzel>/pruefung/bydautos/bin` entstanden so
+  `data/plugins/bin` und `log/plugins/bin` in der laufenden Installation.
+  Ab 0.9.16 gilt zuerst `LBHOMEDIR` (und `LBPPLUGINDIR`), dann eine geprüfte
+  Suche aufwärts; angelegt wird nur beim Start und vom Wächter, wenn der
+  Dienst laufen soll. Ohne Wurzel bricht das Skript mit einer Meldung ab.
+* Die Suche aufwärts in allen vier Hakenskripten, in der Oberfläche und in
+  `bin/byd.py` verlangt jetzt zusätzlich `config/system/general.json`, wie
+  jede LoxBerry-Wurzel sie trägt. Vorher genügte ein Verzeichnis mit
+  `config/plugins` und `data/plugins` (bzw. `webfrontend`). Gemessen an einem
+  solchen fremden Baum: `uninstall` löschte dort eine Zweitschrift,
+  `preupgrade.sh` legte seine Marke an, `postinstall.sh` legte die
+  Plugin-Ordner an, `postupgrade.sh` löschte eine fremde Marke, die
+  Oberfläche legte `byd.json` samt Zweitschrift an und `byd.py --selbsttest`
+  einen Protokollordner. Die installierte Lage
+  `<Wurzel>/bin/plugins/<ordner>` bzw. `webfrontend/html/plugins/<ordner>`
+  gilt weiter auch ohne `general.json`.
+
+Was nach dem Update zu tun ist: nichts.
 
 ## Neu in 0.9.15
 

@@ -36,13 +36,24 @@ if (!function_exists('by_e')) {
  * muss).
  *
  * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert.
+ *
+ * Zusaetzlich muss der Kandidat config/system/general.json tragen - oder
+ * genau die Wurzel sein, unter deren webfrontend/html/plugins/ diese Datei
+ * liegt. Ohne diese Bedingung fand die Suche jedes Verzeichnis mit
+ * config/plugins und webfrontend; auf einem Pruefrechner sind das Reste
+ * frueherer Pruefstaende (Regeln/06). Gemessen am 18.09.2026
+ * (Pruefung-BYD-Autos-0.9.16, Fall H3): die Oberflaeche, aus einem
+ * ausgepackten Archiv ohne LBHOMEDIR aufgerufen, legte in einem solchen
+ * fremden Baum config/plugins/bydautos/byd.json samt Zweitschrift an.
  */
 if (!function_exists('lb_wurzel_ermitteln')) {
     function lb_wurzel_ermitteln()
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')
+                && (is_file($d . '/config/system/general.json')
+                    || $d . '/webfrontend/html/plugins/' . basename(__DIR__) === __DIR__)) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -546,7 +557,23 @@ function by_zugang_speichern($benutzer, $passwort, $pin, $land)
         @unlink($tmp);
         return false;
     }
-    by_kopie_geschuetzt($p['zugang'], $p['zugang_sicherung'], 0600);
+    /* Die Zweitschrift wird nur mit einem Stand fortgeschrieben, der INHALT
+     * traegt: Benutzername UND Passwort. Bis 0.9.15 ging jeder gespeicherte
+     * Stand hinein. War zugang.json unlesbar (abgeschnitten) und wurde mit
+     * leerem Passwortfeld gespeichert - die Seite behaelt ein leeres Feld
+     * absichtlich bei, nur gab es nichts zu behalten -, verdraengte ein Stand
+     * ohne Passwort die heile Zweitschrift. Gemessen am 18.09.2026
+     * (Pruefung-BYD-Autos-0.9.16, Fall U1). Dieselbe Regel wie fuer byd.json
+     * in by_config_speichern() (dort: das Aktionstoken) und wie in den
+     * Hakenskripten (by_inhalt). Geloescht wird die Zweitschrift allein
+     * ueber by_zugang_loeschen(). */
+    if (trim((string) $neu['benutzer']) !== '' && trim((string) $neu['passwort']) !== '') {
+        by_kopie_geschuetzt($p['zugang'], $p['zugang_sicherung'], 0600);
+    } elseif (is_file($p['zugang_sicherung'])) {
+        by_log('Die Zugangsdaten wurden ohne Benutzername oder ohne Passwort '
+             . 'gespeichert. Die Zweitschrift bleibt deshalb auf dem vorigen Stand.',
+               'WARN');
+    }
     return true;
 }
 

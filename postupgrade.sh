@@ -30,12 +30,16 @@ ist_wurzel() {
     [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
 }
 BASE="${ARGV5:-$LBHOMEDIR}"
+# Die Suche AUFWAERTS verlangt zusaetzlich config/system/general.json - siehe
+# preupgrade.sh (Fall H2b des Pruefstands Pruefung-BYD-Autos-0.9.16).
 if ! ist_wurzel "$BASE"; then
     v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
     BASE=""
     i=0
     while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
-        if ist_wurzel "$v"; then BASE="$v"; break; fi
+        if ist_wurzel "$v" && [ -f "$v/config/system/general.json" ]; then
+            BASE="$v"; break
+        fi
         v=$(dirname "$v"); i=$((i + 1))
     done
 fi
@@ -52,13 +56,50 @@ fi
 # Eine Warnung, die bei heiler Konfiguration erscheint, ist ein Fehler: ein
 # blinder Alarm entwertet die echte Warnung beim naechsten Mal. Deshalb wird
 # hier NACHGESEHEN, wie es steht, statt pauschal zu melden.
+#
+# Nachgesehen wird der INHALT (by_inhalt, wortgleich in preupgrade.sh). Bis
+# 0.9.15 genuegten "[ -s ]" und "nicht {}": eine abgeschnittene byd.json
+# wurde mit "<OK> Die Konfiguration ist vorhanden." gemeldet (gemessen am
+# 18.09.2026, Pruefung-BYD-Autos-0.9.16, Fall C9) - eine Erfolgsmeldung ohne
+# Wirkung. Die Zugangsdaten werden seither ebenfalls genannt: sie sind es,
+# die ein Update bis 0.9.14 verlieren konnte.
+by_inhalt() {   # $1 Datei, $2 Art: zugang | byd
+    [ -f "$1" ] && [ -s "$1" ] || return 1
+    [ "$(tr -d ' \t\r\n' < "$1" 2>/dev/null)" = "{}" ] && return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $d = json_decode((string) @file_get_contents($argv[1]), true);
+        if (!is_array($d)) { exit(1); }
+        $da = function ($k) use ($d) {
+            return isset($d[$k]) && is_string($d[$k]) && trim($d[$k]) !== "";
+        };
+        if ($argv[2] === "zugang") { exit(($da("benutzer") && $da("passwort")) ? 0 : 1); }
+        if ($argv[2] === "byd") { exit($da("aktionstoken") ? 0 : 1); }
+        exit(1);
+    ' -- "$1" "$2" 2>/dev/null
+    by_rc=$?
+    [ "$by_rc" = 0 ] || [ "$by_rc" = 1 ] || return 2
+    return "$by_rc"
+}
 CF="$BASE/config/plugins/$PFOLDER/byd.json"
-if [ -f "$CF" ] && [ -s "$CF" ] && [ "$(tr -d ' \t\r\n' < "$CF")" != "{}" ]; then
-    echo "<OK> Die Konfiguration ist vorhanden."
-else
-    echo "<INFO> Die Konfiguration ist leer. Beim ersten Aufruf der Oberflaeche"
-    echo "<INFO> entsteht sie neu; die Zugangsdaten sind dann erneut einzutragen."
-fi
+by_inhalt "$CF" byd
+case "$?" in
+    0)  echo "<OK> Die Konfiguration ist vorhanden." ;;
+    2)  echo "<INFO> Ob die Konfiguration vollstaendig ist, liess sich nicht pruefen"
+        echo "<INFO> (kein php)." ;;
+    *)  echo "<INFO> Die Konfiguration ist leer oder unvollstaendig. Beim ersten Aufruf"
+        echo "<INFO> der Oberflaeche wird sie aus der Zweitschrift geheilt; gibt es keine,"
+        echo "<INFO> entsteht ein neues Aktionstoken, und die Adressen in Loxone sind"
+        echo "<INFO> anzupassen." ;;
+esac
+by_inhalt "$BASE/config/plugins/$PFOLDER/zugang.json" zugang
+case "$?" in
+    0)  echo "<OK> Benutzername und Passwort des BYD-Kontos sind hinterlegt." ;;
+    2)  echo "<INFO> Ob die Zugangsdaten vollstaendig sind, liess sich nicht pruefen"
+        echo "<INFO> (kein php)." ;;
+    *)  echo "<INFO> Benutzername oder Passwort des BYD-Kontos fehlen. Bitte im Reiter"
+        echo "<INFO> Einstellungen eintragen." ;;
+esac
 
 # Der Merker fuer den Wiederanlauf gehoert postinstall. Liegt er hier noch,
 # ist postinstall nicht gelaufen - das ist eine Auskunft, kein Aufraeumfall.

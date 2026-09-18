@@ -59,6 +59,13 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 # griffe der Fehlerzweig unten NICHT - und Benutzername, Passwort und Steuer-PIN
 # blieben in <ordner>.backup.zugang.json liegen, waehrend das Skript <OK>
 # meldet. Fail closed: im Zweifel wird nichts entfernt und es wird gesagt.
+#
+# Die Suche AUFWAERTS verlangt zusaetzlich config/system/general.json. Ein
+# Verzeichnis mit config/plugins und data/plugins ist auf einem Pruefrechner
+# schnell gefunden (Regeln/06: dort traf eine solche Suche das Laufwerk
+# selbst). Gemessen am 18.09.2026 (Pruefung-BYD-Autos-0.9.16, Fall H2a): ohne
+# $5 und LBHOMEDIR loeschte dieses Skript die Zweitschrift in einem fremden
+# Baum, der nur config/plugins und data/plugins trug, und meldete <OK>.
 ist_wurzel() {
     [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
 }
@@ -67,13 +74,16 @@ if ! ist_wurzel "$BASE"; then
     BASE=""
     i=0
     while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
-        if ist_wurzel "$v"; then BASE="$v"; break; fi
+        if ist_wurzel "$v" && [ -f "$v/config/system/general.json" ]; then
+            BASE="$v"; break
+        fi
         v=$(dirname "$v"); i=$((i + 1))
     done
 fi
 if ! ist_wurzel "$BASE"; then
     echo "<FAIL> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen"
-    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins und data/plugins)."
+    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins, data/plugins"
+    echo "<FAIL> und config/system/general.json)."
     echo "<FAIL> Es wurde NICHTS entfernt. Die Zugangsdaten des BYD-Kontos liegen"
     echo "<FAIL> weiterhin in config/plugins/$PFOLDER.backup.zugang.json."
     exit 1

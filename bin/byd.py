@@ -63,11 +63,20 @@ def lb_wurzel_ermitteln() -> str:
     config/plugins UND webfrontend enthaelt. Eine feste Zahl von ".." ist nur
     die naechste Wette: LoxBerry legt Daemons als Symlink unter
     system/daemons/plugins ab, und dort stimmt sie nicht mehr.
+
+    Zusaetzlich traegt der Kandidat config/system/general.json (die Lage
+    <Wurzel>/bin/plugins/<ordner> prueft schon Punkt 2 weiter unten). Ohne diese
+    Bedingung fand die Suche jedes Verzeichnis mit config/plugins und
+    webfrontend; auf einem Pruefrechner sind das Reste frueherer Pruefstaende
+    (Regeln/06). Gemessen am 18.09.2026 (Pruefung-BYD-Autos-0.9.16, Fall H4):
+    "--selbsttest" aus einem ausgepackten Archiv legte in einem solchen
+    fremden Baum log/plugins/<archivname> an.
     """
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(8):
         if os.path.isdir(os.path.join(d, "config", "plugins")) \
-                and os.path.isdir(os.path.join(d, "webfrontend")):
+                and os.path.isdir(os.path.join(d, "webfrontend")) \
+                and os.path.isfile(os.path.join(d, "config", "system", "general.json")):
             return d
         eltern = os.path.dirname(d)
         if eltern == d:
@@ -174,6 +183,15 @@ _kandidaten = [Path(_umg) if _umg else None,
 LBHOME = None
 LBHOME_QUELLE = ""
 for _i, _k in enumerate(_kandidaten):
+    # Punkt 2 ist eine Rechnung, keine Auskunft: er gilt nur, wenn dieses
+    # Skript dort wirklich unter bin/plugins/ liegt oder der Kandidat
+    # general.json traegt. Im ausgepackten Archiv traf die Rechnung sonst einen
+    # fremden Baum, der zufaellig config/plugins und webfrontend hatte (Fall
+    # H4, siehe lb_wurzel_ermitteln).
+    if _i == 1 and _k is not None and not (
+            (_k / "config" / "system" / "general.json").is_file()
+            or _k / "bin" / "plugins" / SELF.name == SELF):
+        continue
     if _ist_wurzel(_k):
         LBHOME = _k
         LBHOME_QUELLE = "LBHOMEDIR" if _i == 0 else "drei Ebenen ueber bin/"

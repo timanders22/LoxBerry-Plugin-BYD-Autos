@@ -38,11 +38,15 @@ PFOLDER="${ARGV3:-bydautos}"
 ist_wurzel() {
     [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
 }
+# Die Suche AUFWAERTS verlangt zusaetzlich config/system/general.json - siehe
+# preupgrade.sh (Fall H2b des Pruefstands Pruefung-BYD-Autos-0.9.16).
 wurzel_suchen() {
     v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
     i=0
     while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
-        if ist_wurzel "$v"; then echo "$v"; return 0; fi
+        if ist_wurzel "$v" && [ -f "$v/config/system/general.json" ]; then
+            echo "$v"; return 0
+        fi
         v=$(dirname "$v"); i=$((i + 1))
     done
     return 1
@@ -51,7 +55,8 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 ist_wurzel "$BASE" || BASE=$(wurzel_suchen)
 if ! ist_wurzel "$BASE"; then
     echo "<FAIL> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen"
-    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins und data/plugins)."
+    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins, data/plugins"
+    echo "<FAIL> und config/system/general.json)."
     echo "<FAIL> Es wurde NICHTS angelegt und NICHTS installiert."
     exit 1
 fi
@@ -120,14 +125,78 @@ chmod 600 "$PCONFIG/zugang.json"
 #
 # Zurueckgespielt wird nur, wenn am Ziel nichts Brauchbares steht. Eine
 # Sicherung, die eine gute Datei ueberschreibt, ist kein Schutz.
+#
+# "Brauchbar" entscheidet der INHALT, nicht die Groesse (by_inhalt, wortgleich
+# in preupgrade.sh). Bis 0.9.15 fragte diese Stelle "[ -s ]" und "{}": eine
+# abgeschnittene zugang.json und eine mit leerem Passwort galten als
+# brauchbar und wurden NICHT ersetzt, und eine abgeschnittene ZWEITSCHRIFT
+# wurde zurueckgespielt und mit "<OK> ... wiederhergestellt" gemeldet.
+# Gemessen am 18.09.2026 (Pruefung-BYD-Autos-0.9.16, Faelle C5, C6, C7).
+# Der verdraengte Stand bleibt als <datei>.kaputt (0600) liegen, wenn er
+# mehr war als die frische Vorgabe "{}".
+by_inhalt() {   # $1 Datei, $2 Art: zugang | byd
+    [ -f "$1" ] && [ -s "$1" ] || return 1
+    [ "$(tr -d ' \t\r\n' < "$1" 2>/dev/null)" = "{}" ] && return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $d = json_decode((string) @file_get_contents($argv[1]), true);
+        if (!is_array($d)) { exit(1); }
+        $da = function ($k) use ($d) {
+            return isset($d[$k]) && is_string($d[$k]) && trim($d[$k]) !== "";
+        };
+        if ($argv[2] === "zugang") { exit(($da("benutzer") && $da("passwort")) ? 0 : 1); }
+        if ($argv[2] === "byd") { exit($da("aktionstoken") ? 0 : 1); }
+        exit(1);
+    ' -- "$1" "$2" 2>/dev/null
+    by_rc=$?
+    [ "$by_rc" = 0 ] || [ "$by_rc" = 1 ] || return 2
+    return "$by_rc"
+}
+by_kopie() {   # $1 Quelle, $2 Ziel - Nebendatei, pruefen, umbenennen
+    rm -f "$2.neu" 2>/dev/null
+    if ( umask 077; cp -p "$1" "$2.neu" ) 2>/dev/null \
+       && chmod 600 "$2.neu" 2>/dev/null \
+       && cmp -s "$1" "$2.neu" \
+       && mv -f "$2.neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$2.neu" 2>/dev/null
+    return 1
+}
 for f in byd.json zugang.json; do
+    case "$f" in byd.json) ART=byd ;; *) ART=zugang ;; esac
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
-    if [ -f "$BK" ] && [ -s "$BK" ]; then
-        INHALT=$(tr -d ' \t\r\n' < "$CF" 2>/dev/null)
-        if [ ! -s "$CF" ] || [ "$INHALT" = "{}" ]; then
-            cp -p "$BK" "$CF" && echo "<OK> $f aus der Sicherung wiederhergestellt."
-        fi
+    [ -f "$BK" ] || continue
+    by_inhalt "$CF" "$ART"
+    RC_CF=$?
+    [ "$RC_CF" = 0 ] && continue
+    if [ "$RC_CF" = 2 ]; then
+        echo "<WARNING> Der Inhalt von $f liess sich nicht pruefen (kein php) - es wurde"
+        echo "<WARNING> nichts zurueckgespielt. Die Zweitschrift bleibt liegen: $BK"
+        continue
+    fi
+    by_inhalt "$BK" "$ART"
+    RC_BK=$?
+    if [ "$RC_BK" = 1 ]; then
+        echo "<WARNING> $f traegt keine Zugangsdaten bzw. kein Aktionstoken, und die"
+        echo "<WARNING> Zweitschrift ebenfalls nicht (unvollstaendig oder unlesbar). Es wurde"
+        echo "<WARNING> nichts zurueckgespielt; die Zweitschrift bleibt liegen: $BK"
+        continue
+    fi
+    # RC_BK 2: $f ist nachweislich ohne Inhalt, die Zweitschrift nicht
+    # pruefbar - zurueckgespielt wird trotzdem, verdraengt wird dabei nichts.
+    if [ -s "$CF" ] && [ "$(tr -d ' \t\r\n' < "$CF" 2>/dev/null)" != "{}" ] \
+       && [ ! -e "$CF.kaputt" ]; then
+        by_kopie "$CF" "$CF.kaputt" \
+            && echo "<INFO> Der verdraengte Stand liegt daneben: $f.kaputt"
+    fi
+    if by_kopie "$BK" "$CF"; then
+        echo "<OK> $f aus der Sicherung wiederhergestellt."
+        [ "$RC_BK" = 2 ] && echo "<WARNING> Ihr Inhalt liess sich nicht pruefen (kein php)."
+    else
+        echo "<WARNING> $f liess sich NICHT aus der Sicherung zurueckspielen; sie bleibt"
+        echo "<WARNING> liegen: $BK"
     fi
 done
 chmod 600 "$PCONFIG/zugang.json"

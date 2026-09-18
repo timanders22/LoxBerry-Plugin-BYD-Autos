@@ -1,11 +1,12 @@
 #!/bin/bash
 # BYD Autos - Start, Stopp und Waechter des Abrufdienstes.
 #
-# Die Pfade werden aus dem EIGENEN Ablageort abgeleitet, nicht ueber
-# LoxBerry::System. Grund: LoxBerry::System leitet den Pluginordner aus dem
-# Aufrufort ab; wird dieses Skript aus postinstall.sh oder aus dem Cron
-# gestartet, kommt dort ueberall Leerstring zurueck - das Skript werkelt dann
-# gegen /-Pfade und meldet trotzdem Erfolg.
+# Die Pfade kommen aus $LBHOMEDIR oder, wenn das fehlt, aus einer geprueften
+# Suche vom eigenen Ablageort aufwaerts (Abschnitt "Wurzel und Ordnername"
+# unten) - nicht ueber LoxBerry::System. Grund: LoxBerry::System leitet den
+# Pluginordner aus dem Aufrufort ab; wird dieses Skript aus postinstall.sh
+# oder aus dem Cron gestartet, kommt dort ueberall Leerstring zurueck - das
+# Skript werkelt dann gegen /-Pfade und meldet trotzdem Erfolg.
 
 # readlink -f loest Symlinks auf, BEVOR das Verzeichnis bestimmt wird.
 # LoxBerry legt Daemons als Symlink unter system/daemons/plugins/ ab; von dort
@@ -43,8 +44,66 @@ if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
 fi
 
 SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)          # <home>/bin/plugins/<ordner>
-PNAME=$(basename "$SELF")
-LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+
+# ---------- Wurzel und Ordnername: GELESEN, nicht geraten ----------
+#
+# Bis 0.9.15 stand hier
+#     PNAME=$(basename "$SELF")
+#     LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+# und darunter ein "mkdir -p" auf oberster Ebene. Ein gesetztes $LBHOMEDIR
+# wurde damit ueberschrieben, der Ordnername kam aus dem Verzeichnisnamen,
+# und der geratene Pfad wurde bei JEDEM Aufruf angelegt, auch bei "status".
+# Gemessen am 18.09.2026 in WSL (Pruefung-BYD-Autos-0.9.16; dieselbe Bauart
+# im Bestand: Bestand-2026-09-18/klasse-H, H1):
+#   H1a  aus einem ausgepackten Archiv, LBHOMEDIR und LBPPLUGINDIR gesetzt:
+#        Wurzel drei Ebenen ueber bin/, Ordnername "bin", data/ und log/
+#        dort ANGELEGT, und der laufende Dienst galt als "gestoppt";
+#   H1b  aus <Wurzel>/pruefung/bydautos/bin: data/plugins/bin und
+#        log/plugins/bin in der INSTALLATION angelegt;
+#   H1c  nach purge_installation legten status/stop/waechter den
+#        Datenordner wieder an.
+#
+# Hausform (Regeln/03, Regeln/06): zuerst die gelesene Umgebung, dann die
+# Suche aufwaerts nach einem Verzeichnis, das nachweislich eine Wurzel IST -
+# mit config/system/general.json, oder genau die Wurzel, unter deren
+# bin/plugins/ dieses Skript liegt. Vorbild: Dashboard 0.9.23 bin/dienst.sh.
+lb_wurzel_taugt() {   # $1 Kandidat
+    [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
+}
+lb_wurzel_suchen() {
+    v="$SELF"
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if lb_wurzel_taugt "$v" && { [ -f "$v/config/system/general.json" ] \
+                || [ "$SELF" = "$v/bin/plugins/$(basename "$SELF")" ]; }; then
+            echo "$v"; return 0
+        fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+lb_wurzel_taugt "${LBHOMEDIR:-}" || LBHOMEDIR=$(lb_wurzel_suchen)
+# $LBPPLUGINDIR steht am Geraet zwar nie in der Umgebung (Regeln/03, am
+# 17.09.2026 gemessen) - wer sie setzt, meint sie aber ernst.
+if [ -n "${LBPPLUGINDIR:-}" ]; then
+    PNAME=$(basename "$LBPPLUGINDIR")
+else
+    PNAME=$(basename "$SELF")
+fi
+# Ohne Wurzel wird abgebrochen, statt mit Pfaden ab "/" weiterzuarbeiten
+# (Fall H1f).
+if [ -z "$LBHOMEDIR" ] || [ ! -d "$LBHOMEDIR" ]; then
+    echo "FEHLER: Es wurde kein LoxBerry-Wurzelverzeichnis gefunden. \$LBHOMEDIR ist"
+    echo "        nicht gesetzt, und oberhalb von $SELF liegt keine Wurzel."
+    echo "        Es wurde nichts angelegt und nichts gestartet."
+    exit 1
+fi
+PBIN_R=$(readlink -f "$LBHOMEDIR/bin/plugins/$PNAME" 2>/dev/null)
+# Dienst und venv kommen aus dem bin-Ordner der INSTALLATION, nicht aus dem
+# Ablageort dieser Datei - sonst verwaltete eine Kopie aus dem Archiv einen
+# Dienst, den es nicht gibt. Im Regelfall ist beides derselbe, aufgeloeste
+# Pfad; die Befehlszeile des Dienstes bleibt damit dieselbe wie bis 0.9.15.
+[ -n "$PBIN_R" ] || PBIN_R="$LBHOMEDIR/bin/plugins/$PNAME"
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
 PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
@@ -68,10 +127,17 @@ LOGDATEI="$PLOG/byd.log"
 # (06.09.2026): sieben Dienste hielten so eine geloeschte Protokolldatei offen.
 # Regel: genau einer schreibt in eine Protokolldatei.
 STARTLOG="$PLOG/byd_start.log"
-PY="$SELF/venv/bin/python3"
-SKRIPT="$SELF/byd.py"
+PY="$PBIN_R/venv/bin/python3"
+SKRIPT="$PBIN_R/byd.py"
 
-mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+# Angelegt wird nur, wo geschrieben wird: beim Start und beim Waechter, wenn
+# der Dienst laufen SOLL. status und stop legen nichts an - in der
+# Upgrade-Luecke hiesse ein wieder angelegter Datenordner sonst, dass "der
+# Ordner ist da" nichts mehr ueber eine gelungene Ruecksicherung sagt
+# (Fall H1c).
+ordner_anlegen() {
+    mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+}
 
 laeuft() {
     [ -f "$PID" ] || return 1
@@ -199,6 +265,7 @@ starten() {
     # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
     # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
+    ordner_anlegen
     : > "$STARTLOG"
     nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 &
     echo $! > "$PID"
@@ -270,6 +337,8 @@ case "$1" in
         # da und ruehrt sich nicht mehr. Der zweite Fall war bisher blind.
         GRUND=""
         if [ -f "$SOLL" ]; then
+            # Der Protokollordner liegt auf der Ramdisk und kann fehlen.
+            ordner_anlegen
             if ! laeuft; then
                 GRUND="Dienst lief nicht"
             elif ! arbeitet; then

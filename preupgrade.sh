@@ -33,6 +33,13 @@ PFOLDER="${ARGV3:-bydautos}"
 # <irgendwo>/config/plugins/... , meldete <OK> und der Anwender verlor beim
 # naechsten Update Zugangsdaten und Ladehistorie, ohne dass irgendwo etwas
 # stand.
+#
+# Die Suche AUFWAERTS verlangt zusaetzlich config/system/general.json: ein
+# Verzeichnis mit config/plugins und data/plugins ist auf einem Pruefrechner
+# schnell gefunden (Reste frueherer Pruefstaende, Regeln/06), ein LoxBerry hat
+# general.json immer. Gemessen am 18.09.2026 (Pruefung-BYD-Autos-0.9.16, Fall
+# H2b): ohne $5 und ohne LBHOMEDIR legte dieses Skript seine Marke in einem
+# fremden Baum an, der nur config/plugins und data/plugins trug.
 ist_wurzel() {
     [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
 }
@@ -40,7 +47,9 @@ wurzel_suchen() {
     v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
     i=0
     while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
-        if ist_wurzel "$v"; then echo "$v"; return 0; fi
+        if ist_wurzel "$v" && [ -f "$v/config/system/general.json" ]; then
+            echo "$v"; return 0
+        fi
         v=$(dirname "$v"); i=$((i + 1))
     done
     return 1
@@ -49,7 +58,8 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 ist_wurzel "$BASE" || BASE=$(wurzel_suchen)
 if ! ist_wurzel "$BASE"; then
     echo "<FAIL> Das LoxBerry-Wurzelverzeichnis liess sich nicht bestimmen"
-    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins und data/plugins)."
+    echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins, data/plugins"
+    echo "<FAIL> und config/system/general.json)."
     echo "<FAIL> Es wurde nichts gesichert und nichts angehalten."
     exit 1
 fi
@@ -59,6 +69,60 @@ PBIN="$BASE/bin/plugins/$PFOLDER"
 CFGDIR="$BASE/config/plugins/$PFOLDER"
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+
+# ---------- INHALT statt GROESSE ----------
+# Eine ABGESCHNITTENE Datei ist nicht leer: sie besteht "[ -s ]" und den
+# Vergleich mit "{}". Bis 0.9.15 entschied genau das, ob die Zweitschrift
+# ueberschrieben wird. Gemessen am 18.09.2026 (Pruefung-BYD-Autos-0.9.16,
+# Faelle C1-C3): eine abgeschnittene zugang.json, eine abgeschnittene
+# byd.json und eine zugang.json mit leerem Passwort verdraengten je die heile
+# Zweitschrift - Passwort, Steuer-PIN bzw. Aktionstoken waren danach
+# nirgends mehr.
+#
+# "Inhalt" heisst: ein lesbares JSON-Objekt UND das Geheimnis darin -
+#   zugang.json: Benutzername und Passwort (ohne Passwort kann der Dienst
+#                sich nicht anmelden; genau diese Form entstand in 0.9.14 in
+#                der Upgrade-Luecke, README "Neu in 0.9.15")
+#   byd.json:    das Aktionstoken (by_config_speichern() zieht die
+#                Zweitschrift nach derselben Regel nach, by_lib.php)
+# Rueckgabe: 0 Inhalt, 1 kein Inhalt, 2 nicht pruefbar (kein php).
+# Wortgleich in preupgrade.sh, postinstall.sh und postupgrade.sh - ein
+# Hakenskript kann sich nichts aus dem Plugin-Ordner holen, den der Installer
+# gerade erst auspackt. Vorbild: Raumklima 0.11.10 rk_inhalt().
+by_inhalt() {   # $1 Datei, $2 Art: zugang | byd
+    [ -f "$1" ] && [ -s "$1" ] || return 1
+    [ "$(tr -d ' \t\r\n' < "$1" 2>/dev/null)" = "{}" ] && return 1
+    command -v php >/dev/null 2>&1 || return 2
+    php -r '
+        $d = json_decode((string) @file_get_contents($argv[1]), true);
+        if (!is_array($d)) { exit(1); }
+        $da = function ($k) use ($d) {
+            return isset($d[$k]) && is_string($d[$k]) && trim($d[$k]) !== "";
+        };
+        if ($argv[2] === "zugang") { exit(($da("benutzer") && $da("passwort")) ? 0 : 1); }
+        if ($argv[2] === "byd") { exit($da("aktionstoken") ? 0 : 1); }
+        exit(1);
+    ' -- "$1" "$2" 2>/dev/null
+    by_rc=$?
+    [ "$by_rc" = 0 ] || [ "$by_rc" = 1 ] || return 2
+    return "$by_rc"
+}
+# Kopieren, ohne das Ziel vorher zu kappen: erst eine Nebendatei (Rechte 0600
+# von Anfang an), byteweise gegen die Quelle pruefen, dann umbenennen. Ein
+# "cp -p" direkt auf die Zweitschrift oeffnet sie mit O_TRUNC - scheitert das
+# Schreiben danach (volle Karte), bleibt eine LEERE Zweitschrift. Gemessen am
+# 18.09.2026 (Fall D2): beide Zweitschriften danach 0 Byte.
+by_kopie() {   # $1 Quelle, $2 Ziel
+    rm -f "$2.neu" 2>/dev/null
+    if ( umask 077; cp -p "$1" "$2.neu" ) 2>/dev/null \
+       && chmod 600 "$2.neu" 2>/dev/null \
+       && cmp -s "$1" "$2.neu" \
+       && mv -f "$2.neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$2.neu" 2>/dev/null
+    return 1
+}
 
 # ---------- 0. Marke "Aktualisierung laeuft" ----------
 # Als Erstes, vor dem Anhalten und vor jeder Sicherung.
@@ -130,10 +194,24 @@ fi
 #     jemand die Oberflaeche oeffnet - die unauffaelligste Art von Ausfall.
 #  2. Die Ladehistorie unter data/plugins/<ordner>/verlauf/ geht denselben Weg
 #     und wird deshalb in Schritt 4 mit herausgetragen.
-rm -f "$MERKER"
+#
+# Der Merker wird hier nur GESETZT, nie geloescht. Eingeloest und entfernt
+# wird er von postinstall.sh, weggeraeumt von uninstall. Bis 0.9.15 stand
+# hier vorher ein "rm -f": brach ein Update hinter purge_installation ab und
+# wurde erneut angestossen, gab es kein bin/plugins/<ordner>/dienst.sh mehr,
+# der Dienst galt als "lief nicht" - und der Merker des ersten Laufs, die
+# einzige Auskunft, dass er lief, war fort. Gemessen am 18.09.2026
+# (Pruefung-BYD-Autos-0.9.16, Fall D3): nach dem zweiten Lauf kein Merker,
+# nach postinstall.sh 0 statt 1 Dienst.
+# Liegt ein Merker, lief der Dienst vor einem Update, das nicht zu Ende kam;
+# er wird dann nach DIESEM Update gestartet, und das Protokoll sagt es.
 if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" status >/dev/null 2>&1; then
     touch "$MERKER"
     echo "<INFO> Der Dienst laeuft - er wird nach dem Update wieder gestartet."
+elif [ -f "$MERKER" ]; then
+    echo "<INFO> Der Dienst laeuft nicht, aber der Merker eines frueheren, nicht zu"
+    echo "<INFO> Ende gebrachten Updates liegt noch: der Dienst lief davor und wird"
+    echo "<INFO> nach diesem Update wieder gestartet."
 fi
 
 # ---------- 2. Dienst anhalten ----------
@@ -158,14 +236,37 @@ if [ -x "$PBIN/dienst.sh" ]; then
 fi
 
 # ---------- 3. Konfiguration sichern ----------
+# Nach INHALT (by_inhalt oben), nicht nach Groesse, und ueber by_kopie, nicht
+# mit "cp -p" direkt auf die Zweitschrift. Eine Zweitschrift mit Inhalt wird
+# nie durch einen Stand ohne Inhalt ersetzt.
 for f in byd.json zugang.json; do
-    if [ -f "$CFGDIR/$f" ] && [ -s "$CFGDIR/$f" ]; then
-        cp -p "$CFGDIR/$f" "$BASE/config/plugins/$PFOLDER.backup.$f" || \
-            echo "<INFO> $f liess sich nicht sichern."
+    case "$f" in byd.json) ART=byd ;; *) ART=zugang ;; esac
+    QU="$CFGDIR/$f"
+    ZW="$BASE/config/plugins/$PFOLDER.backup.$f"
+    by_inhalt "$QU" "$ART"
+    RC=$?
+    if [ "$RC" = 0 ] || { [ "$RC" = 2 ] && [ ! -e "$ZW" ]; }; then
+        # Bei 2 (kein php) nur, wenn es noch keine Zweitschrift gibt: dann
+        # wird nichts verdraengt.
+        if by_kopie "$QU" "$ZW"; then
+            echo "<INFO> Zweitschrift von $f angelegt."
+        else
+            echo "<WARNING> Die Zweitschrift von $f liess sich nicht anlegen; eine"
+            echo "<WARNING> vorhandene bleibt unveraendert: $ZW"
+        fi
+    elif [ -e "$ZW" ]; then
+        if [ "$RC" = 2 ]; then
+            echo "<WARNING> Der Inhalt von $f liess sich nicht pruefen (kein php) - die"
+        else
+            echo "<WARNING> $f fehlt, ist unvollstaendig oder traegt keine Zugangsdaten bzw."
+            echo "<WARNING> kein Aktionstoken - die"
+        fi
+        echo "<WARNING> vorhandene Zweitschrift bleibt unveraendert: $ZW"
     fi
 done
-# Die Zweitschrift bekommt DIESELBEN Rechte wie das Original - sie enthaelt
-# dasselbe Passwort.
+# Die Zweitschrift traegt DIESELBEN Rechte wie das Original - sie enthaelt
+# dasselbe Passwort. by_kopie legt sie schon so an; das hier zieht eine
+# Zweitschrift aus einer frueheren Fassung nach.
 chmod 600 "$BASE/config/plugins/$PFOLDER.backup.zugang.json" 2>/dev/null
 chmod 600 "$BASE/config/plugins/$PFOLDER.backup.byd.json" 2>/dev/null
 
@@ -179,34 +280,68 @@ chmod 600 "$BASE/config/plugins/$PFOLDER.backup.byd.json" 2>/dev/null
 # Anwender trotzdem, die Liste ueberstehe eine Aktualisierung. Entweder die
 # Aussage oder die Sicherung war falsch - hier wird die Sicherung gebaut und
 # die Aussage damit wahr.
+#
+# Die vorhandene Sicherung faellt erst, wenn die neue VOLLSTAENDIG steht. Bis
+# 0.9.15 stand hier vor allem anderen "rm -f $SICHERUNG", und "tar -cf"
+# schrieb danach direkt auf denselben Namen. Brach ein Update hinter
+# purge_installation ab und wurde erneut angestossen, gab es keinen
+# Datenordner mehr - und die einzige Abschrift der Historie wurde geloescht
+# (Bestand-2026-09-18/klasse-D; in WSL nachgemessen 18.09.2026,
+# Pruefung-BYD-Autos-0.9.16, Faelle D1 und D2). Jetzt: in eine Nebendatei
+# packen, die Zahl der Dateien darin gegen den Ordner halten, umbenennen.
 VERLAUF="$PDATA/verlauf"
 SICHERUNG="$BASE/config/plugins/$PFOLDER.backup.verlauf.tar"
-rm -f "$SICHERUNG"
+NEU="$SICHERUNG.neu"
+rm -f "$NEU" 2>/dev/null
+by_bleibt() {
+    if [ -f "$SICHERUNG" ]; then
+        echo "<INFO> Die vorhandene Sicherung bleibt unveraendert liegen und wird nach"
+        echo "<INFO> dem Update zurueckgespielt: $SICHERUNG"
+    fi
+}
 if [ -d "$VERLAUF" ] && [ -n "$(ls -A "$VERLAUF" 2>/dev/null)" ]; then
     if ! command -v tar >/dev/null 2>&1; then
         # Abgewiesen statt geraten: ohne tar wird nichts gesichert, und der
         # Anwender erfaehrt es, statt die Liste stillschweigend zu verlieren.
         echo "<INFO> tar ist nicht vorhanden - die Ladehistorie konnte NICHT"
         echo "<INFO> gesichert werden und geht bei diesem Update verloren."
+        by_bleibt
     else
         # Groesse zuerst: eine Historie ist wenige Kilobyte gross. Alles
         # darueber ist nicht die Historie, und ein Archiv neben dem
         # Konfigordner soll nicht unbemerkt wachsen.
         KB=$(du -sk "$VERLAUF" 2>/dev/null | cut -f1)
         case "$KB" in ''|*[!0-9]*) KB=0 ;; esac
+        SOLL_N=$(find "$VERLAUF" -type f 2>/dev/null | wc -l | tr -d ' ')
         if [ "$KB" -gt 20480 ]; then
             echo "<INFO> Der Ordner verlauf/ ist ${KB} kB gross - das ist mehr als"
             echo "<INFO> erwartet. Er wird NICHT gesichert; bitte von Hand kopieren."
-        elif tar -cf "$SICHERUNG" -C "$PDATA" verlauf 2>/dev/null; then
+            by_bleibt
+        elif ( umask 077; tar -cf "$NEU" -C "$PDATA" verlauf ) 2>/dev/null \
+             && tar -tf "$NEU" >/dev/null 2>&1 \
+             && IST_N=$(tar -tf "$NEU" 2>/dev/null | awk '!/\/$/ { n++ } END { print n + 0 }') \
+             && [ "$IST_N" = "$SOLL_N" ] \
+             && mv -f "$NEU" "$SICHERUNG" 2>/dev/null; then
             chmod 600 "$SICHERUNG" 2>/dev/null
-            echo "<OK> Ladehistorie gesichert (${KB} kB) - sie wird nach dem Update"
-            echo "<OK> zurueckgespielt."
+            echo "<OK> Ladehistorie gesichert (${KB} kB, $SOLL_N Dateien) - sie wird nach"
+            echo "<OK> dem Update zurueckgespielt."
         else
-            rm -f "$SICHERUNG"
-            echo "<INFO> Die Ladehistorie liess sich nicht sichern; sie geht bei"
-            echo "<INFO> diesem Update verloren."
+            rm -f "$NEU" 2>/dev/null
+            if [ -f "$SICHERUNG" ]; then
+                echo "<WARNING> Die Ladehistorie liess sich nicht neu sichern."
+                by_bleibt
+            else
+                echo "<INFO> Die Ladehistorie liess sich nicht sichern; sie geht bei"
+                echo "<INFO> diesem Update verloren."
+            fi
         fi
     fi
+elif [ -f "$SICHERUNG" ]; then
+    # Kein Datenordner, aber eine Sicherung: so sieht der zweite Anlauf nach
+    # einem abgebrochenen Update aus. Sie ist jetzt die einzige Abschrift.
+    echo "<INFO> Im Datenordner liegt keine Ladehistorie, wohl aber die Sicherung eines"
+    echo "<INFO> frueheren, nicht zu Ende gebrachten Updates."
+    by_bleibt
 fi
 
 # Alte Python-Zwischendateien wegraeumen. Eine .pyc, die aelter ist als der
