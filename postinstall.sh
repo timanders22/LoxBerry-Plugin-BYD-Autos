@@ -401,6 +401,20 @@ if [ -f "$MARKE" ]; then
     done
 fi
 
+# ---------- Eingerichtet? ----------
+# Dieses Skript laeuft auch bei jedem Upgrade (siehe Kopf). Bis 0.9.17 hing
+# die Erstanleitung unten allein am Merker: lief der Dienst vor dem Update
+# nicht, stand nach jedem Update "Bitte ... die Zugangsdaten des BYD-Kontos
+# eintragen" - auch wenn sie eben zurueckgespielt waren (gemessen 24.09.2026
+# in WSL, Pruefung-BYD-Autos-0.9.18, Fall b). Entschieden wird nach dem
+# INHALT: by_inhalt (oben) auf zugang.json, dieselbe Pruefung, mit der die
+# Zweitschrift beurteilt wird - Benutzer UND Passwort. Fehlen sie nach einem
+# Upgrade, ist die Rueckholung gescheitert, und die Anleitung ist richtig.
+# Rueckgabe 2 (kein php) zaehlt als "nicht eingerichtet": dann lieber die
+# Anleitung einmal zu viel als eine verlorene Anmeldung verdecken.
+BY_EINGERICHTET=0
+by_inhalt "$PCONFIG/zugang.json" zugang && BY_EINGERICHTET=1
+
 if [ -f "$MERKER" ] || [ "$BY_WAISEN" -gt 0 ]; then
     rm -f "$MERKER"
     if [ -x "$PBIN/dienst.sh" ]; then
@@ -420,10 +434,17 @@ if [ -f "$MERKER" ] || [ "$BY_WAISEN" -gt 0 ]; then
             echo "<INFO> Begruendung steht im Reiter Logdateien."
         fi
     fi
+elif [ "$BY_EINGERICHTET" = "1" ]; then
+    echo "<INFO> Der Dienst lief vor dem Update nicht und bleibt angehalten;"
+    echo "<INFO> gestartet wird er im Reiter Einstellungen."
 else
     echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, die Zugangsdaten des BYD-Kontos"
     echo "<INFO> eintragen und den Dienst im Reiter Einstellungen starten."
 fi
 
-echo "<OK> Installation abgeschlossen."
+if [ "$BY_EINGERICHTET" = "1" ]; then
+    echo "<OK> Aktualisierung abgeschlossen, Einstellungen uebernommen."
+else
+    echo "<OK> Installation abgeschlossen."
+fi
 exit 0
