@@ -37,14 +37,17 @@ if (!function_exists('by_e')) {
  *
  * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert.
  *
- * Zusaetzlich muss der Kandidat config/system/general.json tragen - oder
- * genau die Wurzel sein, unter deren webfrontend/html/plugins/ diese Datei
- * liegt. Ohne diese Bedingung fand die Suche jedes Verzeichnis mit
+ * Zusaetzlich muss der Kandidat config/system/general.json tragen, ohne
+ * Ausnahme. Ohne diese Bedingung fand die Suche jedes Verzeichnis mit
  * config/plugins und webfrontend; auf einem Pruefrechner sind das Reste
  * frueherer Pruefstaende (Regeln/06). Gemessen am 18.09.2026
  * (Pruefung-BYD-Autos-0.9.16, Fall H3): die Oberflaeche, aus einem
  * ausgepackten Archiv ohne LBHOMEDIR aufgerufen, legte in einem solchen
- * fremden Baum config/plugins/bydautos/byd.json samt Zweitschrift an.
+ * fremden Baum config/plugins/bydautos/byd.json samt Zweitschrift an. Bis
+ * 0.9.16 galt daneben "genau die Wurzel, unter deren webfrontend/html/plugins/
+ * diese Datei liegt" auch ohne general.json - in einem fremden Baum schrieb
+ * die Seite damit dort byd.json (in WSL gemessen 24.09.2026,
+ * Pruefung-BYD-Autos-0.9.17, Fall P1).
  */
 if (!function_exists('lb_wurzel_ermitteln')) {
     function lb_wurzel_ermitteln()
@@ -52,8 +55,7 @@ if (!function_exists('lb_wurzel_ermitteln')) {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
             if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')
-                && (is_file($d . '/config/system/general.json')
-                    || $d . '/webfrontend/html/plugins/' . basename(__DIR__) === __DIR__)) {
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -64,21 +66,37 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     }
 }
 
+/* Die Wurzel der Oberflaeche - an EINER Stelle, wie by_paths() und by_t()
+ * sie beide brauchen.
+ *
+ * Bis 0.9.16 stand in beiden Funktionen
+ *     foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k)
+ * und ein gesetztes $LBHOMEDIR galt, sobald es nur ein Verzeichnis war. Unter
+ * /home/loxberry/loxberry liegt auf einem LoxBerry keine Wurzel (Regeln/06);
+ * der feste Pfad traf nie die eigene Anlage, nur nichts oder einen fremden
+ * Baum, und ein leeres $LBHOMEDIR-Verzeichnis bekam byd.json (in WSL gemessen
+ * 24.09.2026, Pruefung-BYD-Autos-0.9.17, Faelle P3 und P4). Jetzt:
+ * $LBHOMEDIR, wenn es config/plugins und data/plugins traegt (general.json
+ * wird dort nicht verlangt - die Pruefwerkzeuge setzen LBHOMEDIR auf eine
+ * Attrappe), sonst die Suche. Findet auch die nichts, gibt es KEINE Wurzel,
+ * und der Aufrufer arbeitet im Archivmodus. Vorbild Skoda-Connect-NG 0.9.25
+ * sk_lbhome(). */
+function by_lbhome()
+{
+    $home = (string) getenv('LBHOMEDIR');
+    if ($home !== '' && is_dir($home . '/config/plugins') && is_dir($home . '/data/plugins')) {
+        return $home;
+    }
+    return lb_wurzel_ermitteln();
+}
+
 function by_paths()
 {
     static $p = null;
     if ($p !== null) {
         return $p;
     }
-    $home = getenv('LBHOMEDIR');
-    if (!$home || !is_dir($home)) {
-        foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-            if (is_dir($k)) {
-                $home = $k;
-                break;
-            }
-        }
-    }
+    $home = by_lbhome();
     /* Der Pluginordner ergibt sich aus LBPPLUGINDIR - der Auskunft von
      * LoxBerry selbst -, sonst aus dem Ablageort dieser Datei. Der
      * MD5-Schluessel aus der plugindatabase.json wird bewusst NICHT benutzt:
@@ -91,14 +109,32 @@ function by_paths()
      * bei einer Zweitinstallation (LoxBerry haengt "_01" an) deren Pfade auf
      * die ERSTE Installation: gemeinsame Konfiguration mit den Zugangsdaten,
      * gemeinsame Warteschlange, gemeinsames Protokoll. */
-    $dir = basename(dirname(__FILE__));
-    $lbp = getenv('LBPPLUGINDIR');
-    if ($lbp) {
-        $dir = $lbp;
-    } elseif ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'html') {
+    $eigen = basename(dirname(__FILE__));
+    $lbp = (string) getenv('LBPPLUGINDIR');
+    $lbp = $lbp !== '' ? basename(rtrim($lbp, '/')) : '';
+    $dir = $lbp !== '' ? $lbp : $eigen;
+    if ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'html') {
         $dir = 'bydautos';
     }
-    if ($home) {
+    /* Die Pfade DER ANLAGE gelten nur, wenn diese Bibliothek dort installiert
+     * liegt (<Wurzel>/webfrontend/html/plugins/<ordner>, physisch verglichen)
+     * oder der Aufrufer Wurzel UND Ordner ausdruecklich nennt ($LBHOMEDIR und
+     * $LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge mit ihrer Attrappe).
+     * Sonst ist es ein ausgepacktes Archiv, und alles bleibt in dessen
+     * eigenem Ordner (Archivmodus, 'home' leer). Bis 0.9.16 nahm ein Archiv
+     * unter einer echten Wurzel diese Wurzel und den festen Namen
+     * "bydautos" - Konfiguration, Token und Zugangsdaten der Anlage (in WSL
+     * gemessen 24.09.2026, Pruefung-BYD-Autos-0.9.17, Fall P2). Bauart
+     * Einspeisebremse 0.9.22 eb_paths(). */
+    if ($home !== '') {
+        $soll = realpath($home . '/webfrontend/html/plugins/' . $eigen);
+        $installiert = ($soll !== false && $soll === realpath(__DIR__));
+        $genannt = ($lbp !== '' && $home === (string) getenv('LBHOMEDIR'));
+        if (!$installiert && !$genannt) {
+            $home = '';
+        }
+    }
+    if ($home !== '') {
         $p = array(
             'home'      => $home,
             'plugin'    => $dir,
@@ -1462,13 +1498,15 @@ function by_mqtt_themen()
  * Oberflaeche zeigt es in der Themen-Tabelle, weil der Hausstandard das
  * verlangt: wer ein Thema anlegt, schreibt dazu, ob es retained ist
  * (Regeln/07). Dass beide Listen dasselbe sagen, prueft
- * Pruefung-BYD-Autos-0.9.9/retain_themen.py. */
+ * Pruefung-BYD-Autos-0.9.9/retain_themen.py.
+ * FEHLFOLGE steht seit 0.9.17 NICHT mehr hier: der Zaehler erfolgloser
+ * Abrufe ist eine Aussage des Dienstes ueber sich selbst (Regeln/07,
+ * entschieden am 19.09.2026). */
 function by_mqtt_retain()
 {
     $aus = array('fahrzeuge');
     foreach (array('LADEZUST', 'FAHRZUST', 'ONLINE', 'ZUENDUNG', 'SCHLOSSVL',
                    'BATTHEIZ', 'SITZHEIZ', 'LAEDT', 'KABEL', 'ZUHAUSE',
-                   'FEHLFOLGE',
                    /* NEU 15.09.2026, nach derselben Regel: Zustaende ja,
                     * Messwerte nein. Tueren, Schloesser, Fenster,
                     * Heckklappe, Schiebedach und Fahrstufe aendern sich
@@ -1817,18 +1855,15 @@ function by_t($schluessel)
 {
     static $texte = null;
     if ($texte === null) {
-        $home = getenv('LBHOMEDIR');
-        if (!$home || !is_dir($home)) {
-            foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-                if (is_dir($k)) {
-                    $home = $k;
-                    break;
-                }
-            }
-        }
+        /* Die Wurzel aus by_lbhome() - dieselbe Regel wie by_paths(). Bis
+         * 0.9.16 stand hier ein eigener Rueckfall auf /home/loxberry/loxberry,
+         * und ohne Wurzel wurde aus dem leeren $home ein Pfad ab "/"
+         * (/templates/plugins/<ordner>/lang). In WSL gemessen 24.09.2026
+         * (Pruefung-BYD-Autos-0.9.17, Fall P3, mit open_basedir). */
+        $home = by_lbhome();
         $ordner = basename(dirname(__FILE__));
-        $pfad = $home . '/templates/plugins/' . $ordner . '/lang';
-        if (!is_dir($pfad)) {
+        $pfad = $home !== '' ? $home . '/templates/plugins/' . $ordner . '/lang' : '';
+        if ($pfad === '' || !is_dir($pfad)) {
             $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
         }
         $texte = @parse_ini_file($pfad . '/language_' . by_sprache() . '.ini', true,

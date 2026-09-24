@@ -15,7 +15,7 @@
 # virtuelle Python-Umgebung liegt in bin/plugins/<ordner>/venv und geht damit
 # mit.
 #
-# Drei Dinge liegen AUSSERHALB dieser Ordner:
+# Vier Dinge liegen AUSSERHALB dieser Ordner:
 #
 #   1. Die Sicherungsdateien
 #        config/plugins/<ordner>.backup.byd.json
@@ -39,12 +39,16 @@
 #   3. Der laufende Dienst. Er wird mit nohup gestartet und haengt an keinem
 #      Elternprozess, den LoxBerry beenden wuerde.
 #
+#   4. Die zurueckbehaltenen MQTT-Themen des Plugins im Broker (Abschnitt 1b).
+#      BERICHTIGT 24.09.2026: hier stand bis 0.9.16, der Dienst sende nur mit
+#      "publish" und im Broker bleibe nichts stehen. Seit 0.9.9 gehen
+#      Zustaende retained hinaus, und sie blieben nach der Deinstallation
+#      stehen.
+#
 # WAS DIESES SKRIPT NICHT KANN, und das steht hier, statt Aufraeumen
-# vorzutaeuschen: Die Werte, die ueber das MQTT-Gateway hinausgegangen sind,
-# stehen im Broker. Der Dienst sendet mit "publish", nicht mit "retain" - sie
-# verfallen also von selbst und muessen nicht geloescht werden. Die virtuellen
-# Eingaenge in der Loxone-Projektdatei bleiben dagegen stehen und behalten
-# ihren letzten Wert; sie entfernt nur der Anwender in Loxone Config.
+# vorzutaeuschen: Die virtuellen Eingaenge in der Loxone-Projektdatei bleiben
+# stehen und behalten ihren letzten Wert; sie entfernt nur der Anwender in
+# Loxone Config.
 
 ARGV3=$3
 ARGV5=$5
@@ -132,11 +136,17 @@ ist_unser_dienst() {
 beenden() {
     P="$1"
     kill "$P" 2>/dev/null
+    # Nachgesehen wird ARGUMENTWEISE, nicht mit "kill -0": das sagt nur, dass
+    # IRGENDEIN Prozess diese Nummer traegt. Ist der Dienst fort und die
+    # Nummer neu vergeben - oder ersetzt sich der Prozess per exec -, traf das
+    # "kill -9" darunter bis 0.9.16 einen fremden Prozess. In WSL gemessen
+    # 24.09.2026 (Pruefung-BYD-Autos-0.9.17, Fall K1: ein Prozess, der auf
+    # SIGTERM eine fremde Befehlszeile annahm, war nach uninstall tot).
     for i in 1 2 3 4 5 6 7 8 9 10; do
-        kill -0 "$P" 2>/dev/null || return 0
+        ist_unser_dienst "$P" || return 0
         sleep 1
     done
-    kill -9 "$P" 2>/dev/null
+    ist_unser_dienst "$P" && kill -9 "$P" 2>/dev/null
     sleep 1
     return 0
 }
@@ -165,6 +175,54 @@ done
 
 [ "$GEFUNDEN" -eq 0 ] && echo "<INFO> Es lief kein Abrufdienst."
 rm -f "$PIDDATEI" "$PDATA/soll_laufen" 2>/dev/null
+
+# ---------------------------------------------------------------
+# 1b. Zurueckbehaltene MQTT-Themen dieses Plugins am Broker loeschen
+# ---------------------------------------------------------------
+# Seit 0.9.9 gehen Zustaende retained hinaus (RETAIN_FELDER in bin/byd.py).
+# Bis 0.9.16 blieben sie nach der Deinstallation im Broker stehen, und
+# Loxone las nach jedem Neustart von Broker oder Gateway Werte eines Plugins,
+# das es nicht mehr gibt. In WSL gemessen 24.09.2026
+# (Pruefung-BYD-Autos-0.9.17, Fall U1: 9 eigene Themen blieben stehen).
+#
+# byd.py --mqtt-leeren meldet sich mit den Zugangsdaten aus general.json am
+# Broker an, loescht nur, was dieses Plugin sendet und WIRKLICH behalten
+# liegt, und misst nach. Nur wenn das nicht geht (paho fehlt, Broker nicht
+# erreichbar), geht es ueber den UDP-Eingang des Gateways - und die Ausgabe
+# sagt, dass das nichts bestaetigt. Bauart Skoda-Connect-NG 0.9.25.
+#
+# Die virtuelle Umgebung ist hier noch da: der Installer loescht
+# bin/plugins/<ordner> erst nach diesem Skript (plugininstall.pl,
+# purge_installation; am Geraet nachgesehen 17.09.2026, festgehalten in
+# LoxBerry-Plugin-VolkswagenID-0.9.24/uninstall/uninstall). Als loxberry,
+# nicht als root: gebraucht wird nur Lesezugriff auf die Konfiguration und
+# auf general.json. Geht davon etwas nicht, ist das KEIN Abbruch der
+# Deinstallation, sondern eine <INFO>- bzw. <WARNING>-Zeile.
+mqtt_behaltene_themen_loeschen() {
+    if [ ! -f "$PBIN/byd.py" ]; then
+        echo "<INFO> $PBIN/byd.py fehlt - behaltene MQTT-Themen wurden nicht"
+        echo "<INFO> geloescht. Die Deinstallation laeuft weiter."
+        return 0
+    fi
+    if [ -x "$PBIN/venv/bin/python3" ]; then
+        PYBIN="$PBIN/venv/bin/python3"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYBIN=$(command -v python3)
+    else
+        echo "<INFO> Kein python3 gefunden - behaltene MQTT-Themen wurden nicht"
+        echo "<INFO> geloescht. Die Deinstallation laeuft weiter."
+        return 0
+    fi
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "$(printf 'LBHOMEDIR=%q LBPPLUGINDIR=%q PYTHONDONTWRITEBYTECODE=1 timeout 60 %q %q --mqtt-leeren' \
+            "$BASE" "$PFOLDER" "$PYBIN" "$PBIN/byd.py")" 2>&1 || true
+    else
+        LBHOMEDIR="$BASE" LBPPLUGINDIR="$PFOLDER" PYTHONDONTWRITEBYTECODE=1 \
+            timeout 60 "$PYBIN" "$PBIN/byd.py" --mqtt-leeren 2>&1 || true
+    fi
+    return 0
+}
+mqtt_behaltene_themen_loeschen
 
 # ---------------------------------------------------------------
 # 2. Dateien ausserhalb der Plugin-Ordner

@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.16
+Version 0.9.17
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,122 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.17
+
+Nachlese vom 24.09.2026: was der Dienst über sich selbst meldet, geht nicht
+mehr zurückbehalten hinaus, die Deinstallation räumt den Broker ab, und die
+LoxBerry-Wurzel wird ohne jeden Rückfall bestimmt. Alles in WSL nachgestellt
+und gemessen, nicht am Gerät (`Pruefung-BYD-Autos-0.9.17`, 82 Prüfzeilen).
+
+### `FEHLFOLGE` geht nicht mehr zurückbehalten hinaus
+
+`fahrzeugN/FEHLFOLGE` zählt die erfolglosen Abrufe in Folge. Das ist keine
+Aussage über das Fahrzeug, sondern eine des Dienstes über sich selbst — und
+nach der Hausregel vom 19.09.2026 geht so etwas nie retained hinaus. Von
+0.9.9 bis 0.9.16 ging es retained, und zwar gerade im Störungszweig: starb
+der Dienst nach einer Erholung, stand im Broker für immer „0 Fehler", und
+nach einem Neustart von Broker oder Gateway las Loxone das von einem Dienst,
+der nicht mehr lief.
+
+Ab 0.9.17 geht `FEHLFOLGE` ohne `retain`. Der Altwert aus früheren Fassungen
+wird **einmal am Broker** gelöscht (leere Nutzlast mit `retain`), und zwar im
+selben Lauf unmittelbar vor dem gültigen Wert; danach wird **nachgelesen**,
+und erst wenn nichts mehr behalten dasteht, merkt sich das Plugin, dass es
+erledigt ist. Dafür meldet es sich mit Brokeruser und Brokerpass aus der
+`general.json` am Broker an, wie der Horcher für Abfahrtsassistent und
+Ladeempfehlung. Gelöscht wird nur, was dieses Plugin selbst sendet und was
+wirklich behalten im Broker liegt.
+
+Grenzen, die dazugehören:
+
+* Fehlt das Python-Modul `paho-mqtt`, ist der Broker nicht erreichbar oder
+  weist er die Anmeldung ab, wird nichts gelöscht — das Protokoll sagt es
+  (gedrosselt), und der nächste Lauf versucht es erneut. Über den UDP-Eingang
+  des Gateways wird im Betrieb bewusst **nicht** gelöscht: dort lässt sich
+  nicht nachlesen, ob es gewirkt hat.
+* Der Merker liegt im Datenordner, und den räumt der Installer bei jedem
+  Update ab. Nach einem Update sieht das Plugin deshalb einmal nach, ob noch
+  etwas behalten liegt.
+* Nach einem Neustart von Broker oder Gateway fehlt `FEHLFOLGE` in Loxone,
+  bis der nächste Abruf durch ist — derselbe Preis wie bei `OK` und `ts`.
+
+`fahrzeugN/ONLINE` bleibt zurückbehalten: `online_state` kommt aus der Cloud
+und ist ein Zustand des Fahrzeugs. Im Reiter MQTT steht `FEHLFOLGE` jetzt in
+der Spalte *Zurückbehalten* auf „nein".
+
+### Die Deinstallation räumt den Broker ab
+
+Im Kopf von `uninstall/uninstall` stand bis 0.9.16, der Dienst sende nur mit
+`publish`, im Broker bleibe nichts stehen. Das stimmte seit 0.9.9 nicht mehr:
+gemessen blieben nach der Deinstallation 9 eigene Themen behalten stehen.
+Jetzt meldet sich `byd.py --mqtt-leeren` am Broker an, löscht alle eigenen
+behaltenen Themen und misst nach (`<OK> MQTT: … am Broker geloescht und
+nachgemessen`). Geht das nicht (kein `paho-mqtt`, Broker fort), schickt es
+die Löschbefehle über den UDP-Eingang des Gateways und sagt dazu, dass UDP
+nichts bestätigt. Fremde Themen unter demselben Präfix bleiben stehen. Ein
+Fehlschlag hier bricht die Deinstallation nicht ab.
+
+Ebenfalls in `uninstall`: nach dem Anhalten des Dienstes wurde bis 0.9.16
+nach zehn Sekunden mit `kill -9` nachgesetzt, sobald **irgendein** Prozess
+die Nummer trug (`kill -0`). Jetzt wird vor jedem Signal argumentweise
+nachgesehen, ob es noch der Dienst ist — gemessen an einem Prozess, der auf
+das erste Signal hin eine fremde Befehlszeile annahm: bis 0.9.16 tot, jetzt
+unberührt.
+
+### Die LoxBerry-Wurzel: ohne Rückfall
+
+In 0.9.16 stand hier: „Die installierte Lage … gilt weiter auch ohne
+`general.json`." Das war ein fester Rückfall unter anderem Namen. In einem
+fremden Baum, der `config/plugins` und `data/plugins` trug, aber kein
+`general.json`, gemessen:
+
+* `dienst.sh start` und der Wächter starteten dort den Dienst, `stop` hielt
+  den Dienst dieses Baums an, `status` antwortete „gestoppt";
+* `byd.py --selbsttest` legte dort `log/plugins/bydautos` an;
+* die Oberfläche legte dort `byd.json` mit neuem Aktionstoken an.
+
+Ab 0.9.17 gilt überall dieselbe Regel: zuerst `LBHOMEDIR`, wenn es
+`config/plugins` und `data/plugins` trägt, sonst die Suche aufwärts nach
+einem Verzeichnis **mit** `config/system/general.json`. Findet sich keines,
+bricht `dienst.sh` bzw. `byd.py` mit `FEHLER: Es wurde kein
+LoxBerry-Wurzelverzeichnis gefunden` ab, und die Oberfläche arbeitet im
+Archivmodus in ihrem eigenen Ordner. Weggefallen sind dabei auch der feste
+Pfad `/home/loxberry/loxberry` der Oberfläche und ein Pfad ab `/`, den die
+Sprachdateisuche ohne Wurzel baute.
+
+### Ein ausgepacktes Archiv wirkt nicht auf die Anlage
+
+Liegt ein ausgepacktes Archiv **unter** einer echten LoxBerry-Wurzel, fand
+die Suche diese Wurzel — und bis 0.9.16 arbeitete das Archiv dann mit ihr:
+`byd.py --selbsttest` legte dort `log/plugins/<archivname>` an, ein
+Dienstlauf `data/plugins/<archivname>`; hieß der Archivordner `bydautos`,
+arbeitete er mit Daten- und Protokollordner der Installation. Die Oberfläche
+aus dem Archiv nahm Konfiguration und Token der Anlage. Ab 0.9.17 gilt eine
+Wurzel nur, wenn das Programm dort **installiert** liegt oder der Aufrufer
+Wurzel **und** Ordner nennt (`LBHOMEDIR` und `LBPPLUGINDIR`). Aus einem
+Archiv heraus legt `byd.py` nichts an, startet keinen Dienst und leert
+keinen Broker.
+
+### Kleinere Punkte
+
+* **Die Uhr wird als Zahl geprüft,** bevor der Wächter mit ihr rechnet —
+  bash wertet in `$(( ))` den Inhalt einer Variablen aus. Ohne lesbare Uhr
+  urteilt der Wächter nicht über ein Hängen und startet in der Bremse nicht
+  neu. Die Marke der laufenden Aktualisierung war schon so geprüft.
+* **Ein Dienst ohne PID-Datei** — von Hand gestartet, oder die Datei ging
+  verloren — lief bis 0.9.16 über ein Update hinweg mit dem alten Code
+  weiter, und `postinstall.sh` startete einen zweiten daneben (gemessen: zwei
+  Dienste). Jetzt beendet `postinstall.sh` während einer Aktualisierung jeden
+  solchen Dienst (argumentweise erkannt; ein `--selbsttest` oder ein
+  `tail -f` auf die Datei bleibt unberührt) und startet ihn mit der neuen
+  Fassung wieder.
+* Unverändert und nachgemessen: die Test-Knöpfe und der Endpunkt reihen ohne
+  laufenden Dienst keinen Befehl ein.
+
+Was nach dem Update zu tun ist: nichts. Wer `FEHLFOLGE` in Loxone
+auswertet, beachtet, dass der Wert nach einem Neustart von Broker oder
+Gateway bis zum nächsten Abruf fehlt.
 
 ## Neu in 0.9.16
 

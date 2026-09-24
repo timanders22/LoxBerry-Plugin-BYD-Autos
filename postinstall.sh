@@ -356,7 +356,52 @@ chmod 600 "$PCONFIG/zugang.json"
 # kein pauschales "start". Eine Neuinstallation startet nichts von selbst:
 # dort sollen erst die Zugangsdaten eingetragen werden.
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
-if [ -f "$MERKER" ]; then
+
+# ---------- Waisen bei liegender Marke ----------
+# Liegt die Marke aus preupgrade.sh, ist dies ein Upgrade: preupgrade.sh hat
+# den Dienst ueber seine PID-Datei angehalten, und purge_installation hat die
+# PID-Datei danach mit dem Datenordner geloescht. Ein Dienst, der OHNE
+# PID-Datei lief (von Hand gestartet, Datei verloren), laeuft dann noch - mit
+# dem Code der alten Fassung. Bis 0.9.16 startete dieses Skript daneben einen
+# zweiten: zwei Dienste fragten BYD ab und arbeiteten dieselbe Warteschlange
+# ab. In WSL gemessen 24.09.2026 (Pruefung-BYD-Autos-0.9.17, Fall O1: 2
+# Dienste nach dem Upgrade). Regeln/06, Bauweise Einspeisebremse 0.9.20,
+# Punkt 3 ("hält jeden Dienst an - auch einen ohne PID-Datei").
+#
+# Erkannt wird ARGUMENTWEISE wie in uninstall/uninstall: argv[0] ein Python,
+# argv[1] genau bin/plugins/<ordner>/byd.py, kein drittes Argument (ein
+# Einmallauf wie --selbsttest ist kein Dienst), und der Prozess gehoert dem
+# Dienstbenutzer (loxberry, sonst dem Benutzer dieses Skripts). Vor JEDEM
+# Signal wird erneut geprueft. War ein solcher Dienst da, lief der Dienst vor
+# dem Update - er wird unten mit der neuen Fassung wieder gestartet.
+by_ist_dienst() {   # $1 Prozessnummer
+    [ -r "/proc/$1/cmdline" ] || return 1
+    BY_ARGS=$(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null)
+    [ "$(echo "$BY_ARGS" | sed -n '2p')" = "$PBIN/byd.py" ] || return 1
+    echo "$BY_ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
+    [ -z "$(echo "$BY_ARGS" | sed -n '3p')" ] || return 1
+    [ "$(stat -c %u "/proc/$1" 2>/dev/null)" = "$BY_UID" ] || return 1
+    return 0
+}
+BY_UID=$(id -u loxberry 2>/dev/null || id -u)
+BY_WAISEN=0
+if [ -f "$MARKE" ]; then
+    for BY_D in /proc/[0-9]*; do
+        BY_P=${BY_D#/proc/}
+        by_ist_dienst "$BY_P" || continue
+        kill "$BY_P" 2>/dev/null
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            by_ist_dienst "$BY_P" || break
+            sleep 1
+        done
+        by_ist_dienst "$BY_P" && kill -9 "$BY_P" 2>/dev/null
+        BY_WAISEN=$((BY_WAISEN + 1))
+        echo "<INFO> Ein Abrufdienst ohne PID-Datei lief noch (PID $BY_P) und wurde"
+        echo "<INFO> beendet; er wird mit der neuen Fassung wieder gestartet."
+    done
+fi
+
+if [ -f "$MERKER" ] || [ "$BY_WAISEN" -gt 0 ]; then
     rm -f "$MERKER"
     if [ -x "$PBIN/dienst.sh" ]; then
         # BY_START_TROTZ_MARKE=1: dienst.sh startet seit 0.9.15 nicht, solange

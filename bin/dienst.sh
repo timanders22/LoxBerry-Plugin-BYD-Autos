@@ -65,8 +65,13 @@ SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)          # <home>/bin/plugi
 #
 # Hausform (Regeln/03, Regeln/06): zuerst die gelesene Umgebung, dann die
 # Suche aufwaerts nach einem Verzeichnis, das nachweislich eine Wurzel IST -
-# mit config/system/general.json, oder genau die Wurzel, unter deren
-# bin/plugins/ dieses Skript liegt. Vorbild: Dashboard 0.9.23 bin/dienst.sh.
+# mit config/system/general.json, ohne Ausnahme. Bis 0.9.16 galt daneben
+# "genau die Wurzel, unter deren bin/plugins/ dieses Skript liegt", auch ohne
+# general.json - ein fester Rueckfall auf drei Ebenen unter anderem Namen: in
+# einem fremden Baum ohne general.json starteten start und waechter dessen
+# Dienst, und stop hielt ihn an (in WSL gemessen 24.09.2026,
+# Pruefung-BYD-Autos-0.9.17, Faelle F1 bis F4; Lehre aus
+# Stand-Protokolle/2026-09-18_Welle1, "Neue Lehre fuer alle H1-Linien").
 lb_wurzel_taugt() {   # $1 Kandidat
     [ -n "$1" ] && [ -d "$1/config/plugins" ] && [ -d "$1/data/plugins" ]
 }
@@ -74,8 +79,7 @@ lb_wurzel_suchen() {
     v="$SELF"
     i=0
     while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
-        if lb_wurzel_taugt "$v" && { [ -f "$v/config/system/general.json" ] \
-                || [ "$SELF" = "$v/bin/plugins/$(basename "$SELF")" ]; }; then
+        if lb_wurzel_taugt "$v" && [ -f "$v/config/system/general.json" ]; then
             echo "$v"; return 0
         fi
         v=$(dirname "$v"); i=$((i + 1))
@@ -190,7 +194,13 @@ arbeitet() {
     [ -f "$HERZ" ] || return 0
     T=$(cat "$HERZ" 2>/dev/null)
     case "$T" in ''|*[!0-9]*) return 0 ;; esac
-    JETZT=$(date +%s)
+    JETZT=$(date +%s 2>/dev/null)
+    # Auch die Uhr ist erst eine Zahl, wenn sie als Zahl geprueft ist: bash
+    # wertet in $(( )) den INHALT einer Variablen aus, und eine Ausgabe wie
+    # a[$(befehl)] fuehrt den Befehl aus (Bestand-2026-09-18/klasse-M; hier in
+    # WSL gemessen 24.09.2026, Pruefung-BYD-Autos-0.9.17, Fall Q1). Ohne
+    # lesbare Uhr kein Urteil - wie bei fehlendem Lebenszeichen.
+    case "$JETZT" in ''|*[!0-9]*) return 0 ;; esac
     # 300 s: zehnmal der Schlagtakt. Weit genug weg von einer kurzen
     # Verzoegerung, eng genug, um ein Haengen in wenigen Minuten zu bemerken.
     [ $((JETZT - T)) -lt 300 ]
@@ -356,7 +366,10 @@ case "$1" in
             if [ "$N" -ge 3 ]; then
                 LETZT=$(cat "$PDATA/.waechter_zeit" 2>/dev/null || echo 0)
                 case "$LETZT" in ''|*[!0-9]*) LETZT=0 ;; esac
-                JETZT=$(date +%s)
+                JETZT=$(date +%s 2>/dev/null)
+                # Ohne lesbare Uhr faellt die Bremse geschlossen aus: kein
+                # Neustart (Fall Q2; Begruendung bei arbeitet()).
+                case "$JETZT" in ''|*[!0-9]*) exit 0 ;; esac
                 if [ $((JETZT - LETZT)) -lt 1800 ]; then
                     exit 0
                 fi
