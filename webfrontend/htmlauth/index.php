@@ -148,6 +148,10 @@ $by_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
  * Beanstandungsliste ("Bitte diese Punkte berichtigen") - Regeln/04. */
 $by_stoerungen = array();
 $by_ausgabe = '';
+// X-2 (Verbesserungsbau 30.09.2026): welches Formular, welche Felder
+// beanstandet wurden - daraus reisen die Eingaben mit der Einmalmeldung.
+$by_eingaben_form = '';
+$by_beanstandet = array();
 $by_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
 // U1: war es ein POST? Bleibt wahr, auch wenn das Formularmerkmal nicht passt.
 $by_post_roh = $by_post;
@@ -160,6 +164,13 @@ if (!$by_post) {
         $by_fehler = $by_einmal['fehler'];
         $by_stoerungen = $by_einmal['stoerungen'];
         $by_ausgabe = $by_einmal['ausgabe'];
+        // X-2: nach einer Beanstandung die eingetippten Werte zeigen.
+        if (is_array($by_einmal['eingaben'])) {
+            by_eingaben_setzen($by_einmal['eingaben']);
+            if (by_eingaben_aktiv() !== '') {
+                $by_meldungen[] = by_t('EINST.EINGABEN_ZURUECK');
+            }
+        }
     }
 }
 
@@ -209,7 +220,7 @@ $by_formular = ($by_post && isset($_POST['formular'])) ? (string) $_POST['formul
  * Positivliste sieht keines von beiden an. Die Zeile im Reiter Test, die es
  * findet, steht seit dieser Fassung dort. */
 $by_formulare = array('einstellungen', 'mqtt', 'dienst', 'token', 'log', 'test',
-                      'vorlage', 'selbsttest', 'sichern', 'zurueck');
+                      'vorlage', 'selbsttest', 'sichern', 'zurueck', 'ladungen');
 if ($by_post && !in_array($by_formular, $by_formulare, true)) {
     $by_fehler[] = by_t('ALLG.FEHLER_FORMULAR');
     $by_post = false;
@@ -268,6 +279,24 @@ if ($by_post && $by_formular === 'vorlage') {
     exit;
 }
 
+/* ---------------- Ladevorgaenge herunterladen (CSV) ----------------
+ * BYD-b1 (Verbesserungsbau 30.09.2026): die Hilfe versprach bis 0.9.18 einen
+ * Download, den es nicht gab (U12). Eigenes Formular mit dem Marker
+ * ladungen_csv am Knopf - wie die Vorlage verlangt der Handler ihn und weist
+ * ein Formular ohne ihn ab. Aendert nichts; endet mit exit, also ohne
+ * Umleitung. Ohne Ladevorgang: nur die Kopfzeile, HTTP 200. */
+if ($by_post && $by_formular === 'ladungen' && !isset($_POST['ladungen_csv'])) {
+    $by_fehler[] = by_t('ALLG.FEHLER_FORMULAR');
+    $by_post = false;
+}
+if ($by_post && $by_formular === 'ladungen') {
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="byd_ladevorgaenge_'
+           . date('Ymd_His') . '.csv"');
+    echo by_ladungen_csv();
+    exit;
+}
+
 /* ---------------- Einstellungen speichern ---------------- */
 if ($by_post && $by_formular === 'einstellungen') {
     $by_cfg = by_config();
@@ -285,12 +314,14 @@ if ($by_post && $by_formular === 'einstellungen') {
         if (!preg_match('/^[0-9]+$/', $by_wert)) {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_ZAHL'),
                 by_t('EINST.L_' . strtoupper($by_feld)));
+            $by_beanstandet[] = $by_feld;
             continue;
         }
         $by_zahl = (int) $by_wert;
         if ($by_zahl < $by_grenzen[0] || $by_zahl > $by_grenzen[1]) {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_BEREICH'),
                 by_t('EINST.L_' . strtoupper($by_feld)), $by_grenzen[0], $by_grenzen[1]);
+            $by_beanstandet[] = $by_feld;
             continue;
         }
         $by_cfg[$by_feld] = $by_zahl;
@@ -301,6 +332,8 @@ if ($by_post && $by_formular === 'einstellungen') {
     if (isset($by_cfg['temp_min'], $by_cfg['temp_max'])
         && $by_cfg['temp_min'] > $by_cfg['temp_max']) {
         $by_fehler[] = by_t('EINST.FEHLER_TEMP_TAUSCH');
+        $by_beanstandet[] = 'temp_min';
+        $by_beanstandet[] = 'temp_max';
         // Beide Werte zurueck auf den bisherigen Stand. Einzeln sind sie
         // gueltig, zusammen ergeben sie ein Fenster, in das keine Temperatur
         // passt - dann wiese der Dienst jeden Klimabefehl ab, und der Anwender
@@ -316,6 +349,17 @@ if ($by_post && $by_formular === 'einstellungen') {
     $by_cfg['abfahrt_ein'] = isset($_POST['abfahrt_ein']) ? 1 : 0;
     $by_cfg['ladeempf_ein'] = isset($_POST['ladeempf_ein']) ? 1 : 0;
     $by_cfg['ladeempf_unter'] = isset($_POST['ladeempf_unter']) ? 1 : 0;
+    /* Laden-1: Ladeempfehlung nach Strompreis. Die Quelle nur aus der Liste
+     * der nachgelesenen Linien; beanstandet behaelt sie den bisherigen Wert. */
+    $by_cfg['preisempf_ein'] = isset($_POST['preisempf_ein']) ? 1 : 0;
+    $by_pq = (isset($_POST['preisempf_quelle']) && is_string($_POST['preisempf_quelle']))
+        ? $_POST['preisempf_quelle'] : '';
+    if (array_key_exists($by_pq, by_preis_quellen())) {
+        $by_cfg['preisempf_quelle'] = $by_pq;
+    } else {
+        $by_fehler[] = by_t('EINST.FEHLER_PREISEMPF_QUELLE');
+        $by_beanstandet[] = 'preisempf_quelle';
+    }
 
     /* Die Zieltemperatur der Vorklimatisierung muss in die Grenzen passen, die
      * fuer schreibende Befehle gelten. Sie wird ABGEWIESEN und nicht gekappt:
@@ -327,6 +371,7 @@ if ($by_post && $by_formular === 'einstellungen') {
         $by_fehler[] = sprintf(by_t('EINST.FEHLER_ABFAHRT_TEMP'),
             (int) $by_cfg['abfahrt_temp'], (int) $by_cfg['temp_min'],
             (int) $by_cfg['temp_max']);
+        $by_beanstandet[] = 'abfahrt_temp';
         // Nur dieses eine Feld zurueck, nicht das ganze Formular.
         $by_cfg['abfahrt_temp'] = $by_cfg_alt['abfahrt_temp'];
     }
@@ -335,7 +380,8 @@ if ($by_post && $by_formular === 'einstellungen') {
      * nicht erlaubt - ein Abo auf "#" liefert alles, was im Broker steht, und
      * die Ladeempfehlung rechnete dann mit dem erstbesten Wert. */
     foreach (array('abfahrt_praefix' => 'EINST.L_ABFAHRT_PRAEFIX',
-                   'ladeempf_thema'  => 'EINST.L_LADEEMPF_THEMA') as $by_f => $by_bez) {
+                   'ladeempf_thema'  => 'EINST.L_LADEEMPF_THEMA',
+                   'preisempf_praefix' => 'EINST.L_PREISEMPF_PRAEFIX') as $by_f => $by_bez) {
         $by_w = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
             isset($_POST[$by_f]) ? (string) $_POST[$by_f] : ''));
         if ($by_w === '') {
@@ -346,6 +392,7 @@ if ($by_post && $by_formular === 'einstellungen') {
         }
         if (!preg_match('#^[A-Za-z0-9_/\-]{1,128}$#', $by_w)) {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_THEMA'), by_t($by_bez));
+            $by_beanstandet[] = $by_f;
             continue;
         }
         // Das Beschneiden der Schraegstriche bleibt STILL, und zwar mit
@@ -371,11 +418,13 @@ if ($by_post && $by_formular === 'einstellungen') {
         }
         if (!preg_match('/^-?[0-9]{1,6}(\.[0-9]{1,8})?$/', $by_w)) {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_DEZIMAL'), by_t($by_g[2]));
+            $by_beanstandet[] = $by_f;
             continue;
         }
         if ((float) $by_w < $by_g[0] || (float) $by_w > $by_g[1]) {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_BEREICH'), by_t($by_g[2]),
                 $by_g[0], $by_g[1]);
+            $by_beanstandet[] = $by_f;
             continue;
         }
         $by_cfg[$by_f] = $by_w;
@@ -385,9 +434,12 @@ if ($by_post && $by_formular === 'einstellungen') {
      * erst in Loxone. */
     if (($by_cfg['heim_breite'] === '') !== ($by_cfg['heim_laenge'] === '')) {
         $by_fehler[] = by_t('EINST.FEHLER_HEIM_HALB');
+        $by_beanstandet[] = 'heim_breite';
+        $by_beanstandet[] = 'heim_laenge';
     }
     if (!empty($by_cfg['ladeempf_ein']) && trim((string) $by_cfg['ladeempf_thema']) === '') {
         $by_fehler[] = by_t('EINST.FEHLER_LADEEMPF_OHNE_THEMA');
+        $by_beanstandet[] = 'ladeempf_thema';
     }
 
     /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
@@ -406,6 +458,7 @@ if ($by_post && $by_formular === 'einstellungen') {
     $by_benutzer = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', $by_benutzer_roh));
     if ($by_benutzer !== $by_benutzer_roh) {
         $by_fehler[] = by_t('EINST.HINWEIS_BENUTZER_GESAEUBERT');
+        $by_beanstandet[] = 'benutzer';
     }
     $by_pw = isset($_POST['passwort']) ? (string) $_POST['passwort'] : '';
     $by_pin = isset($_POST['pin']) ? trim((string) $_POST['pin']) : '';
@@ -416,9 +469,38 @@ if ($by_post && $by_formular === 'einstellungen') {
     if ($by_land !== strtoupper($by_land_roh)) {
         $by_fehler[] = sprintf(by_t('EINST.HINWEIS_LAND_GESAEUBERT'),
             by_e($by_land_roh), by_e($by_land));
+        $by_beanstandet[] = 'land';
     }
 
-    if (isset($_POST['zugang_loeschen'])) {
+    /* NACHTRAG (Entscheidung 16, 30.09.2026): erst ALLES pruefen, dann -
+     * nur ohne jede Beanstandung - schreiben. Bis dahin nahm eine beanstandete
+     * PIN oder Laenderkennung nur sich zurueck (U6), und das Uebrige wurde
+     * gespeichert. Jetzt bleibt bei einer Beanstandung alles, wie es war;
+     * die Eingaben kommen ueber X-2 zurueck (Passwort und PIN nie).
+     *
+     * Ist die FORM eines Geheimnisses erkennbar falsch, wird abgewiesen, statt
+     * den Benutzer in eine Fehlermeldung des Anbieters laufen zu lassen. */
+    if (!isset($_POST['zugang_loeschen'])) {
+        if ($by_pin !== '' && !preg_match('/^[0-9]{4,8}$/', $by_pin)) {
+            $by_fehler[] = by_t('EINST.FEHLER_PIN');
+            $by_beanstandet[] = 'pin';     // nur markiert - die PIN reist nie mit
+        }
+        if ($by_land !== '' && !preg_match('/^[A-Z]{2}$/', $by_land)) {
+            $by_fehler[] = by_t('EINST.FEHLER_LAND');
+            $by_beanstandet[] = 'land';
+        }
+        /* Passwort ohne Benutzername: VOR dem Schreiben gefragt, an dem Stand,
+         * der entstuende (ein leeres Passwortfeld behaelt das gespeicherte). */
+        $by_zg_alt = by_zugang();
+        if ($by_benutzer === '' && ($by_pw !== '' || $by_zg_alt['laenge'] > 0)) {
+            $by_fehler[] = by_t('EINST.WARN_PW_OHNE_KONTO');
+            $by_beanstandet[] = 'benutzer';
+        }
+    }
+    $by_nichts_speichern = (bool) $by_fehler;
+    if ($by_nichts_speichern) {
+        // Nichts - auch kein Loeschen der Zugangsdaten.
+    } elseif (isset($_POST['zugang_loeschen'])) {
         // Ausdruecklich gewollt: alles weg. Was im selben Absenden in den
         // Feldern stand, wird verworfen - sonst waere unklar, ob Loeschen oder
         // Eintragen gewonnen hat.
@@ -427,68 +509,39 @@ if ($by_post && $by_formular === 'einstellungen') {
         } else {
             $by_fehler[] = by_t('EINST.FEHLER_ZUGANG_LOESCHEN');
         }
-    } else {
-        // Ist die FORM eines Geheimnisses erkennbar falsch, wird beim Speichern
-        // abgewiesen, statt den Benutzer in eine Fehlermeldung des Anbieters
-        // laufen zu lassen.
-        /* U6 (Durchgang 29.09.2026): eine beanstandete PIN oder Laenderkennung
-         * nimmt nur SICH zurueck. Bis 0.9.19 verwarf die elseif-Kette auch
-         * Benutzername und Passwort, waehrend die Meldung sagte, alles
-         * Uebrige sei gespeichert (gemessen, Oberflaechen-Pruefer Z2). Leer
-         * bzw. null heisst in by_zugang_speichern(): bisherigen Wert behalten. */
-        $by_pin_neu = $by_pin;
-        $by_land_neu = $by_land;
-        if ($by_pin !== '' && !preg_match('/^[0-9]{4,8}$/', $by_pin)) {
-            $by_fehler[] = by_t('EINST.FEHLER_PIN');
-            $by_pin_neu = '';
-        }
-        if ($by_land !== '' && !preg_match('/^[A-Z]{2}$/', $by_land)) {
-            $by_fehler[] = by_t('EINST.FEHLER_LAND');
-            $by_land_neu = null;
-        }
-        if (!by_zugang_speichern($by_benutzer, $by_pw, $by_pin_neu, $by_land_neu)) {
-            $by_fehler[] = by_t('EINST.FEHLER_ZUGANG_SPEICHERN');
-        }
+    } elseif (!by_zugang_speichern($by_benutzer, $by_pw, $by_pin, $by_land)) {
+        // Leer heisst in by_zugang_speichern(): bisherigen Wert behalten.
+        $by_fehler[] = by_t('EINST.FEHLER_ZUGANG_SPEICHERN');
     }
     $by_zg = by_zugang();
-    if ($by_zg['laenge'] > 0 && $by_zg['benutzer'] === '') {
-        $by_fehler[] = by_t('EINST.WARN_PW_OHNE_KONTO');
-    }
     // Schreibende Befehle ohne Steuer-PIN sind eine Beanstandung, aber kein
     // Grund, das Speichern zu verweigern: was sich zurechtruecken laesst, wird
     // gespeichert, und die Beanstandung erscheint daneben.
-    if (!empty($by_cfg['steuerung_ein']) && $by_zg['pin_laenge'] === 0) {
+    if (!$by_nichts_speichern && !empty($by_cfg['steuerung_ein']) && $by_zg['pin_laenge'] === 0) {
         $by_meldungen[] = by_t('EINST.HINWEIS_PIN_FEHLT');
     }
 
-    /* SPEICHERN - auch dann, wenn eine Eingabe beanstandet wurde.
+    /* SPEICHERN - nur ohne Beanstandung (Nachtrag, Entscheidung 16).
      *
-     * Vorher stand hier "if (!$by_fehler)". Damit verwarf EIN Einwand das
-     * ganze Formular: wer das Abrufintervall aendert und sich dabei in der
-     * Heimatposition vertippt, verliert auch das Intervall - beim naechsten
-     * Laden steht wieder der alte Wert da, ohne dass jemand sagt, dass er
-     * verworfen wurde. Bei sechzehn Feldern auf einer Seite ist das der
-     * Regelfall und nicht der Ausnahmefall.
-     *
-     * Die Haltung stand schon im Haus, drei Absaetze weiter oben bei der
-     * Steuer-PIN: "was sich zurechtruecken laesst, wird gespeichert, und die
-     * Beanstandung erscheint daneben". Sie wird jetzt durchgehalten.
-     *
-     * Das ist gefahrlos, weil eine beanstandete Eingabe gar nicht erst in
-     * $by_cfg landet - die Pruefschleifen springen mit continue weiter, und
-     * das betroffene Feld behaelt seinen bisherigen Wert. Wo zwei Felder
-     * zusammen nicht passen, sind sie oben ausdruecklich zurueckgenommen
-     * worden.
-     *
-     * Blockierend bleibt allein, was sich nicht schreiben laesst. */
-    if (by_config_speichern($by_cfg)) {
-        $by_meldungen[] = $by_fehler
-            ? sprintf(by_t('EINST.GESPEICHERT_MIT_EINWAND'), count($by_fehler))
-            : by_t('EINST.GESPEICHERT');
+     * Von 0.9.6 bis zum Verbesserungsbau speicherte die Linie auch bei einer
+     * Beanstandung alles Uebrige, weil ein verworfenes Formular die Eingaben
+     * kostete ("wer das Abrufintervall aendert und sich dabei in der
+     * Heimatposition vertippt, verliert auch das Intervall"). Seit X-2 kommen
+     * die Eingaben nach der Umleitung zurueck - dieser Grund ist entfallen, und
+     * ein halb gespeichertes Formular neben zurueckgegebenen Eingaben ist
+     * schwerer zu lesen als ein ganz abgewiesenes. Hausregel (Regeln/04, X-2):
+     * nach einem beanstandeten POST ist die Konfiguration unveraendert. */
+    if ($by_nichts_speichern) {
+        $by_meldungen[] = sprintf(by_t('EINST.NICHT_GESPEICHERT'), count($by_fehler));
+    } elseif (by_config_speichern($by_cfg)) {
+        $by_meldungen[] = by_t('EINST.GESPEICHERT');
     } else {
         $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
     }
     $by_tab = 'tab-settings';
+    if ($by_beanstandet) {
+        $by_eingaben_form = 'einstellungen';
+    }
 
     /* mqtt_ein und mqtt_topic werden hier bewusst NICHT angefasst: sie wohnen
      * im Reiter MQTT und haben dort ein eigenes Formular. Stuende hier weiter
@@ -505,12 +558,14 @@ if ($by_post && $by_formular === 'mqtt') {
         (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
     if ($by_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $by_mtopic)) {
         $by_fehler[] = by_t('EINST.FEHLER_TOPIC');
+        $by_beanstandet[] = 'mqtt_topic';
     } elseif (strpos($by_mtopic, '//') !== false || trim($by_mtopic, '/') === '') {
         /* M8 (Durchgang 29.09.2026): eine leere Ebene wird abgewiesen. Der
          * Dienst zieht "a//b" zu "a/b" zusammen; die Seite zeigte "a//b/#"
          * als Abo, und wer es abschrieb, abonnierte ein Thema, auf das nie
          * etwas kommt (gemessen, MQTT-Pruefer B8). */
         $by_fehler[] = by_t('EINST.FEHLER_TOPIC_EBENE');
+        $by_beanstandet[] = 'mqtt_topic';
     } else {
         $by_mcfg['mqtt_topic'] = trim($by_mtopic, '/');
     }
@@ -520,12 +575,14 @@ if ($by_post && $by_formular === 'mqtt') {
      * und sein Haken bei MQTT war wieder fort. Ohne eine einzige Zeile
      * Erklaerung ist das nicht von "hat nicht geklickt" zu unterscheiden.
      *
-     * Und der Themenname wird gespeichert, ohne mqtt_ein zu verwerfen: der
-     * Haken allein ist gueltig, auch wenn der Name beanstandet wurde. */
-    if (by_config_speichern($by_mcfg)) {
-        $by_meldungen[] = $by_fehler
-            ? sprintf(by_t('EINST.GESPEICHERT_MIT_EINWAND'), count($by_fehler))
-            : by_t('EINST.GESPEICHERT');
+     * NACHTRAG (Entscheidung 16): bei einem beanstandeten Themennamen wird
+     * NICHTS gespeichert, auch nicht der Haken (bis dahin galt der Haken
+     * allein). Ohne Speichern auch kein Nachfuehren der Abodatei und kein
+     * Abraeumen. Die Eingaben kommen ueber X-2 zurueck. */
+    if ($by_fehler) {
+        $by_meldungen[] = sprintf(by_t('EINST.NICHT_GESPEICHERT'), count($by_fehler));
+    } elseif (by_config_speichern($by_mcfg)) {
+        $by_meldungen[] = by_t('EINST.GESPEICHERT');
         /* M5: die Abodatei folgt dem Praefix - nur wenn sie abweicht. */
         $by_abo = by_abodatei_nachfuehren($by_mcfg['mqtt_topic']);
         if ($by_abo === 'neu') {
@@ -554,6 +611,9 @@ if ($by_post && $by_formular === 'mqtt') {
         $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
     }
     $by_tab = 'tab-mqtt';
+    if ($by_beanstandet) {
+        $by_eingaben_form = 'mqtt';
+    }
 }
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
@@ -664,7 +724,20 @@ if ($by_post && $by_formular === 'selbsttest') {
  * U4: dieser und der naechste Handler stehen seit dem Umbau VOR dem Laden -
  * nach dem Zurueckspielen zeigte die Seite bis 0.9.19 den alten Stand. */
 if ($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern'])) {
-    $by_js = json_encode(array_merge(by_config(), by_sicherung_zugang()),
+    /* BYD-b2: mit dem lesbaren Kopf _hinweis/_stand (by_sicherung_bauen). */
+    $by_sich = by_sicherung_bauen();
+    /* X-3 (Verbesserungsbau 30.09.2026): bestuende ein gespeicherter Wert das
+     * eigene Zurueckspielen nicht, sagt es der Kopf der Datei - mit den
+     * NAMEN, nie den Werten. Geliefert wird trotzdem, vollstaendig. */
+    $by_altw = by_rueckspiel_altwerte($by_sich);
+    if ($by_altw) {
+        $by_sich = array_merge(array(
+            '_hinweis' => $by_sich['_hinweis'],
+            '_stand'   => $by_sich['_stand'],
+            '_warnung' => sprintf(by_t('EINST.SICH_ALTWERT_KOPF'), implode(', ', $by_altw)),
+        ), $by_sich);
+    }
+    $by_js = json_encode($by_sich,
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($by_js !== false) {
         header('Content-Type: application/json; charset=utf-8');
@@ -731,7 +804,8 @@ if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
  * (Vorlagen, Sicherung) liefern vorher selbst und enden mit exit. */
 if ($by_post_roh && !($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern']))) {
     if (by_einmal_schreiben(array('meldungen' => $by_meldungen, 'fehler' => $by_fehler,
-            'stoerungen' => $by_stoerungen, 'ausgabe' => $by_ausgabe))) {
+            'stoerungen' => $by_stoerungen, 'ausgabe' => $by_ausgabe,
+            'eingaben' => by_eingaben_sammeln($by_eingaben_form, $by_beanstandet)))) {
         header('Location: index.php?form=' . rawurlencode(substr($by_tab, 4)), true, 303);
         exit;
     }
@@ -867,6 +941,10 @@ ob_start();
    (.sm-feld .ui-select). Ohne diese Zeile laeuft das Feld ueber die ganze
    Breite des Kastens. */
 .sm-wrap .sm-auswahl { max-width: 520px; }
+/* Ergaenzung (Verbesserungsbau 30.09.2026, X-2), nicht aus der Vorlage: das
+   nach einer Beanstandung rot umrandete Feld. */
+.sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
+    border: 2px solid #c62828 !important; background-color: #fff5f5; }
 </style>
 <div class="sm-wrap">
 
@@ -1018,22 +1096,22 @@ ob_start();
 <div class="sm-warnung"><?= by_t('EINST.KONTO_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="benutzer"><?= by_e(by_t('EINST.L_BENUTZER')) ?></label>
-  <input data-role="none" type="text" id="benutzer" name="benutzer" value="<?= by_e($by_zg['benutzer']) ?>">
+  <input data-role="none" type="text" id="benutzer" name="benutzer" value="<?= by_e(by_eingabe('einstellungen', 'benutzer', $by_zg['benutzer'])) ?>"<?= by_markierung('benutzer') ?>>
   <div class="sm-hilfe"><?= by_t('EINST.H_BENUTZER') ?></div>
 </div>
 <div class="sm-feld">
   <label for="passwort"><?= by_e(by_t('EINST.L_PASSWORT')) ?></label>
-  <input data-role="none" type="password" id="passwort" name="passwort" value="" placeholder="<?= $by_zg['laenge'] > 0 ? by_e(sprintf(by_t('EINST.PW_GESETZT'), $by_zg['laenge'])) : by_e(by_t('EINST.PW_LEER')) ?>">
+  <input data-role="none" type="password" id="passwort" name="passwort" value="" placeholder="<?= $by_zg['laenge'] > 0 ? by_e(sprintf(by_t('EINST.PW_GESETZT'), $by_zg['laenge'])) : by_e(by_t('EINST.PW_LEER')) ?>"<?= by_markierung('passwort') ?>>
   <div class="sm-hilfe"><?= by_t('EINST.H_PASSWORT') ?></div>
 </div>
 <div class="sm-feld">
   <label for="pin"><?= by_e(by_t('EINST.L_PIN')) ?></label>
-  <input data-role="none" type="password" id="pin" name="pin" value="" maxlength="8" placeholder="<?= $by_zg['pin_laenge'] > 0 ? by_e(by_t('EINST.PIN_GESETZT')) : by_e(by_t('EINST.PIN_LEER')) ?>">
+  <input data-role="none" type="password" id="pin" name="pin" value="" maxlength="8" placeholder="<?= $by_zg['pin_laenge'] > 0 ? by_e(by_t('EINST.PIN_GESETZT')) : by_e(by_t('EINST.PIN_LEER')) ?>"<?= by_markierung('pin') ?>>
   <div class="sm-hilfe"><?= by_t('EINST.H_PIN') ?></div>
 </div>
 <div class="sm-feld">
   <label for="land"><?= by_e(by_t('EINST.L_LAND')) ?></label>
-  <input data-role="none" type="text" id="land" name="land" value="<?= by_e($by_zg['land']) ?>" maxlength="2" placeholder="DE">
+  <input data-role="none" type="text" id="land" name="land" value="<?= by_e(by_eingabe('einstellungen', 'land', $by_zg['land'])) ?>"<?= by_markierung('land') ?> maxlength="2" placeholder="DE">
   <div class="sm-hilfe"><?= by_t('EINST.H_LAND') ?></div>
 </div>
 <?php if ($by_zg['benutzer'] !== '' || $by_zg['laenge'] > 0 || $by_zg['pin_laenge'] > 0) { ?>
@@ -1050,24 +1128,24 @@ ob_start();
 <div class="sm-warnung"><?= by_t('EINST.TAKT_WARNUNG') ?></div>
 <div class="sm-feld">
   <label for="intervall"><?= by_e(by_t('EINST.L_INTERVALL')) ?></label>
-  <input data-role="none" type="number" id="intervall" name="intervall" value="<?= (int) $by_cfg['intervall'] ?>" min="120" max="3600">
+  <input data-role="none" type="number" id="intervall" name="intervall" value="<?= by_e(by_eingabe('einstellungen', 'intervall', (int) $by_cfg['intervall'])) ?>"<?= by_markierung('intervall') ?> min="120" max="3600">
   <div class="sm-hilfe"><?= by_t('EINST.H_INTERVALL') ?></div>
 </div>
 <div class="sm-feld">
   <label for="verlauf_tage"><?= by_e(by_t('EINST.L_VERLAUF_TAGE')) ?></label>
-  <input data-role="none" type="number" id="verlauf_tage" name="verlauf_tage" value="<?= (int) $by_cfg['verlauf_tage'] ?>" min="1" max="90">
+  <input data-role="none" type="number" id="verlauf_tage" name="verlauf_tage" value="<?= by_e(by_eingabe('einstellungen', 'verlauf_tage', (int) $by_cfg['verlauf_tage'])) ?>"<?= by_markierung('verlauf_tage') ?> min="1" max="90">
   <div class="sm-hilfe"><?= by_t('EINST.H_VERLAUF_TAGE') ?></div>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="gps_ein" value="1" <?= !empty($by_cfg['gps_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="gps_ein" value="1" <?= by_eingabe_an('einstellungen', 'gps_ein', !empty($by_cfg['gps_ein'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_GPS_EIN')) ?>
   </label>
   <div class="sm-hilfe"><?= by_t('EINST.H_GPS_EIN') ?></div>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_bibliothek" value="1" <?= !empty($by_cfg['mqtt_bibliothek']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="mqtt_bibliothek" value="1" <?= by_eingabe_an('einstellungen', 'mqtt_bibliothek', !empty($by_cfg['mqtt_bibliothek'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_MQTT_BIBLIOTHEK')) ?>
   </label>
   <div class="sm-hilfe"><?= by_t('EINST.H_MQTT_BIBLIOTHEK') ?></div>
@@ -1077,22 +1155,22 @@ ob_start();
 <div class="sm-warnung"><?= by_t('EINST.STEUERUNG_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="steuerung_ein" value="1" <?= !empty($by_cfg['steuerung_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="steuerung_ein" value="1" <?= by_eingabe_an('einstellungen', 'steuerung_ein', !empty($by_cfg['steuerung_ein'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_STEUERUNG_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="temp_min"><?= by_e(by_t('EINST.L_TEMP_MIN')) ?></label>
-  <input data-role="none" type="number" id="temp_min" name="temp_min" value="<?= (int) $by_cfg['temp_min'] ?>" min="10" max="32">
+  <input data-role="none" type="number" id="temp_min" name="temp_min" value="<?= by_e(by_eingabe('einstellungen', 'temp_min', (int) $by_cfg['temp_min'])) ?>"<?= by_markierung('temp_min') ?> min="10" max="32">
 </div>
 <div class="sm-feld">
   <label for="temp_max"><?= by_e(by_t('EINST.L_TEMP_MAX')) ?></label>
-  <input data-role="none" type="number" id="temp_max" name="temp_max" value="<?= (int) $by_cfg['temp_max'] ?>" min="10" max="32">
+  <input data-role="none" type="number" id="temp_max" name="temp_max" value="<?= by_e(by_eingabe('einstellungen', 'temp_max', (int) $by_cfg['temp_max'])) ?>"<?= by_markierung('temp_max') ?> min="10" max="32">
   <div class="sm-hilfe"><?= by_t('EINST.H_TEMP') ?></div>
 </div>
 <div class="sm-feld">
   <label for="wartezeit"><?= by_e(by_t('EINST.L_WARTEZEIT')) ?></label>
-  <input data-role="none" type="number" id="wartezeit" name="wartezeit" value="<?= (int) $by_cfg['wartezeit'] ?>" min="0" max="30">
+  <input data-role="none" type="number" id="wartezeit" name="wartezeit" value="<?= by_e(by_eingabe('einstellungen', 'wartezeit', (int) $by_cfg['wartezeit'])) ?>"<?= by_markierung('wartezeit') ?> min="0" max="30">
   <div class="sm-hilfe"><?= by_t('EINST.H_WARTEZEIT') ?></div>
 </div>
 
@@ -1100,32 +1178,32 @@ ob_start();
 <div class="sm-warnung"><?= by_t('EINST.ABFAHRT_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="abfahrt_ein" value="1" <?= !empty($by_cfg['abfahrt_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="abfahrt_ein" value="1" <?= by_eingabe_an('einstellungen', 'abfahrt_ein', !empty($by_cfg['abfahrt_ein'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_ABFAHRT_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="abfahrt_praefix"><?= by_e(by_t('EINST.L_ABFAHRT_PRAEFIX')) ?></label>
-  <input data-role="none" type="text" id="abfahrt_praefix" name="abfahrt_praefix" value="<?= by_e($by_cfg['abfahrt_praefix']) ?>" placeholder="abfahrt">
+  <input data-role="none" type="text" id="abfahrt_praefix" name="abfahrt_praefix" value="<?= by_e(by_eingabe('einstellungen', 'abfahrt_praefix', $by_cfg['abfahrt_praefix'])) ?>"<?= by_markierung('abfahrt_praefix') ?> placeholder="abfahrt">
   <div class="sm-hilfe"><?= by_t('EINST.H_ABFAHRT_PRAEFIX') ?></div>
 </div>
 <div class="sm-feld">
   <label for="abfahrt_vorlauf"><?= by_e(by_t('EINST.L_ABFAHRT_VORLAUF')) ?></label>
-  <input data-role="none" type="number" id="abfahrt_vorlauf" name="abfahrt_vorlauf" value="<?= (int) $by_cfg['abfahrt_vorlauf'] ?>" min="1" max="120">
+  <input data-role="none" type="number" id="abfahrt_vorlauf" name="abfahrt_vorlauf" value="<?= by_e(by_eingabe('einstellungen', 'abfahrt_vorlauf', (int) $by_cfg['abfahrt_vorlauf'])) ?>"<?= by_markierung('abfahrt_vorlauf') ?> min="1" max="120">
   <div class="sm-hilfe"><?= by_t('EINST.H_ABFAHRT_VORLAUF') ?></div>
 </div>
 <div class="sm-feld">
   <label for="abfahrt_temp"><?= by_e(by_t('EINST.L_ABFAHRT_TEMP')) ?></label>
-  <input data-role="none" type="number" id="abfahrt_temp" name="abfahrt_temp" value="<?= (int) $by_cfg['abfahrt_temp'] ?>" min="10" max="32">
+  <input data-role="none" type="number" id="abfahrt_temp" name="abfahrt_temp" value="<?= by_e(by_eingabe('einstellungen', 'abfahrt_temp', (int) $by_cfg['abfahrt_temp'])) ?>"<?= by_markierung('abfahrt_temp') ?> min="10" max="32">
 </div>
 <div class="sm-feld">
   <label for="abfahrt_fahrzeug"><?= by_e(by_t('EINST.L_ABFAHRT_FAHRZEUG')) ?></label>
-  <input data-role="none" type="number" id="abfahrt_fahrzeug" name="abfahrt_fahrzeug" value="<?= (int) $by_cfg['abfahrt_fahrzeug'] ?>" min="1" max="99">
+  <input data-role="none" type="number" id="abfahrt_fahrzeug" name="abfahrt_fahrzeug" value="<?= by_e(by_eingabe('einstellungen', 'abfahrt_fahrzeug', (int) $by_cfg['abfahrt_fahrzeug'])) ?>"<?= by_markierung('abfahrt_fahrzeug') ?> min="1" max="99">
   <div class="sm-hilfe"><?= by_t('EINST.H_ABFAHRT_FAHRZEUG') ?></div>
 </div>
 <div class="sm-feld">
   <label for="abfahrt_alter"><?= by_e(by_t('EINST.L_ABFAHRT_ALTER')) ?></label>
-  <input data-role="none" type="number" id="abfahrt_alter" name="abfahrt_alter" value="<?= (int) $by_cfg['abfahrt_alter'] ?>" min="60" max="3600">
+  <input data-role="none" type="number" id="abfahrt_alter" name="abfahrt_alter" value="<?= by_e(by_eingabe('einstellungen', 'abfahrt_alter', (int) $by_cfg['abfahrt_alter'])) ?>"<?= by_markierung('abfahrt_alter') ?> min="60" max="3600">
   <div class="sm-hilfe"><?= by_t('EINST.H_ABFAHRT_ALTER') ?></div>
 </div>
 
@@ -1133,52 +1211,84 @@ ob_start();
 <div class="sm-hinweis"><?= by_t('EINST.LADEEMPF_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="ladeempf_ein" value="1" <?= !empty($by_cfg['ladeempf_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="ladeempf_ein" value="1" <?= by_eingabe_an('einstellungen', 'ladeempf_ein', !empty($by_cfg['ladeempf_ein'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_LADEEMPF_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="ladeempf_thema"><?= by_e(by_t('EINST.L_LADEEMPF_THEMA')) ?></label>
-  <input data-role="none" type="text" id="ladeempf_thema" name="ladeempf_thema" value="<?= by_e($by_cfg['ladeempf_thema']) ?>" placeholder="awattar/preis_ct">
+  <input data-role="none" type="text" id="ladeempf_thema" name="ladeempf_thema" value="<?= by_e(by_eingabe('einstellungen', 'ladeempf_thema', $by_cfg['ladeempf_thema'])) ?>"<?= by_markierung('ladeempf_thema') ?> placeholder="awattar/preis_ct">
   <div class="sm-hilfe"><?= by_t('EINST.H_LADEEMPF_THEMA') ?></div>
 </div>
 <div class="sm-feld">
   <label for="ladeempf_grenze"><?= by_e(by_t('EINST.L_LADEEMPF_GRENZE')) ?></label>
-  <input data-role="none" type="text" id="ladeempf_grenze" name="ladeempf_grenze" value="<?= by_e($by_cfg['ladeempf_grenze']) ?>">
+  <input data-role="none" type="text" id="ladeempf_grenze" name="ladeempf_grenze" value="<?= by_e(by_eingabe('einstellungen', 'ladeempf_grenze', $by_cfg['ladeempf_grenze'])) ?>"<?= by_markierung('ladeempf_grenze') ?>>
   <div class="sm-hilfe"><?= by_t('EINST.H_LADEEMPF_GRENZE') ?></div>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="ladeempf_unter" value="1" <?= !empty($by_cfg['ladeempf_unter']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="ladeempf_unter" value="1" <?= by_eingabe_an('einstellungen', 'ladeempf_unter', !empty($by_cfg['ladeempf_unter'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_LADEEMPF_UNTER')) ?>
   </label>
   <div class="sm-hilfe"><?= by_t('EINST.H_LADEEMPF_UNTER') ?></div>
 </div>
 <div class="sm-feld">
   <label for="ladeempf_alter"><?= by_e(by_t('EINST.L_LADEEMPF_ALTER')) ?></label>
-  <input data-role="none" type="number" id="ladeempf_alter" name="ladeempf_alter" value="<?= (int) $by_cfg['ladeempf_alter'] ?>" min="60" max="86400">
+  <input data-role="none" type="number" id="ladeempf_alter" name="ladeempf_alter" value="<?= by_e(by_eingabe('einstellungen', 'ladeempf_alter', (int) $by_cfg['ladeempf_alter'])) ?>"<?= by_markierung('ladeempf_alter') ?> min="60" max="86400">
   <div class="sm-hilfe"><?= by_t('EINST.H_LADEEMPF_ALTER') ?></div>
+</div>
+
+<!-- Laden-1 (Verbesserungsbau 30.09.2026): Ladeempfehlung nach Strompreis
+     aus Spotpreis aWATTar oder Tibber, ab Werk aus. -->
+<h2><?= by_e(by_t('EINST.H_PREISEMPF')) ?></h2>
+<div class="sm-hinweis"><?= by_t('EINST.PREISEMPF_ERKLAERUNG') ?></div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="preisempf_ein" value="1" <?= by_eingabe_an('einstellungen', 'preisempf_ein', !empty($by_cfg['preisempf_ein'])) ? 'checked' : '' ?>>
+    <?= by_e(by_t('EINST.L_PREISEMPF_EIN')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label for="preisempf_quelle"><?= by_e(by_t('EINST.L_PREISEMPF_QUELLE')) ?></label>
+  <select data-role="none" class="sm-auswahl" id="preisempf_quelle" name="preisempf_quelle"<?= by_markierung('preisempf_quelle') ?>>
+<?php $by_pq_ist = by_eingabe('einstellungen', 'preisempf_quelle',
+          is_string($by_cfg['preisempf_quelle']) ? $by_cfg['preisempf_quelle'] : '');
+      foreach (array('awattar' => 'EINST.O_PREISEMPF_AWATTAR', 'tibber' => 'EINST.O_PREISEMPF_TIBBER') as $by_pk => $by_pt) { ?>
+    <option value="<?= by_e($by_pk) ?>"<?= $by_pq_ist === $by_pk ? ' selected' : '' ?>><?= by_e(by_t($by_pt)) ?></option>
+<?php } ?>
+  </select>
+  <div class="sm-hilfe"><?= by_t('EINST.H_PREISEMPF_QUELLE') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="preisempf_praefix"><?= by_e(by_t('EINST.L_PREISEMPF_PRAEFIX')) ?></label>
+  <input data-role="none" type="text" id="preisempf_praefix" name="preisempf_praefix" value="<?= by_e(by_eingabe('einstellungen', 'preisempf_praefix', $by_cfg['preisempf_praefix'])) ?>"<?= by_markierung('preisempf_praefix') ?> placeholder="<?= by_e(by_preis_praefix(array('preisempf_quelle' => $by_pq_ist))) ?>">
+  <div class="sm-hilfe"><?= by_t('EINST.H_PREISEMPF_PRAEFIX') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="preisempf_stunden"><?= by_e(by_t('EINST.L_PREISEMPF_STUNDEN')) ?></label>
+  <input data-role="none" type="number" id="preisempf_stunden" name="preisempf_stunden" value="<?= by_e(by_eingabe('einstellungen', 'preisempf_stunden', (int) $by_cfg['preisempf_stunden'])) ?>"<?= by_markierung('preisempf_stunden') ?> min="1" max="12">
+  <div class="sm-hilfe"><?= by_t('EINST.H_PREISEMPF_STUNDEN') ?></div>
 </div>
 
 <h2><?= by_e(by_t('EINST.H_GERECHNET')) ?></h2>
 <div class="sm-hinweis"><?= by_t('EINST.GERECHNET_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="kapazitaet"><?= by_e(by_t('EINST.L_KAPAZITAET')) ?></label>
-  <input data-role="none" type="number" id="kapazitaet" name="kapazitaet" value="<?= (int) $by_cfg['kapazitaet'] ?>" min="0" max="500">
+  <input data-role="none" type="number" id="kapazitaet" name="kapazitaet" value="<?= by_e(by_eingabe('einstellungen', 'kapazitaet', (int) $by_cfg['kapazitaet'])) ?>"<?= by_markierung('kapazitaet') ?> min="0" max="500">
   <div class="sm-hilfe"><?= by_t('EINST.H_KAPAZITAET') ?></div>
 </div>
 <div class="sm-feld">
   <label for="heim_breite"><?= by_e(by_t('EINST.L_HEIM_BREITE')) ?></label>
-  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= by_e($by_cfg['heim_breite']) ?>" placeholder="51.318">
+  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= by_e(by_eingabe('einstellungen', 'heim_breite', $by_cfg['heim_breite'])) ?>"<?= by_markierung('heim_breite') ?> placeholder="51.318">
 </div>
 <div class="sm-feld">
   <label for="heim_laenge"><?= by_e(by_t('EINST.L_HEIM_LAENGE')) ?></label>
-  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= by_e($by_cfg['heim_laenge']) ?>" placeholder="9.490">
+  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= by_e(by_eingabe('einstellungen', 'heim_laenge', $by_cfg['heim_laenge'])) ?>"<?= by_markierung('heim_laenge') ?> placeholder="9.490">
   <div class="sm-hilfe"><?= by_t('EINST.H_HEIM') ?></div>
 </div>
 <div class="sm-feld">
   <label for="heim_radius"><?= by_e(by_t('EINST.L_HEIM_RADIUS')) ?></label>
-  <input data-role="none" type="number" id="heim_radius" name="heim_radius" value="<?= (int) $by_cfg['heim_radius'] ?>" min="20" max="5000">
+  <input data-role="none" type="number" id="heim_radius" name="heim_radius" value="<?= by_e(by_eingabe('einstellungen', 'heim_radius', (int) $by_cfg['heim_radius'])) ?>"<?= by_markierung('heim_radius') ?> min="20" max="5000">
   <div class="sm-hilfe"><?= by_t('EINST.H_HEIM_RADIUS') ?></div>
 </div>
 
@@ -1212,6 +1322,9 @@ ob_start();
 <h2><?= by_t('EINST.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= by_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= by_t('EINST.SICH_WARNUNG') ?></div>
+<?php $by_altwerte = by_rueckspiel_altwerte(); if ($by_altwerte) { ?>
+<div class="sm-warnung"><?= sprintf(by_t('EINST.SICH_ALTWERT'), by_e(implode(', ', $by_altwerte))) ?></div>
+<?php } ?>
 <!-- ZWEI GETRENNTE Formulare, und ab 0.9.6 auch zwei getrennte Knopfreihen.
      Getrennte Formulare, weil das Sichern einen Download schickt und mit exit
      endet, das Zurueckspielen aber enctype="multipart/form-data" braucht - wer
@@ -1256,13 +1369,13 @@ ob_start();
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($by_cfg['mqtt_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= by_eingabe_an('mqtt', 'mqtt_ein', !empty($by_cfg['mqtt_ein'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_MQTT_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="mqtt_topic"><?= by_e(by_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= by_e($by_cfg['mqtt_topic']) ?>" placeholder="byd">
+  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= by_e(by_eingabe('mqtt', 'mqtt_topic', $by_cfg['mqtt_topic'])) ?>"<?= by_markierung('mqtt_topic') ?> placeholder="byd">
   <div class="sm-hilfe"><?= by_t('EINST.H_MQTT_TOPIC') ?></div>
 </div>
 <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= by_t('LEGENDE.AKTION') ?></span></div>
@@ -1577,6 +1690,20 @@ function by_bausteine()
 <div class="sm-seite<?= $by_tab === 'tab-ladungen' ? ' sm-active' : '' ?>" id="tab-ladungen">
 <h2><?= by_e(by_t('LADUNG.H_TITEL')) ?></h2>
 <p class="sm-hilfe"><?= by_t('LADUNG.ERKLAERUNG') ?></p>
+<!-- BYD-b1: grau wie die Vorlage-Knoepfe - ein Download, der nichts
+     veraendert. Eine Legende fuer den Reiter, sie nennt genau diese Farbe. -->
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-technik"></i> <?= by_t('LEGENDE.TECHNIK') ?></span>
+</div>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="formular" value="ladungen">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-ladungen">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="ladungen_csv" value="1"><?= by_e(by_t('LADUNG.K_CSV')) ?></button>
+  </form>
+</div>
+<p class="sm-hilfe"><?= by_t('LADUNG.H_CSV') ?></p>
 <?php
 $by_ladungen = by_ladungen_lesen(200);
 if (!$by_ladungen) { ?>

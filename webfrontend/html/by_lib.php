@@ -260,6 +260,12 @@ function by_vorgaben()
         'ladeempf_grenze' => 0,
         'ladeempf_unter'  => 1,
         'ladeempf_alter'  => 900,
+        // Laden-1: Ladeempfehlung nach Strompreis aus Spotpreis aWATTar oder
+        // Tibber - ab Werk AUS. Praefix leer = Vorgabe der Quelle.
+        'preisempf_ein'     => 0,
+        'preisempf_quelle'  => 'awattar',
+        'preisempf_praefix' => '',
+        'preisempf_stunden' => 4,
         // Zutaten der gerechneten Groessen. Leer heisst: der Wert entsteht
         // nicht. Geraten wird nichts.
         'kapazitaet'   => 0,
@@ -759,6 +765,135 @@ function by_formtoken_pruefen($cfg = null)
  * Bauform AudiConnect 0.9.22 (au_einmal_schreiben). Scheitert das Schreiben,
  * rendert die Seite wie bisher direkt - lieber ohne Umleitung als ohne Meldung.
  */
+/* ==================================================================
+ * Eingaben nach einer Beanstandung (Verbesserungsbau 30.09.2026, X-2;
+ * Regeln/04 "Nach einer Beanstandung stehen die eingetippten Werte wieder
+ * im Formular"). Bauform Heimkino (vb_hk, Welle 1).
+ *
+ * Nur nach einer Beanstandung, nur das eine Formular und nur seine Felder.
+ * Nie Geheimnisse: Passwort und Steuer-PIN stehen in keiner Liste und reisen
+ * deshalb nie mit - sie koennen nur markiert werden.
+ * ================================================================== */
+
+/** Die Felder je Formular: array(text => [...], haken => [...]). */
+function by_eingabe_felder($form)
+{
+    $felder = array(
+        'einstellungen' => array(
+            'text'  => array('benutzer', 'land', 'intervall', 'verlauf_tage', 'temp_min',
+                             'temp_max', 'wartezeit', 'abfahrt_praefix', 'abfahrt_vorlauf',
+                             'abfahrt_temp', 'abfahrt_fahrzeug', 'abfahrt_alter',
+                             'ladeempf_thema', 'ladeempf_grenze', 'ladeempf_alter',
+                             'preisempf_quelle', 'preisempf_praefix', 'preisempf_stunden',
+                             'kapazitaet', 'heim_breite', 'heim_laenge', 'heim_radius'),
+            'haken' => array('gps_ein', 'mqtt_bibliothek', 'steuerung_ein', 'abfahrt_ein',
+                             'ladeempf_ein', 'ladeempf_unter', 'preisempf_ein'),
+        ),
+        'mqtt' => array(
+            'text'  => array('mqtt_topic'),
+            'haken' => array('mqtt_ein'),
+        ),
+    );
+    return isset($felder[$form]) ? $felder[$form] : null;
+}
+
+/**
+ * Die eingetippten Werte eines Formulars aus $_POST, fuer die Einmalmeldung.
+ * Ein Wert, der kein gueltiges UTF-8 ist oder laenger als 256 Byte, reist
+ * nicht mit (sonst scheiterte json_encode und mit ihm die Umleitung) - das
+ * Feld zeigt dann den gespeicherten Stand.
+ */
+function by_eingaben_sammeln($form, $beanstandet)
+{
+    $f = by_eingabe_felder($form);
+    if ($f === null || !$beanstandet) {
+        return null;
+    }
+    $werte = array();
+    foreach ($f['text'] as $feld) {
+        if (isset($_POST[$feld]) && is_string($_POST[$feld]) && strlen($_POST[$feld]) <= 256
+            && preg_match('//u', $_POST[$feld]) === 1) {
+            $werte[$feld] = $_POST[$feld];
+        }
+    }
+    foreach ($f['haken'] as $feld) {
+        $werte[$feld] = isset($_POST[$feld]) ? '1' : '';
+    }
+    return array('form' => $form, 'werte' => $werte,
+                 'beanstandet' => array_values(array_unique(array_map('strval', $beanstandet))));
+}
+
+/** Die Eingaben aus der Einmalmeldung annehmen (nur bekannte Felder, nur Text). */
+function by_eingaben_setzen($roh = null)
+{
+    static $ein = array('form' => '', 'werte' => array(), 'beanstandet' => array());
+    if ($roh === null) {
+        return $ein;
+    }
+    if (!is_array($roh) || !isset($roh['form']) || !is_string($roh['form'])
+        || by_eingabe_felder($roh['form']) === null) {
+        return $ein;
+    }
+    $f = by_eingabe_felder($roh['form']);
+    $felder = array_merge($f['text'], $f['haken']);
+    $erlaubt = array_merge($felder, array('passwort', 'pin'));
+    $werte = array();
+    if (isset($roh['werte']) && is_array($roh['werte'])) {
+        foreach ($roh['werte'] as $k => $v) {
+            if (in_array((string) $k, $felder, true) && is_string($v)) {
+                $werte[(string) $k] = $v;
+            }
+        }
+    }
+    $bean = array();
+    if (isset($roh['beanstandet']) && is_array($roh['beanstandet'])) {
+        foreach ($roh['beanstandet'] as $b) {
+            if (is_string($b) && in_array($b, $erlaubt, true)) {
+                $bean[] = $b;
+            }
+        }
+    }
+    if ($bean) {
+        $ein = array('form' => $roh['form'], 'werte' => $werte, 'beanstandet' => $bean);
+    }
+    return $ein;
+}
+
+/** Welches Formular zeigt gerade Eingaben ('' = keines)? */
+function by_eingaben_aktiv()
+{
+    $ein = by_eingaben_setzen();
+    return $ein['form'];
+}
+
+/** Wert eines Textfelds: die Eingabe nach einer Beanstandung, sonst der gespeicherte. */
+function by_eingabe($form, $feld, $gespeichert)
+{
+    $ein = by_eingaben_setzen();
+    if ($ein['form'] === $form && array_key_exists($feld, $ein['werte'])) {
+        return $ein['werte'][$feld];
+    }
+    return $gespeichert;
+}
+
+/** Haken: nach einer Beanstandung der abgeschickte Stand, sonst der gespeicherte. */
+function by_eingabe_an($form, $feld, $gespeichert)
+{
+    $ein = by_eingaben_setzen();
+    if ($ein['form'] === $form && array_key_exists($feld, $ein['werte'])) {
+        return $ein['werte'][$feld] === '1';
+    }
+    return (bool) $gespeichert;
+}
+
+/** Das beanstandete Feld wird rot umrandet (Klasse sm-beanstandet). */
+function by_markierung($feld)
+{
+    $ein = by_eingaben_setzen();
+    return in_array($feld, $ein['beanstandet'], true)
+        ? ' class="sm-beanstandet" aria-invalid="true"' : '';
+}
+
 function by_einmal_schreiben($daten)
 {
     $p = by_paths();
@@ -810,6 +945,9 @@ function by_einmal_lesen()
         }
     }
     $aus['ausgabe'] = isset($d['ausgabe']) && is_string($d['ausgabe']) ? $d['ausgabe'] : '';
+    // X-2: die Eingaben eines beanstandeten Formulars (by_eingaben_setzen()
+    // prueft Form und Felder erst beim Annehmen).
+    $aus['eingaben'] = isset($d['eingaben']) && is_array($d['eingaben']) ? $d['eingaben'] : null;
     return $aus;
 }
 
@@ -1155,6 +1293,44 @@ function by_ladungen_lesen($grenze = 200)
 }
 
 /**
+ * BYD-b1 (Verbesserungsbau 30.09.2026): die Ladevorgaenge als CSV fuer den
+ * Knopf "Ladevorgaenge herunterladen" im Reiter Ladevorgaenge.
+ *
+ * Dieselbe Lesefunktion wie die Tabelle (by_ladungen_lesen), aber ALLE
+ * Zeilen und die aelteste zuerst. Zeiten als Ortszeit 'Y-m-d H:i:s', Zahlen
+ * mit Dezimalpunkt, ein leeres Feld heisst "nicht bekannt" (wie in der Datei
+ * des Dienstes - eine 0 saehe aus wie eine Messung). Ohne Ladevorgang steht
+ * nur die Kopfzeile da. Die Spaltennamen sind Kennungen, keine Saetze; sie
+ * sind die der Datei verlauf/ladungen.csv.
+ */
+function by_ladungen_csv()
+{
+    $zeilen = array('fahrzeug;start;ende;dauer_min;soc_start;soc_ende;km;kwh');
+    $zahl = function ($w) {
+        if ($w === null) {
+            return '';
+        }
+        $s = rtrim(rtrim(sprintf('%.3F', (float) $w), '0'), '.');
+        return $s === '-0' ? '0' : $s;
+    };
+    foreach (array_reverse(by_ladungen_lesen(PHP_INT_MAX)) as $l) {
+        $zeilen[] = implode(';', array(
+            // Nur Kennungszeichen: die Nummer bzw. Fahrgestellnummer. Ein
+            // Trennzeichen oder ein Formelanfang kaeme so nie in die Tabelle.
+            preg_replace('/[^A-Za-z0-9_.]/', '', (string) $l['fahrzeug']),
+            date('Y-m-d H:i:s', (int) $l['start']),
+            date('Y-m-d H:i:s', (int) $l['ende']),
+            $l['dauer'] === null ? '' : (string) (int) $l['dauer'],
+            $zahl($l['soc_start']),
+            $zahl($l['soc_ende']),
+            $zahl($l['km']),
+            $zahl($l['kwh']),
+        ));
+    }
+    return implode("\n", $zeilen) . "\n";
+}
+
+/**
  * Der Zustand des Horchers, wie ihn der Dienst hinterlegt hat.
  *
  * Die Oberflaeche baut KEINE eigene Verbindung zum Broker auf: sie liest, was
@@ -1194,6 +1370,55 @@ function by_herkunft_text($quelle)
                              : sprintf(by_t('LOX.HERKUNFT_UNBEKANNT'), $q);
 }
 
+/**
+ * Laden-1 (Verbesserungsbau 30.09.2026): die Preisquellen und ihr
+ * Vorgabepraefix - nachgelesen in Spotpreis-aWATTar 1.2.30 (mqtt_topic
+ * 'spot_awattar') und Spotpreis-Tibber 0.9.24 (mqtt_topic 'tibber').
+ * Gegenstueck zu PREIS_QUELLEN in bin/byd.py.
+ */
+function by_preis_quellen()
+{
+    return array('awattar' => 'spot_awattar', 'tibber' => 'tibber');
+}
+
+/** Praefix der Preisquelle - dieselbe Regel wie preis_praefix() im Dienst. */
+function by_preis_praefix($cfg)
+{
+    $q = by_preis_quellen();
+    $quelle = isset($cfg['preisempf_quelle']) && is_string($cfg['preisempf_quelle'])
+        && isset($q[$cfg['preisempf_quelle']]) ? $cfg['preisempf_quelle'] : 'awattar';
+    $roh = trim(trim((string) (isset($cfg['preisempf_praefix']) && is_scalar($cfg['preisempf_praefix'])
+        ? $cfg['preisempf_praefix'] : '')), '/');
+    if ($roh === '' || preg_match('#[\#+\s]#', $roh) || strpos($roh, '//') !== false) {
+        return $q[$quelle];
+    }
+    return $roh;
+}
+
+/** Die fremden Themen von Laden-1 - Gegenstueck zu preis_themen() im Dienst. */
+function by_preis_themen($cfg)
+{
+    if (empty($cfg['preisempf_ein'])) {
+        return array();
+    }
+    $p = by_preis_praefix($cfg);
+    return array($p . '/rank', $p . '/rankd', $p . '/status/ok', $p . '/status/ts',
+                 $p . '/status/zaehler');
+}
+
+/** Der Stand, den der Dienst zuletzt gerechnet hat (preisempfehlung.json). */
+function by_preisempfehlung_stand()
+{
+    return by_json_lesen(by_paths()['datadir'] . '/preisempfehlung.json');
+}
+
+/** Schluessel, die in einer aelteren Sicherung fehlen duerfen (Laden-1). */
+function by_sicherung_spaeter()
+{
+    return array('preisempf_ein', 'preisempf_quelle', 'preisempf_praefix',
+                 'preisempf_stunden');
+}
+
 function by_horcher_themen($cfg = null)
 {
     if ($cfg === null) {
@@ -1213,6 +1438,8 @@ function by_horcher_themen($cfg = null)
             $t[] = $th;
         }
     }
+    // Laden-1: Rang und Lebenszeichen der Preisquelle.
+    $t = array_values(array_unique(array_merge($t, by_preis_themen($cfg))));
     sort($t);
     return $t;
 }
@@ -1573,6 +1800,10 @@ function by_mqtt_themen()
          * - ausgerechnet das Thema, an dem ein Teilausfall in Loxone
          * erkennbar ist (gemessen, MQTT- und Oberflaechen-Pruefer). */
         'fahrzeugN/OK' => 'BY_MQTT.FZ_OK',
+        /* Laden-1: nur bei eingeschalteter Ladeempfehlung nach Strompreis;
+         * fluechtig (by_mqtt_retain() fuehrt sie nicht). */
+        'lade_empfehlung'       => 'BY_MQTT.LADE_EMPFEHLUNG',
+        'lade_empfehlung_grund' => 'BY_MQTT.LADE_EMPFEHLUNG_GRUND',
     );
     foreach (by_felder() as $name => $eig) {
         if ($name === 'OK' || $name === 'ALTER') {
@@ -2149,6 +2380,7 @@ function by_grenzen()
         'abfahrt_alter'    => array(60, 3600),
         'abfahrt_fahrzeug' => array(1, 99),
         'ladeempf_alter'   => array(60, 86400),
+        'preisempf_stunden' => array(1, 12),
         'kapazitaet'       => array(0, 500),
         'heim_radius'      => array(20, 5000),
     );
@@ -2193,6 +2425,9 @@ function by_sicherung_regeln()
         'abfahrt_ein'     => 'schalter',
         'ladeempf_ein'    => 'schalter',
         'ladeempf_unter'  => 'schalter',
+        'preisempf_ein'   => 'schalter',
+        'preisempf_quelle'  => 'quelle',
+        'preisempf_praefix' => 'thema',
         'mqtt_topic'      => 'praefix',
         'abfahrt_praefix' => 'thema',
         'ladeempf_thema'  => 'thema',
@@ -2218,6 +2453,12 @@ function by_sicherung_regel($art, $w)
                 return array(true, $w, '');
             }
             return array(false, null, 'EINST.SICH_R_TOKEN');
+        case 'quelle':
+            // Laden-1: nur die Linien, deren Schnittstelle nachgelesen ist.
+            if (is_string($w) && array_key_exists($w, by_preis_quellen())) {
+                return array(true, $w, '');
+            }
+            return array(false, null, 'EINST.SICH_R_QUELLE');
         case 'schalter':
             if ($w === 0 || $w === 1 || $w === '0' || $w === '1') {
                 return array(true, (int) $w, '');
@@ -2301,9 +2542,55 @@ function by_sicherung_zugang()
     return $aus;
 }
 
-function by_sicherung_lesen($roh)
+/**
+ * BYD-b2 (Verbesserungsbau 30.09.2026): die Sicherungsdatei - EINE Stelle
+ * fuer den Knopf "Einstellungen sichern" und fuer die Pruefung X-3.
+ *
+ * Vorne der lesbare Kopf (Regeln/05): _hinweis sagt, was die Datei ist und
+ * dass sie Geheimnisse traegt, _stand wann sie entstand. by_sicherung_lesen()
+ * uebergeht jeden Schluessel, der mit "_" beginnt. Dahinter die VOLLE
+ * Konfiguration samt Aktionstoken und die Zugangsdaten (C10).
+ */
+function by_sicherung_bauen()
+{
+    return array_merge(array(
+        '_hinweis' => by_t('EINST.SICH_KOPF_HINWEIS'),
+        '_stand'   => date('Y-m-d H:i'),
+    ), by_config(), by_sicherung_zugang());
+}
+
+/**
+ * X-3 (Verbesserungsbau 30.09.2026): welche gespeicherten Werte bestuenden
+ * das eigene Zurueckspielen nicht? Die Sicherung wird gebaut
+ * (by_sicherung_bauen, derselbe Weg wie der Knopf) und durch
+ * by_sicherung_lesen() geschickt - dieselbe Pruefung wie beim Zurueckspielen.
+ * Rueckgabe: Liste der NAMEN, nie der Werte; leer = die Sicherung liesse sich
+ * zurueckspielen. '?' = abgewiesen, ohne dass ein Name zu nennen waere.
+ * Der Name traegt bewusst kein "sicherung": Werkzeuge/sicherung_pruefen.py
+ * nimmt die erste Funktion *_sicherung* mit json_encode fuer die Ausfuhr
+ * (Scheinbefund, gemessen an Heimkino in der Kette am 30.09.2026).
+ */
+function by_rueckspiel_altwerte($sicherung = null)
+{
+    $s = is_array($sicherung) ? $sicherung : by_sicherung_bauen();
+    $js = json_encode($s, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($js === false) {
+        // Nicht kodierbar: der Knopf meldet das selbst (SICH_SCHREIBFEHLER).
+        return array();
+    }
+    $namen = array();
+    $erg = by_sicherung_lesen($js, $namen);
+    if ($erg[0] !== null) {
+        return array();
+    }
+    return $namen ? array_values(array_unique($namen)) : array('?');
+}
+
+function by_sicherung_lesen($roh, &$namen = null)
 {
     $mangel = array();
+    // X-3: die Namen der beanstandeten Schluessel, nie ihre Werte.
+    $namen = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
         return array(null, array(by_t('EINST.SICH_KEIN_JSON')), 0, array());
@@ -2317,8 +2604,9 @@ function by_sicherung_lesen($roh)
     foreach ($daten as $k => $w) {
         /* Der lesbare Kopf einer Sicherungsdatei wird UEBERGANGEN, nicht
          * beanstandet - sonst lehnt die Funktion die Datei ab, die dieselbe
-         * Bibliothek zwei Zeilen vorher erzeugt hat. Heute schreibt das Plugin
-         * keinen solchen Kopf; wer einen ergaenzt, hat die Leseseite schon. */
+         * Bibliothek zwei Zeilen vorher erzeugt hat. Seit dem
+         * Verbesserungsbau vom 30.09.2026 (BYD-b2) schreibt
+         * by_sicherung_bauen() _hinweis und _stand, bei X-3 dazu _warnung. */
         if (is_string($k) && $k !== '' && $k[0] === '_') {
             continue;
         }
@@ -2332,6 +2620,7 @@ function by_sicherung_lesen($roh)
             if ($grund !== '') {
                 $mangel[] = sprintf(by_t('EINST.SICH_REGEL'),
                     htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'), by_t($grund));
+                $namen[] = (string) $k;
                 continue;
             }
             $zugang[$feld] = $w;
@@ -2340,11 +2629,13 @@ function by_sicherung_lesen($roh)
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(by_t('EINST.SICH_FREMD'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            $namen[] = (string) $k;
             continue;
         }
         if (!by_wert_taugt($w)) {
             $mangel[] = sprintf(by_t('EINST.SICH_WERT'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            $namen[] = (string) $k;
             continue;
         }
         if (isset($grenzen[$k])) {
@@ -2354,6 +2645,7 @@ function by_sicherung_lesen($roh)
                 $mangel[] = sprintf(by_t('EINST.SICH_BEREICH'),
                                      htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                                      $grenzen[$k][0], $grenzen[$k][1]);
+                $namen[] = (string) $k;
                 continue;
             }
             $w = (int) $s;
@@ -2362,6 +2654,7 @@ function by_sicherung_lesen($roh)
             if (!$by_taugt) {
                 $mangel[] = sprintf(by_t('EINST.SICH_REGEL'),
                     htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'), by_t($by_grund));
+                $namen[] = (string) $k;
                 continue;
             }
             $w = $by_wert;
@@ -2378,10 +2671,13 @@ function by_sicherung_lesen($roh)
     if (!$mangel) {
         if ((int) $neu['temp_min'] > (int) $neu['temp_max']) {
             $mangel[] = by_t('EINST.FEHLER_TEMP_TAUSCH');
+            $namen[] = 'temp_min';
+            $namen[] = 'temp_max';
         } elseif ((int) $neu['abfahrt_temp'] < (int) $neu['temp_min']
                   || (int) $neu['abfahrt_temp'] > (int) $neu['temp_max']) {
             $mangel[] = sprintf(by_t('EINST.FEHLER_ABFAHRT_TEMP'), (int) $neu['abfahrt_temp'],
                                 (int) $neu['temp_min'], (int) $neu['temp_max']);
+            $namen[] = 'abfahrt_temp';
         }
     }
     /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
@@ -2402,12 +2698,31 @@ function by_sicherung_lesen($roh)
      * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
      * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
     $fehlend = array();
+    $spaeter = array();
     foreach (array_keys(by_vorgaben()) as $fk) {
         if (!array_key_exists($fk, $daten)) {
+            // Laden-1: eine Sicherung aus 0.9.21 oder frueher kennt die
+            // Schluessel der Ladeempfehlung nach Strompreis nicht. Sie
+            // behalten ihren jetzigen Wert (Bauform Heimkino/Matter2Lox,
+            // Verbesserungsbauten Welle 1) - sonst wiese dieser Bau jede
+            // aeltere Sicherung ab.
+            if (in_array($fk, by_sicherung_spaeter(), true)) {
+                $spaeter[] = $fk;
+                continue;
+            }
             $fehlend[] = $fk;
         }
     }
+    if ($spaeter) {
+        $geltend = by_config(false);
+        foreach ($spaeter as $sk) {
+            if (array_key_exists($sk, $geltend)) {
+                $neu[$sk] = $geltend[$sk];
+            }
+        }
+    }
     if ($fehlend) {
+        $namen = array_merge($namen, $fehlend);
         $mangel[] = sprintf(by_t('EINST.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }

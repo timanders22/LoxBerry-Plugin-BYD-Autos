@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.20
+Version 0.9.21
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,31 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.21
+
+Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`). Gemessen an Attrappen
+für pybyd, Broker und Spotpreis-Plugins unter PHP 7.4, 8.3 und 8.5, Dienst mit
+paho 1.6.1; nicht am Gerät, ohne BYD-Konto.
+
+* **Anmeldesperre meldet sich einmal** im Benachrichtigungsbereich des LoxBerry;
+  neue Zugangsdaten beenden sie.
+* Der Selbsttest prüft, ob pybyd die Ausnahmeklasse für eine gescheiterte
+  Anmeldung führt; fehlt sie, steht dort eine WARNUNG.
+* Neuer Knopf **„Ladevorgänge herunterladen (CSV)“**.
+* **Neu, ab Werk aus: Ladeempfehlung aus Spotpreis aWATTar oder Tibber.** Aus
+  dem Preisrang der Stunde entsteht `lade_empfehlung` (1 = günstig laden,
+  0 = nicht, `-` = keine Aussage) mit `lade_empfehlung_grund`, beide flüchtig über
+  MQTT. Schweigt die Quelle, geht `-` hinaus, und der Reiter Test zeigt gelb.
+  Nach einem Dienststart dauert es bis zu 30 min (aWATTar) bzw. bis zur nächsten
+  Stunde (Tibber). Am Auto wird nichts geschaltet.
+* **Nach einer Beanstandung wird nichts gespeichert** – auch die übrigen Felder
+  und Zugangsdaten nicht (bis 0.9.20 wurden sie übernommen). Die eingetippten
+  Werte stehen wieder im Formular, das Feld ist rot; Passwort und PIN nie.
+* Die Sicherung trägt einen lesbaren Kopf; „Einstellungen sichern“ warnt gelb
+  und nennt in `_warnung` die Namen der Werte, die das Zurückspielen abweisen
+  würde. Ältere Sicherungen lassen sich weiter zurückspielen.
 
 ## Neu in 0.9.20
 
@@ -915,6 +940,43 @@ Sind schreibende Befehle gesperrt, setzt sie nichts ab und **sagt das** im
 Reiter Test — eine eingeschaltete Funktion, die nichts tut, fällt sonst
 niemandem auf.
 
+### Ladeempfehlung aus Spotpreis aWATTar oder Tibber
+
+Eine eigene Einstellung im Reiter Einstellungen, **ab Werk aus**; sie ist
+unabhängig von `LADEEMPF` oben (das rechnet aus einem beliebigen Thema mit
+einer Schwelle). Eingeschaltet hört der Dienst beim Plugin **Spotpreis
+aWATTar** oder **Spotpreis Tibber** den **Rang der laufenden Stunde** unter den
+nächsten 24 Stunden mit (1 = günstigste) und sendet über MQTT:
+
+| Thema | Wert | retained |
+|---|---|---|
+| `<präfix>/lade_empfehlung` | `1` = die Stunde gehört zu den eingestellten günstigsten Stunden (1–12, Vorgabe 4), `0` = nicht, `-` = keine Aussage | nein |
+| `<präfix>/lade_empfehlung_grund` | `GUENSTIG`, `TEUER`, `QUELLE_SCHWEIGT`, `QUELLE_OHNE_PREISE`, `KEIN_RANG`, `HORCHER`, `AUS`, `DIENST_AUS` | nein |
+
+* **Quelle:** gelesen werden nur die MQTT-Themen der anderen Linie —
+  `<präfix>/rank`, `<präfix>/rankd` und ihr Lebenszeichen `status/ok`,
+  `status/ts`, `status/zaehler` —, nie ihre Dateien. Präfix ab Werk
+  `spot_awattar` bzw. `tibber`; wer ihn dort geändert hat, trägt ihn hier ein.
+  Nachgelesen in Spotpreis aWATTar 1.2.30 und Tibber 0.9.24: `rank` ist bei
+  beiden gleich gebildet, `rankd` nicht (aWATTar: umgekehrter Rang, Tibber:
+  Länge der Rangfolge) — das Plugin rechnet die Länge je Quelle.
+* **Rückfall:** Schweigt die Quelle länger als 5 Minuten, meldet sie
+  `status/ok 0` oder fehlt ein Rang, geht `-` hinaus (ein Wert ohne Aussage
+  ist `-`, nie leer), und der Reiter Test zeigt es
+  **gelb**. Es gibt dann keine Empfehlung — wie ohne die Einstellung.
+* **Anlauf:** Beide Spotpreis-Plugins senden den Rang flüchtig und nur bei
+  Änderung (aWATTar dazu halbstündlich den vollen Satz, Tibber mit jeder
+  Änderung, praktisch stündlich). Nach einem Start des Dienstes steht deshalb
+  bis zu 30 Minuten (aWATTar) bzw. bis zur nächsten Stunde (Tibber)
+  `KEIN_RANG` da.
+* **Flüchtig**, weil die Empfehlung an der Stunde hängt: eine
+  zurückbehaltene 1 wirkte nach einem Neustart weiter. Gesendet wird bei jeder
+  Änderung und sonst alle 5 Minuten. Wird die Einstellung ausgeschaltet oder
+  endet der Dienst, geht einmal `-` hinaus.
+* Gerechnet wird **nur im laufenden Dienst**; am Auto wird **nichts**
+  geschaltet. `aktion=json` am Endpunkt zeigt den letzten Stand unter
+  `lade_empfehlung`.
+
 ### Reiter *Ladevorgänge*
 
 Ein Ladevorgang wird am Wechsel des Feldes `LAEDT` erkannt; BYD meldet ihn
@@ -937,6 +999,11 @@ Zweitschrift.
 Beginn und Ende sind die Zeitpunkte der *Abrufe*, an denen der Wechsel auffiel;
 sie liegen bis zu einem Taktabstand neben der Wirklichkeit. Die kWh sind
 gerechnet, nicht gemessen: Ladeverluste stecken nicht darin.
+
+Der graue Knopf **Ladevorgänge herunterladen (CSV)** liefert alle Zeilen, die
+älteste zuerst: `fahrzeug;start;ende;dauer_min;soc_start;soc_ende;km;kwh`,
+Zeiten als `JJJJ-MM-TT hh:mm:ss` (Ortszeit), Dezimalpunkt, ein leeres Feld
+heißt „nicht bekannt". Ohne Ladevorgang enthält die Datei nur die Kopfzeile.
 
 ### Trockenlauf
 
@@ -977,7 +1044,16 @@ echten Fahrzeug zu klären, **ohne es zu bewegen**.
 * Der **Standort** ist eine eigene Abfrage und lässt sich abschalten. Dann
   verlässt die Position des Fahrzeugs den Wagen nicht.
 * Die **Sicherungsdatei** enthält Benutzer, Passwort, Steuer-PIN und Land.
-  Sie ist für den Umzug gedacht und wie ein Passwort zu behandeln.
+  Sie ist für den Umzug gedacht und wie ein Passwort zu behandeln. Ihr Kopf
+  (`_hinweis`, `_stand`) sagt das auch in der Datei; das Zurückspielen
+  übergeht ihn. Stünde ein gespeicherter Wert das eigene Zurückspielen nicht
+  durch, warnt der Knopf gelb und die Datei nennt im Kopf `_warnung` die
+  **Namen** der Werte — nie die Werte selbst.
+* Nach einer **Beanstandung** im Reiter Einstellungen oder MQTT wird **nichts**
+  gespeichert, auch nicht die übrigen Felder; die eingetippten Werte stehen
+  danach wieder im Formular (das beanstandete Feld rot umrandet). Passwort und
+  Steuer-PIN reisen dabei nie mit — ein eben eingetipptes Passwort ist also
+  noch einmal einzugeben.
 * Das Token des unangemeldeten Endpunkts steht in `byd.json`, und die Datei
   bekommt deshalb ebenfalls 0600: wer es lesen kann, kann über HTTP das
   Fahrzeug schalten.
@@ -987,7 +1063,13 @@ echten Fahrzeug zu klären, **ohne es zu bewegen**.
 Diese Punkte sind **nicht** geprüft und lassen sich ohne Konto und Fahrzeug
 auch nicht prüfen. Sie stehen hier als Auftrag, nicht als Ergebnis:
 
-1. Ob die **Anmeldung** an der BYD-Schnittstelle gelingt.
+1. Ob die **Anmeldung** an der BYD-Schnittstelle gelingt — und ob die echte
+   pybyd eine abgewiesene Anmeldung als `…AuthenticationError` wirft. Nur daran
+   erkennt die Anmeldesperre sie. Dass die installierte Fassung eine solche
+   Klasse **führt**, prüft der *Selbsttest des Dienstes* (sonst `[WARN]`); ob
+   sie bei falschem Passwort **fällt**, lässt sich ohne Konto nicht messen.
+   Gilt die Sperre, steht sie einmal auch im Benachrichtigungsbereich des
+   LoxBerry (über `bin/by_notify.php`).
 2. Ob die **Feldnamen** dieser Feldtabelle bei **weiteren Modellen**
    zutreffen. An einem BYD Seal U Design sind sie gemessen (Issue #1,
    14.09.2026, alle 33 getroffen) — an einem Atto 3, Dolphin, Han oder Tang

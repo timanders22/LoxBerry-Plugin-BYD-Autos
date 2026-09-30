@@ -859,6 +859,15 @@ function by_pruefungen()
                 : sprintf(by_t('TEST.A_LADUNGEN_UNLESBAR'), $roh));
     }
 
+    /* ---- 22a. Laden-1: Ladeempfehlung nach Strompreis ----
+     * D-Punkt (vb_RAHMEN.md): schweigt die andere Linie, faellt die Kopplung
+     * auf das bisherige Verhalten zurueck (keine Empfehlung, "-") und sagt es
+     * HIER - gelb (Stand 2), kein Kreuz: die eigene Anlage ist in Ordnung,
+     * es fehlt die Zutat einer anderen Linie. Gelesen wird, was der Dienst
+     * gerechnet hat (preisempfehlung.json); die Oberflaeche baut keine eigene
+     * Verbindung zum Broker auf (siehe by_horcher_zustand()). */
+    $zeilen[] = by_preisempfehlung_zeile($cfg);
+
     /* ---- 23. Steuerung ---- */
     $zeilen[] = by_pruefzeile(!empty($cfg['steuerung_ein']) ? 1 : -1,
         by_t('TEST.F_STEUERUNG'),
@@ -901,6 +910,51 @@ function by_pruefungen()
 }
 
 /**
+ * Laden-1: die Pruefzeile "Ladeempfehlung nach Strompreis". Stand 1 gruen
+ * (Empfehlung 0/1 frisch gerechnet), 2 gelb (eingeschaltet, aber ohne
+ * Aussage - Quelle schweigt, kein Rang, Dienst laeuft nicht), -1 grau (aus).
+ */
+function by_preisempfehlung_zeile($cfg)
+{
+    $frage = by_t('TEST.F_PREISEMPF');
+    if (empty($cfg['preisempf_ein'])) {
+        return by_pruefzeile(-1, $frage, by_t('TEST.A_PREISEMPF_AUS'));
+    }
+    $quelle = by_t(isset($cfg['preisempf_quelle']) && $cfg['preisempf_quelle'] === 'tibber'
+        ? 'EINST.O_PREISEMPF_TIBBER' : 'EINST.O_PREISEMPF_AWATTAR');
+    $praefix = by_preis_praefix($cfg);
+    if (by_dienst_pid() === 0) {
+        return by_pruefzeile(2, $frage, by_t('TEST.A_PREISEMPF_KEIN_DIENST'));
+    }
+    $s = by_preisempfehlung_stand();
+    $alt = isset($s['ts']) ? time() - (int) $s['ts'] : -1;
+    if (!$s || $alt < 0 || $alt > 600) {
+        return by_pruefzeile(2, $frage, by_t('TEST.A_PREISEMPF_NOCH_NICHTS'));
+    }
+    $grund = isset($s['grund']) && is_string($s['grund'])
+        && preg_match('/^[A-Z_]{1,32}$/', $s['grund']) ? $s['grund'] : '';
+    $mqtt = empty($cfg['mqtt_ein']) ? ' ' . by_t('TEST.A_PREISEMPF_OHNE_MQTT') : '';
+    if (isset($s['wert']) && ($s['wert'] === 0 || $s['wert'] === 1)
+        && in_array($grund, array('GUENSTIG', 'TEUER'), true)) {
+        return by_pruefzeile(1, $frage, sprintf(by_t('TEST.A_PREISEMPF_OK'),
+            (int) $s['wert'], (int) $s['rang'], (int) $s['von'], (int) $s['grenze'],
+            by_e($quelle), by_e($praefix)) . $mqtt);
+    }
+    // Ausgeschrieben, nicht zusammengesetzt: der Spracherzeuger findet nur
+    // woertlich stehende Schluessel.
+    $gruende = array(
+        'HORCHER'            => 'TEST.PREIS_G_HORCHER',
+        'QUELLE_SCHWEIGT'    => 'TEST.PREIS_G_QUELLE_SCHWEIGT',
+        'QUELLE_OHNE_PREISE' => 'TEST.PREIS_G_QUELLE_OHNE_PREISE',
+        'KEIN_RANG'          => 'TEST.PREIS_G_KEIN_RANG',
+        'ANLAUF'             => 'TEST.PREIS_G_ANLAUF',
+    );
+    $text = isset($gruende[$grund]) ? by_t($gruende[$grund]) : by_e($grund);
+    return by_pruefzeile(2, $frage, sprintf(by_t('TEST.A_PREISEMPF_OHNE'),
+        by_e($quelle), by_e($praefix), $text) . $mqtt);
+}
+
+/**
  * Eine Zeile der Selbstpruefung als Tabellenzeile - EINE Stelle fuer die
  * Schleife in index.php und fuer die nachtraeglich eingesetzte Zeile U5.
  */
@@ -910,6 +964,10 @@ function by_pruefzeile_html($z)
         $zeichen = '<span class="sm-an">&#10004;</span>';
     } elseif ($z['stand'] === 0) {
         $zeichen = '<span class="sm-aus">&#10008;</span>';
+    } elseif ($z['stand'] === 2) {
+        // Laden-1: gelb = eingeschaltet, aber ohne Aussage der anderen Linie.
+        // Zaehlt wie grau als Hinweis (by_pruefbilanz), nicht als bestanden.
+        $zeichen = '<span style="color:#e0a000;">&#9679;</span>';
     } else {
         $zeichen = '<span style="color:#888;">&#9679;</span>';
     }

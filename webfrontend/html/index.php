@@ -252,6 +252,11 @@ if ($by_aktion === 'json') {
         'fehler'              => isset($by_lox['fehler']) ? $by_lox['fehler'] : '',
         // Was niemand gemessen hat, wird gekennzeichnet - auch ein Feld.
         'aus_der_dokumentation' => by_doku_felder(),
+        /* Laden-1: der zuletzt gerechnete Stand der Ladeempfehlung nach
+         * Strompreis - null, wenn die Einstellung aus ist. Dieselben Werte
+         * wie die MQTT-Themen lade_empfehlung und lade_empfehlung_grund. */
+        'lade_empfehlung'     => empty($by_cfg['preisempf_ein']) ? null
+                                 : (by_preisempfehlung_stand() ?: null),
     ), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }

@@ -55,6 +55,7 @@ import logging
 import os
 import signal
 import socket
+import subprocess
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -273,6 +274,13 @@ VORGABEN = {
     "ladeempf_grenze": 0,
     "ladeempf_unter": 1,
     "ladeempf_alter": 900,
+    # --- Laden-1: Ladeempfehlung nach Strompreis aus Spotpreis aWATTar oder
+    # Tibber (ab Werk AUS, Verbesserungsbau 30.09.2026). Praefix leer = der
+    # Vorgabepraefix der gewaehlten Quelle (PREIS_QUELLEN).
+    "preisempf_ein": 0,
+    "preisempf_quelle": "awattar",
+    "preisempf_praefix": "",
+    "preisempf_stunden": 4,
     # --- gerechnete Groessen ---
     # Beide sind LEER, solange die Zutat fehlt. Eine Kapazitaet, die niemand
     # eingetragen hat, wird nicht geraten - und ohne sie gibt es keinen
@@ -340,6 +348,10 @@ BEFEHL_HOECHSTALTER = 300
 ANMELDE_GRENZE = 5
 ANMELDE_FENSTER = 86400
 DATEI_ANMELDUNG = PDATA / "anmeldung.json"
+# BYD-a1 (Verbesserungsbau 30.09.2026): die Sperre meldet sich einmal je
+# Sperre im Benachrichtigungsbereich - ueber dieses PHP-Zwischenstueck, weil
+# notify_ext() nur in der PHP- und Perl-Bibliothek des LoxBerry steht.
+SKRIPT_MELDEN = SELF / "by_notify.php"
 ANMELDESPERRE_TEXT = ("Die Anmeldung bei BYD wurde %d-mal innerhalb von 24 Stunden "
                       "abgewiesen. Das Plugin meldet sich nicht mehr an, bis im Reiter "
                       "Einstellungen neue Zugangsdaten gespeichert sind - so sperrt BYD "
@@ -970,6 +982,10 @@ def config() -> dict:
                                                ganz(c.get("abfahrt_temp"), 21)))
     c["abfahrt_alter"] = max(60, min(3600, ganz(c.get("abfahrt_alter"), 300)))
     c["ladeempf_alter"] = max(60, min(86400, ganz(c.get("ladeempf_alter"), 900)))
+    # Laden-1: dieselben Grenzen wie by_grenzen() und die Oberflaeche.
+    c["preisempf_stunden"] = max(1, min(12, ganz(c.get("preisempf_stunden"), 4)))
+    if c.get("preisempf_quelle") not in PREIS_QUELLEN:
+        c["preisempf_quelle"] = "awattar"
     c["kapazitaet"] = max(0, min(500, ganz(c.get("kapazitaet"), 0)))
     c["heim_radius"] = max(20, min(5000, ganz(c.get("heim_radius"), 150)))
     return c
@@ -1011,6 +1027,38 @@ def ist_anmeldefehler(err: BaseException) -> bool:
     return False
 
 
+def anmeldefehler_klassen() -> list:
+    """BYD-a2 (Verbesserungsbau 30.09.2026): welche Ausnahmeklassen der
+    installierten pybyd enden auf 'AuthenticationError'? Nur daran erkennt
+    ist_anmeldefehler() eine ABGEWIESENE Anmeldung. Ob die echte Bibliothek
+    bei falschem Passwort so wirft, ist ohne Konto nicht belegt - dass sie
+    eine solche Klasse ueberhaupt fuehrt, laesst sich aber ohne Netz sehen.
+    Rueckgabe: sortierte Liste 'modul.Klasse'; leer = keine gefunden.
+    Wirft nicht (pybyd fehlt -> leere Liste)."""
+    import importlib  # noqa: PLC0415
+    import importlib.util  # noqa: PLC0415
+    try:
+        paket = importlib.import_module("pybyd")
+    except Exception:  # noqa: BLE001
+        return []
+    module = [paket]
+    for name in ("exceptions", "errors", "exception", "error"):
+        voll = "pybyd." + name
+        try:
+            if importlib.util.find_spec(voll) is not None:
+                module.append(importlib.import_module(voll))
+        except Exception:  # noqa: BLE001
+            continue
+    gefunden = set()
+    for m in module:
+        for n in dir(m):
+            k = getattr(m, n, None)
+            if (isinstance(k, type) and issubclass(k, BaseException)
+                    and k.__name__.endswith("AuthenticationError")):
+                gefunden.add("%s.%s" % (k.__module__, k.__name__))
+    return sorted(gefunden)
+
+
 def anmeldung_lesen() -> dict:
     """Stand der Anmeldebremse fuer die GELTENDEN Zugangsdaten.
 
@@ -1020,12 +1068,15 @@ def anmeldung_lesen() -> dict:
     auch nach Ablauf der 24 Stunden."""
     a = json_lesen(DATEI_ANMELDUNG)
     if not a or a.get("zugang") != zugang_kennung():
-        return {"fehl": [], "gesperrt": 0}
+        return {"fehl": [], "gesperrt": 0, "gemeldet": 0}
     jetzt = time.time()
     fehl = [int(t) for t in (a.get("fehl") or [])
             if isinstance(t, (int, float)) and not isinstance(t, bool)
             and 0 <= jetzt - t < ANMELDE_FENSTER]
-    return {"fehl": fehl, "gesperrt": 1 if a.get("gesperrt") else 0}
+    # BYD-a1: wurde DIESE Sperre schon gemeldet? Der Vermerk gehoert zu den
+    # Zugangsdaten wie die Sperre selbst - neue Zugangsdaten heben beides auf.
+    return {"fehl": fehl, "gesperrt": 1 if a.get("gesperrt") else 0,
+            "gemeldet": 1 if a.get("gemeldet") else 0}
 
 
 def anmeldung_abgewiesen(text: str) -> bool:
@@ -1034,14 +1085,51 @@ def anmeldung_abgewiesen(text: str) -> bool:
     a = anmeldung_lesen()
     fehl = a["fehl"] + [int(time.time())]
     gesperrt = 1 if (a["gesperrt"] or len(fehl) >= ANMELDE_GRENZE) else 0
+    gemeldet = a["gemeldet"]
+    # BYD-a1: genau eine Benachrichtigung je Sperre. Gemeldet wird VOR dem
+    # Schreiben, damit der Vermerk mit der Sperre in DERSELBEN Datei steht;
+    # misslingt die Meldung, bleibt er aus (Protokollzeile in
+    # anmeldesperre_melden()).
+    if gesperrt and not gemeldet:
+        gemeldet = 1 if anmeldesperre_melden() else 0
     json_schreiben(DATEI_ANMELDUNG, {"zugang": zugang_kennung(), "fehl": fehl,
-                                     "gesperrt": gesperrt, "grund": str(text)[:300]}, 0o600)
+                                     "gesperrt": gesperrt, "gemeldet": gemeldet,
+                                     "grund": str(text)[:300]}, 0o600)
     if gesperrt:
         _LOG.error(ANMELDESPERRE_TEXT)
     else:
         _LOG.error("Anmeldung bei BYD abgewiesen (%d von hoechstens %d in 24 Stunden): %s",
                    len(fehl), ANMELDE_GRENZE, text)
     return bool(gesperrt)
+
+
+def anmeldesperre_melden() -> bool:
+    """BYD-a1: die Anmeldesperre in den Benachrichtigungsbereich des LoxBerry
+    legen (bin/by_notify.php, Schwere 3 = Fehler). True = abgelegt.
+
+    Scheitert es, ist das kein Fehler des Dienstes - es wird im Protokoll
+    gesagt, und die Sperre gilt trotzdem. Der Text ist ALLG.ANMELDESPERRE der
+    Sprachdatei, derselbe Satz wie oben im Reiter Einstellungen."""
+    if not SKRIPT_MELDEN.is_file():
+        _LOG.warning("Anmeldesperre: %s fehlt - es wurde keine Benachrichtigung "
+                     "abgelegt.", SKRIPT_MELDEN)
+        return False
+    try:
+        e = subprocess.run(["php", str(SKRIPT_MELDEN), "3", "ALLG.ANMELDESPERRE", PNAME,
+                            str(ANMELDE_GRENZE)],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20,
+                           check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        _LOG.warning("Anmeldesperre: die Benachrichtigung liess sich nicht ablegen "
+                     "(%s).", err)
+        return False
+    if e.returncode != 0:
+        _LOG.warning("Anmeldesperre: die Benachrichtigung wurde nicht abgelegt "
+                     "(Rueckgabe %s): %s", e.returncode,
+                     e.stderr.decode("utf-8", "replace").strip()[:300])
+        return False
+    _LOG.info("Anmeldesperre: im Benachrichtigungsbereich des LoxBerry gemeldet.")
+    return True
 
 
 def anmeldung_gelungen() -> None:
@@ -1175,6 +1263,11 @@ def mqtt_ausfall_melden(cfg: dict, merker: dict) -> None:
     paare = {"ok": 0}
     for n in bekannte_nummern(merker):
         paare["fahrzeug%s/OK" % n] = 0
+    # Laden-1: laeuft der Dienst nicht, rechnet niemand die Empfehlung - "-"
+    # statt einer stehengebliebenen 1 (fluechtig, wie im Regelbetrieb).
+    if cfg.get("preisempf_ein"):
+        paare["lade_empfehlung"] = "-"
+        paare["lade_empfehlung_grund"] = "DIENST_AUS"
     try:
         mqtt_senden(paare, mqtt_thema_saeubern(cfg.get("mqtt_topic") or "byd"))
     except Exception as err:  # noqa: BLE001
@@ -1243,7 +1336,12 @@ def abodatei_nachfuehren(cfg: dict) -> None:
 # nach einem Upgrade wird deshalb einmal nachgesehen, ob noch etwas behalten
 # liegt - geloescht wird dabei nur, was wirklich dasteht.
 # ---------------------------------------------------------------------------
-MQTT_OBEN = ("ok", "ts", "fahrzeuge")
+MQTT_OBEN = ("ok", "ts", "fahrzeuge", "lade_empfehlung", "lade_empfehlung_grund")
+# Laden-1: lade_empfehlung und lade_empfehlung_grund stehen hier, damit
+# Themenliste (by_themen_dienst()), Abraeumen und Deinstallation sie als eigen
+# kennen. Beide gehen FLUECHTIG hinaus (nicht in RETAIN_FELDER, nicht
+# "fahrzeuge"): die Empfehlung haengt an der Stunde - eine zurueckbehaltene 1
+# wirkte nach einem Neustart weiter (dieselbe Begruendung wie bei LADEEMPF).
 RETAIN_ALTLAST_KENNUNG = "am-broker-nachgelesen"
 
 
@@ -1812,6 +1910,8 @@ def horcher_themen(cfg: dict) -> set:
         th = str(cfg.get("ladeempf_thema") or "").strip()
         if th:
             t.add(th)
+    # Laden-1: Rang und Lebenszeichen der Preisquelle.
+    t |= preis_themen(cfg)
     return t
 
 
@@ -1860,6 +1960,249 @@ def ladeempfehlung(horcher: Horcher, cfg: dict):
                        1800)
         return 0
     return 1 if (z <= grenze if cfg.get("ladeempf_unter") else z >= grenze) else 0
+
+
+# ---------------------------------------------------------------------------
+# Laden-1 (Verbesserungsbau 30.09.2026, D-Punkt): Ladeempfehlung nach
+# Strompreis aus Spotpreis aWATTar oder Spotpreis Tibber
+#
+# Die Kopplung laeuft ueber die MQTT-Themen der anderen Linie, nie ueber deren
+# Dateien (vb_RAHMEN.md, D-Punkte). Gelesen wird der RANG der laufenden Stunde
+# unter den naechsten 24 Stunden (1 = guenstigste) und die Laenge der
+# Rangfolge. Nachgelesen in Spotpreis-aWATTar 1.2.30 und Spotpreis-Tibber
+# 0.9.24:
+#   rank   beide gleich: 1 + Zahl der guenstigeren Eintraege
+#   rankd  aWATTar: n + 1 - rank     Tibber: n (Zahl der Eintraege)
+# Beide senden rank/rankd FLUECHTIG und nur bei Aenderung - aWATTar dazu den
+# vollen Satz halbstuendlich, Tibber bei jeder Aenderung der Signatur (in der
+# Praxis stuendlich). Das Lebenszeichen (status/ts, status/zaehler,
+# status/ok) geht bei jedem Lauf der anderen Linie hinaus, also jede Minute.
+#
+# Folge fuer den Anlauf: nach einem Start dieses Dienstes kommt der Rang erst
+# mit der naechsten Aenderung oder dem naechsten vollen Satz - bis zu 30 min
+# (aWATTar) bzw. bis zur naechsten Stunde (Tibber). Bis dahin "-" mit
+# KEIN_RANG. Das steht so in Hilfe und README.
+#
+# Schweigt die Quelle (kein Lebenszeichen seit PREIS_LEBEN_S), meldet sie
+# keine Preise (status/ok 0) oder fehlt ein frischer Rang, geht "-" hinaus
+# (Entscheidung 5: ein Zustand ohne Aussage ist "-", nie leer) - und der Reiter
+# Test zeigt es gelb. Das ist der Rueckfall auf das bisherige Verhalten: es
+# gibt dann keine Empfehlung. Geschaltet wird am Auto nichts.
+# ---------------------------------------------------------------------------
+PREIS_QUELLEN = {"awattar": "spot_awattar", "tibber": "tibber"}
+# Lebenszeichen der Quelle: sie sendet es jede Minute; 300 s sind fuenf
+# ausgefallene Laeufe (Regeln/07: der UDP-Eingang verwirft unter Last).
+PREIS_LEBEN_S = 300
+# Hoechstalter des Rangs: aWATTar sendet ihn spaetestens alle 30 min neu,
+# Tibber mit jeder Signaturaenderung (stuendlich). 3900 s = eine Stunde und
+# fuenf Minuten Spielraum.
+PREIS_RANG_S = 3900
+# Gerechnet wird alle 30 s, gesendet bei jeder Aenderung und sonst alle 300 s
+# (fluechtige Themen: nach einem Neustart von Gateway oder Miniserver stehen
+# sie spaetestens nach fuenf Minuten wieder da).
+PREISEMPF_TAKT = 30
+PREISEMPF_WIEDERHOLEN = 300
+# Nach dem Einschalten bzw. Dienststart kommt das Lebenszeichen der Quelle
+# erst mit ihrem naechsten Minutenlauf. So lange wird ein "-" nicht gesendet
+# (Grund ANLAUF, nur im Reiter Test) - sonst stuende bei jedem Start kurz
+# ein "-" in Loxone.
+PREISEMPF_ANLAUF = 120
+DATEI_PREISEMPF = PDATA / "preisempfehlung.json"
+
+
+def preis_praefix(cfg: dict) -> str:
+    """Themenpraefix der Preisquelle: der eingetragene, sonst der Vorgabepraefix
+    der gewaehlten Linie. Ein Eintrag mit Joker- oder Trennzeichen gilt nicht
+    (die Oberflaeche weist ihn ab; von Hand in byd.json geschrieben faellt er
+    hier auf die Vorgabe zurueck)."""
+    quelle = str(cfg.get("preisempf_quelle") or "awattar")
+    vorgabe = PREIS_QUELLEN.get(quelle, PREIS_QUELLEN["awattar"])
+    roh = str(cfg.get("preisempf_praefix") or "").strip().strip("/")
+    if not roh or any(z in roh for z in "#+ \t\r\n") or "//" in roh:
+        return vorgabe
+    return roh
+
+
+def preis_themen(cfg: dict) -> set:
+    """Die fremden Themen, die Laden-1 braucht - leer, wenn aus.
+    Gegenstueck in der Oberflaeche: by_preis_themen() in by_lib.php."""
+    if not cfg.get("preisempf_ein"):
+        return set()
+    p = preis_praefix(cfg)
+    return {p + "/rank", p + "/rankd", p + "/status/ok", p + "/status/ts",
+            p + "/status/zaehler"}
+
+
+def _preis_ganzzahl(roh):
+    """'3' -> 3, '3.0' -> 3; alles andere (auch '', '-', -1) -> None."""
+    try:
+        z = float(str(roh).strip())
+    except (TypeError, ValueError):
+        return None
+    if z != z or not z.is_integer():
+        return None
+    return int(z)
+
+
+def preisempfehlung(horcher, cfg: dict) -> dict:
+    """Laden-1: die Empfehlung aus dem Rang der laufenden Stunde.
+
+    Rueckgabe: {"wert": 1|0|"-", "grund": Kennwort, ...Angaben fuer den Reiter
+    Test}. Kennwoerter: GUENSTIG, TEUER (mit Wert), HORCHER, QUELLE_SCHWEIGT,
+    QUELLE_OHNE_PREISE, KEIN_RANG (mit "-")."""
+    quelle = str(cfg.get("preisempf_quelle") or "awattar")
+    if quelle not in PREIS_QUELLEN:
+        quelle = "awattar"
+    p = preis_praefix(cfg)
+    n_std = max(1, min(12, ganz(cfg.get("preisempf_stunden"), 4)))
+    erg = {"ts": int(time.time()), "wert": "-", "grund": "", "quelle": quelle,
+           "praefix": p, "stunden": n_std, "rang": None, "von": None,
+           "grenze": None, "alter_status": None, "alter_rang": None}
+    if not horcher.verbunden:
+        erg["grund"] = "HORCHER"
+        return erg
+    alter = []
+    for t in ("status/zaehler", "status/ts"):
+        w, a = horcher.wert(p + "/" + t, PREIS_LEBEN_S)
+        if w is not None:
+            alter.append(a)
+    if not alter:
+        erg["grund"] = "QUELLE_SCHWEIGT"
+        return erg
+    erg["alter_status"] = min(alter)
+    ok_roh, _a = horcher.wert(p + "/status/ok", PREIS_LEBEN_S)
+    if ok_roh is not None and _preis_ganzzahl(ok_roh) == 0:
+        erg["grund"] = "QUELLE_OHNE_PREISE"
+        return erg
+    rang_roh, a_rang = horcher.wert(p + "/rank", PREIS_RANG_S)
+    rangd_roh, _a = horcher.wert(p + "/rankd", PREIS_RANG_S)
+    if a_rang >= 0:
+        erg["alter_rang"] = a_rang
+    rang = _preis_ganzzahl(rang_roh) if rang_roh is not None else None
+    rangd = _preis_ganzzahl(rangd_roh) if rangd_roh is not None else None
+    if rang is None or rangd is None or rang < 1 or rangd < 1:
+        erg["grund"] = "KEIN_RANG"
+        return erg
+    von = rangd if quelle == "tibber" else rang + rangd - 1
+    if von < 1 or rang > von:
+        erg["grund"] = "KEIN_RANG"
+        return erg
+    # Eintraege feiner als eine Stunde (Viertelstundenpreise): n > 24. Dann
+    # gilt die Grenze anteilig, sonst waeren "4 Stunden" nur 4 Viertelstunden.
+    grenze = n_std if von <= 24 else -(-n_std * von // 24)
+    erg.update({"rang": rang, "von": von, "grenze": grenze})
+    if rang <= grenze:
+        erg["wert"], erg["grund"] = 1, "GUENSTIG"
+    else:
+        erg["wert"], erg["grund"] = 0, "TEUER"
+    return erg
+
+
+class Preisempfehlung:
+    """Laden-1 im laufenden Dienst: rechnet alle PREISEMPF_TAKT Sekunden, sendet
+    bei jeder Aenderung und sonst alle PREISEMPF_WIEDERHOLEN Sekunden, schreibt
+    den Stand fuer die Oberflaeche nach DATEI_PREISEMPF (bei Aenderung, sonst
+    hoechstens alle 300 s - der Datenordner liegt auf der Karte)."""
+
+    def __init__(self):
+        self.gerechnet = 0.0
+        self.gesendet_um = 0.0
+        self.gesendet = None       # (wert, grund) zuletzt hinausgegangen
+        self.geschrieben_um = 0.0
+        self.geschrieben = None
+        self.ein_seit = 0.0        # 0 = aus; sonst Beginn des Anlaufs
+        self.anlauf_praefix = ""
+        self.anlauf_vorbei = False
+        self.hat_gesendet = False
+
+    def _senden(self, cfg: dict, wert, grund: str) -> bool:
+        if not cfg.get("mqtt_ein"):
+            return False
+        try:
+            versucht, schlecht = mqtt_senden(
+                {"lade_empfehlung": wert, "lade_empfehlung_grund": grund},
+                mqtt_thema_saeubern(cfg.get("mqtt_topic") or "byd"))
+        except Exception as err:  # noqa: BLE001
+            melde_gebremst("preisempf_senden", "Ladeempfehlung nach Strompreis: "
+                           "Senden gescheitert (%s)." % fehlertext(err), 3600)
+            return False
+        return versucht > 0 and schlecht == 0
+
+    def takt(self, horcher, erzwingen: bool = False) -> None:
+        jetzt = time.time()
+        if not erzwingen and jetzt - self.gerechnet < PREISEMPF_TAKT:
+            return
+        self.gerechnet = jetzt
+        # Die Einstellung wird hier nachgelesen, nicht erst im naechsten
+        # Abruftakt (bis 3600 s): wer sie einschaltet, sieht nach spaetestens
+        # 30 s die Abos und im Reiter Test den Stand.
+        cfg = config()
+        horcher.sicherstellen(horcher_themen(cfg))
+        if not cfg.get("preisempf_ein"):
+            if self.ein_seit and self.hat_gesendet:
+                # Im Lauf ausgeschaltet: EINMAL "-", sonst stuende in Loxone
+                # die letzte 1 (fluechtige Themen bleiben am Eingang stehen).
+                self._senden(cfg, "-", "AUS")
+                _LOG.info("Ladeempfehlung nach Strompreis ausgeschaltet - einmal '-' "
+                          "gesendet.")
+            self.ein_seit = 0.0
+            self.gesendet = None
+            self.hat_gesendet = False
+            self.geschrieben = None
+            try:
+                DATEI_PREISEMPF.unlink()
+            except OSError:
+                pass
+            return
+        # Anlauf: nach dem Einschalten, dem Dienststart und einem Wechsel der
+        # Quelle (anderer Praefix: neue Abos, das erste Lebenszeichen fehlt
+        # noch). Er endet mit der ersten echten Aussage (0/1) oder nach
+        # PREISEMPF_ANLAUF Sekunden - danach geht jedes "-" hinaus. Im
+        # Pruefstand gemessen: ohne das Ende bei der ersten Aussage wurde ein
+        # "-" (status/ok 0) zwei Minuten lang verschluckt, ohne den
+        # Praefixwechsel ging beim Umstellen auf Tibber kurz ein "-" hinaus.
+        praefix = preis_praefix(cfg)
+        if not self.ein_seit or praefix != self.anlauf_praefix:
+            self.ein_seit = jetzt
+            self.anlauf_praefix = praefix
+            self.anlauf_vorbei = False
+        erg = preisempfehlung(horcher, cfg)
+        if erg["wert"] in (0, 1):
+            self.anlauf_vorbei = True
+        anlauf = (erg["wert"] == "-" and not self.anlauf_vorbei
+                  and jetzt - self.ein_seit < PREISEMPF_ANLAUF)
+        if anlauf:
+            erg["grund_eigentlich"] = erg["grund"]
+            erg["grund"] = "ANLAUF"
+        erg["mqtt"] = 1 if cfg.get("mqtt_ein") else 0
+        paar = (erg["wert"], erg["grund"])
+        if paar != self.geschrieben or jetzt - self.geschrieben_um >= 300:
+            if json_schreiben(DATEI_PREISEMPF, erg):
+                self.geschrieben = paar
+                self.geschrieben_um = jetzt
+        if anlauf:
+            return
+        if paar != self.gesendet or jetzt - self.gesendet_um >= PREISEMPF_WIEDERHOLEN:
+            if paar != self.gesendet:
+                _LOG.info("Ladeempfehlung nach Strompreis: %s (%s, Rang %s von %s, "
+                          "Grenze %s, Quelle %s)", erg["wert"], erg["grund"],
+                          erg["rang"], erg["von"], erg["grenze"], erg["praefix"])
+            if self._senden(cfg, erg["wert"], erg["grund"]):
+                self.hat_gesendet = True
+            # Auch ohne MQTT als erledigt vermerken: sonst stuende bei MQTT
+            # aus jede halbe Minute dieselbe Protokollzeile da.
+            self.gesendet = paar
+            self.gesendet_um = jetzt
+
+    def abschied(self) -> None:
+        """Der Dienst endet: einmal "-" mit DIENST_AUS, wenn in diesem Lauf
+        eine Empfehlung hinausging (fluechtig - Loxone behielte sonst den
+        letzten Wert)."""
+        if not self.hat_gesendet:
+            return
+        cfg = config()
+        if cfg.get("preisempf_ein"):
+            self._senden(cfg, "-", "DIENST_AUS")
 
 
 def entfernung_m(b1, l1, b2, l2):
@@ -3443,6 +3786,8 @@ async def dienst_lauf(einmal: bool) -> int:
     fehler_folge = 0
     freigeschaltet: set = set()
     horcher = Horcher()
+    # Laden-1: rechnet in der Wartezeit alle 30 s (Preisempfehlung.takt()).
+    preis = Preisempfehlung()
     merker = merker_lesen()
     # M3: welche verschwundenen Fahrzeuge in DIESEM Lauf schon "-" bekamen.
     # Bewusst im Speicher und nicht im merker: ueber UDP bestaetigt nichts, ob
@@ -3599,6 +3944,13 @@ async def dienst_lauf(einmal: bool) -> int:
                 # Fehlversuchen bis zu einer Stunde dauern, und ein Dienst, der
                 # planmaessig wartet, ist kein haengender.
                 herzschlag()
+                # Laden-1: die Stunde wechselt unabhaengig vom Abruftakt (bis
+                # 3600 s) - gerechnet wird deshalb hier, in der Wartezeit.
+                try:
+                    preis.takt(horcher)
+                except Exception as err:  # noqa: BLE001
+                    melde_gebremst("preisempf", "Ladeempfehlung nach Strompreis: %s"
+                                   % fehlertext(err), 3600)
                 try:
                     # letzter_versuch mitgeben: daran haengt die Bremse gegen
                     # den Mindesttakt. Die Zahl stand bisher nur im Abbild und
@@ -3628,6 +3980,11 @@ async def dienst_lauf(einmal: bool) -> int:
             except Exception as err:  # noqa: BLE001
                 _LOG.error("Die BYD-Sitzung liess sich nicht schliessen: %s",
                            fehlertext(err))
+        # Laden-1: endet der Dienst, geht einmal "-" hinaus.
+        try:
+            preis.abschied()
+        except Exception as err:  # noqa: BLE001
+            _LOG.error("Ladeempfehlung nach Strompreis beim Ende: %s", fehlertext(err))
         # Jeder Fehlerweg schliesst zu. Ein Horcher, der an einem
         # Abbruch haengen bleibt, haelt eine Verbindung zum Broker offen -
         # eine Ressource, die niemand zaehlt.
@@ -3812,6 +4169,24 @@ def selbsttest() -> int:
         except Exception as err:  # noqa: BLE001
             zeilen.append("[INFO] Die Felder der Bibliothek liessen sich nicht erfragen: %s"
                           % err)
+        # BYD-a2: ohne eine Klasse *AuthenticationError erkennt der Dienst eine
+        # abgewiesene Anmeldung nicht - dann greift die Anmeldesperre (C3) nie.
+        # Eine WARNUNG, kein Fehler: abrufen kann die Bibliothek trotzdem.
+        klassen = anmeldefehler_klassen()
+        if klassen:
+            zeilen.append("[OK]   pybyd fuehrt die Ausnahmeklasse %s - eine abgewiesene "
+                          "Anmeldung zaehlt fuer die Anmeldesperre (hoechstens %d in 24 "
+                          "Stunden)" % (", ".join(klassen), ANMELDE_GRENZE))
+        else:
+            zeilen.append("[WARN] pybyd (Fassung %s) fuehrt keine Ausnahmeklasse *AuthenticationError. "
+                          "Die Anmeldesperre (hoechstens %d abgewiesene Anmeldungen in 24 "
+                          "Stunden, dann Stillstand bis zu neuen Zugangsdaten) erkennt "
+                          "eine abgewiesene Anmeldung NUR an dieser Klasse und greift mit "
+                          "dieser Fassung nie. Falsche Zugangsdaten bremst dann nur der "
+                          "Waechter: drei Neustarts, danach einer je 30 Minuten - rund 50 "
+                          "Anmeldeversuche am Tag, und BYD kann das Konto sperren. "
+                          "Zugangsdaten sorgfaeltig pruefen und den Dienst anhalten, "
+                          "wenn die Anmeldung scheitert." % (fassung, ANMELDE_GRENZE))
 
     for name, pfad in (("Konfiguration", PCONFIG), ("Daten", PDATA), ("Log", PLOG)):
         schreibbar = os.access(pfad, os.W_OK) if pfad.exists() else False
@@ -3944,6 +4319,16 @@ def selbsttest() -> int:
                          else "groesser oder gleich", c["ladeempf_alter"]))
     else:
         zeilen.append("[INFO] Ladeempfehlung ist ausgeschaltet")
+    if c.get("preisempf_ein"):
+        pe = json_lesen(DATEI_PREISEMPF)
+        zeilen.append("[INFO] Ladeempfehlung nach Strompreis: Quelle %s (Themen %s/rank, "
+                      "%s/rankd), guenstigste %d Stunden; letzter Stand: %s"
+                      % (c["preisempf_quelle"], preis_praefix(c), preis_praefix(c),
+                         c["preisempf_stunden"],
+                         ("%s (%s)" % (pe.get("wert"), pe.get("grund"))) if pe
+                         else "noch keiner - der Dienst rechnet alle 30 s"))
+    else:
+        zeilen.append("[INFO] Ladeempfehlung nach Strompreis ist ausgeschaltet")
     if c["kapazitaet"] > 0:
         zeilen.append("[OK]   Batteriekapazitaet %d kWh hinterlegt - Verbrauch und "
                       "geladene Menge werden gerechnet" % c["kapazitaet"])
