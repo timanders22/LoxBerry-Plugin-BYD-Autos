@@ -101,12 +101,31 @@ case "$?" in
         echo "<INFO> Einstellungen eintragen." ;;
 esac
 
+# I5 (Durchgang 29.09.2026): eine Ladeprobe fuer pybyd, und der Rat richtet
+# sich danach. Scheiterte die Installation von pybyd (kein Netz), ist die
+# venv da, pybyd aber nicht - ein Start aus dem Reiter scheitert dann. Bis
+# 0.9.19 riet dieses Skript trotzdem "im Reiter Einstellungen starten"
+# (gemessen, Installer-Pruefer Fall P1).
+BY_LADBAR=1
+BY_PY="$BASE/bin/plugins/$PFOLDER/venv/bin/python3"
+if [ ! -x "$BY_PY" ] || ! "$BY_PY" -c 'from pybyd import BydClient, BydConfig' >/dev/null 2>&1; then
+    BY_LADBAR=0
+    echo "<WARNING> Die Bibliothek pybyd laesst sich nicht laden - der Dienst kann nicht"
+    echo "<WARNING> starten. Das Update bitte mit Internetverbindung wiederholen; es holt"
+    echo "<WARNING> pybyd dann nach."
+fi
+
 # Der Merker fuer den Wiederanlauf gehoert postinstall. Liegt er hier noch,
 # ist postinstall nicht gelaufen - das ist eine Auskunft, kein Aufraeumfall.
 if [ -f "$BASE/config/plugins/$PFOLDER.lief_vorher" ]; then
     echo "<INFO> Der Merker fuer den Wiederanlauf liegt noch. Der minuetliche"
     echo "<INFO> Waechter startet den Dienst nicht von sich aus, solange kein"
-    echo "<INFO> Sollmerker gesetzt ist - bitte im Reiter Einstellungen starten."
+    if [ "$BY_LADBAR" = "1" ]; then
+        echo "<INFO> Sollmerker gesetzt ist - bitte im Reiter Einstellungen starten."
+    else
+        echo "<INFO> Sollmerker gesetzt ist. Erst das Update mit Internetverbindung"
+        echo "<INFO> wiederholen - es startet den Dienst dann von selbst wieder."
+    fi
 fi
 
 # ---------- Die Marke der laufenden Aktualisierung entfernen ----------

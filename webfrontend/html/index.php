@@ -144,7 +144,7 @@ $by_soll = (string) $by_cfg['aktionstoken'];
  * "selftest=0" und "selftest=" an, und ein Anwender, der ihn ausschalten will,
  * indem er 0 schreibt, bekam den Selbsttest trotzdem. */
 if (isset($_GET['selftest']) && (string) $_GET['selftest'] === '1') {
-    $by_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
+    $by_ist = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '';
     if ($by_soll === '') {
         by_ende(403, 'SELFTEST;OK=0;ERR=KEIN_TOKEN_EINGERICHTET',
             'Die Plugin-Oberflaeche wurde noch nie geoeffnet - es gibt noch kein Token.');
@@ -163,7 +163,7 @@ if (isset($_GET['selftest']) && (string) $_GET['selftest'] === '1') {
  * steht, haengt von request_order ab, und die Vorgabe schliesst Cookies ein -
  * ein Cookie namens "token" haette die Pruefung gefuettert.
  */
-$by_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
+$by_ist = (isset($_GET['token']) && is_string($_GET['token'])) ? $_GET['token'] : '';
 if ($by_soll === '') {
     by_ende(403, 'BYD;OK=0;GRUND=KEIN_TOKEN_GESETZT',
         'Die Plugin-Oberflaeche wurde noch nie geoeffnet - es gibt noch kein Token.');
@@ -218,6 +218,13 @@ $by_minuten  = by_param('minuten', '/^[0-9]{1,2}$/', '');
 $by_lox = by_loxone();
 $by_alter = by_alter();
 $by_alle = by_fahrzeuge();
+/* C6 (Entscheidung 4 vom 29.09.2026): OK=0, sobald das Abbild aelter ist als
+ * das Dreifache des eingestellten Abruftakts. Bis 0.9.19 blieb OK=1 stehen,
+ * gleich wie alt (gemessen: ALTER=4000 bei Takt 300, OK=1). ALTER bleibt
+ * unveraendert daneben. Der Takt wird wie im Dienst auf 120 bis 3600 s
+ * begrenzt (config() in bin/byd.py). */
+$by_takt = max(120, min(3600, (int) $by_cfg['intervall']));
+$by_frisch = ($by_alter >= 0 && $by_alter <= 3 * $by_takt);
 
 /** Findet das Fahrzeug zur laufenden Nummer oder zur Fahrgestellnummer. */
 function by_waehlen($alle, $schluessel)
@@ -261,9 +268,20 @@ function by_doku_felder()
     return $aus;
 }
 
+/* C7: ohne Daten - noch kein Abruf, oder das Abbild fuehrt kein Fahrzeug -
+ * antwortet der Endpunkt mit HTTP 503 und nennt den Grund (Regeln/07, "Faellt
+ * die Quelle ganz aus ..., auch vor dem ersten Abruf"). Bis 0.9.19 kam HTTP 200
+ * mit FAHRZEUG_UNBEKANNT; das sieht in Loxone aus wie eine Antwort. Loxone
+ * behaelt bei 503 die letzten Werte und zeigt den Ausfall. FAHRZEUG_UNBEKANNT
+ * bleibt fuer den Fall, dass es Fahrzeuge gibt, die gewaehlte Nummer aber nicht. */
+if (in_array($by_aktion, array('status', 'position', 'fahrzeuge'), true) && count($by_alle) === 0) {
+    by_ende(503, sprintf('%s;OK=0;GRUND=KEINE_DATEN;N=0;ALTER=%d',
+        strtoupper($by_aktion), $by_alter));
+}
+
 if ($by_aktion === 'fahrzeuge') {
     echo sprintf("FAHRZEUGE;OK=%d;N=%d;ALTER=%d\n",
-        (!empty($by_lox['ok']) && $by_alter >= 0) ? 1 : 0, count($by_alle), $by_alter);
+        (!empty($by_lox['ok']) && $by_frisch) ? 1 : 0, count($by_alle), $by_alter);
     foreach ($by_alle as $by_nr => $by_f) {
         echo $by_nr . ';'
            . (isset($by_f['marke']) ? $by_f['marke'] : '') . ' '
@@ -290,9 +308,10 @@ if (in_array($by_aktion, array('status', 'position'), true) && $by_f === null) {
  * meldet fuer das ausgefallene Fahrzeug OK=1 mit veralteten Werten. Das ist
  * eine stille Falschaussage, und sie ist ohne Blick in den Code nicht zu
  * erkennen. Verlangt werden deshalb drei Dinge zugleich: der Lauf war in
- * Ordnung, das Abbild hat ein Alter, und DIESES Fahrzeug hat Werte gebracht.
+ * Ordnung, das Abbild ist hoechstens dreimal so alt wie der Abruftakt (C6),
+ * und DIESES Fahrzeug hat Werte gebracht.
  */
-$by_ok = (!empty($by_lox['ok']) && $by_alter >= 0
+$by_ok = (!empty($by_lox['ok']) && $by_frisch
           && is_array($by_f) && !empty($by_f['ok'])) ? 1 : 0;
 
 if ($by_aktion === 'status') {

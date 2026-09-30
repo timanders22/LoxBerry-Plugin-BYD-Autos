@@ -143,11 +143,16 @@ ordner_anlegen() {
     mkdir -p "$PDATA" "$PLOG" 2>/dev/null
 }
 
-laeuft() {
-    [ -f "$PID" ] || return 1
-    P=$(cat "$PID" 2>/dev/null)
-    [ -n "$P" ] || return 1
-    kill -0 "$P" 2>/dev/null || return 1
+# C1 (Durchgang 29.09.2026): bis 0.9.19 kannte dieses Skript nur den Dienst
+# aus der PID-Datei. Zwei gleichzeitige Starts ergaben zwei Dienste; "stop"
+# meldete "angehalten", einer lief weiter, und "status" sagte "gestoppt"
+# (gemessen, Code-Pruefer T2). Jetzt wird argumentweise ueber /proc gesucht:
+# ist_dienst prueft eine Nummer, dienste_suchen findet alle, dienst_pid nimmt
+# zuerst die PID-Datei, dann die Suche. Bauform AudiConnect 0.9.22.
+ist_dienst() {   # $1 Prozessnummer
+    [ -n "$1" ] || return 1
+    case "$1" in *[!0-9]*) return 1 ;; esac
+    [ -r "/proc/$1/cmdline" ] || return 1
     # Nummernrecycling ausschliessen: der Prozess muss unser Skript sein.
     #
     # Kein grep ueber die ganze Befehlszeile: /proc/<pid>/cmdline trennt die
@@ -157,7 +162,7 @@ laeuft() {
     # und das erste ist ein Python. Die zweite braucht es, weil
     # "nano <pfad>/byd.py" ebenfalls den vollen Pfad als zweites Argument
     # fuehrt. Der Dienst laeuft immer als "<venv>/bin/python3 <pfad>/byd.py".
-    ARGS=$(tr '\0' '\n' < "/proc/$P/cmdline" 2>/dev/null)
+    ARGS=$(tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline")
     [ "$(echo "$ARGS" | sed -n '2p')" = "$SKRIPT" ] || return 1
     echo "$ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
     # Und GENAU zwei Argumente, kein drittes. Sonst ist es ein Einmallauf und
@@ -170,6 +175,48 @@ laeuft() {
     # falsch prueft.
     [ -z "$(echo "$ARGS" | sed -n '3p')" ] || return 1
     return 0
+}
+
+dienste_suchen() {
+    for D in /proc/[0-9]*; do
+        ist_dienst "${D#/proc/}" && echo "${D#/proc/}"
+    done
+    return 0
+}
+
+dienst_pid() {
+    if [ -f "$PID" ]; then
+        P=$(cat "$PID" 2>/dev/null)
+        if ist_dienst "$P"; then
+            printf '%s\n' "$P"
+            return 0
+        fi
+    fi
+    P=$(dienste_suchen | sed -n '1p')
+    [ -n "$P" ] || return 1
+    printf '%s\n' "$P"
+    return 0
+}
+
+laeuft() {
+    dienst_pid >/dev/null
+}
+
+# C3: gilt die Anmeldesperre von bin/byd.py fuer die GELTENDEN Zugangsdaten?
+# Dieselbe Rechnung wie anmeldung_lesen() dort: anmeldung.json traegt die
+# Pruefsumme von zugang.json und "gesperrt". Gelesen mit dem Python der
+# eigenen Umgebung; ohne sie oder ohne Datei gilt keine Sperre.
+anmeldung_gesperrt() {
+    [ -f "$PDATA/anmeldung.json" ] || return 1
+    [ -x "$PY" ] || return 1
+    "$PY" -c 'import hashlib, json, sys
+try:
+    a = json.load(open(sys.argv[1], encoding="utf-8"))
+    k = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(a, dict) and a.get("gesperrt") and a.get("zugang") == k else 1)' \
+        "$PDATA/anmeldung.json" "$PCONFIG/zugang.json" 2>/dev/null
 }
 
 arbeitet() {
@@ -243,6 +290,18 @@ upgrade_laeuft() {
 }
 
 starten() {
+    # C1: ein Start zur Zeit. Gesperrt wird auf diesem Skript selbst, es muss
+    # nichts angelegt werden. Der Dienst bekommt den Griff NICHT vererbt
+    # (8<&- an der nohup-Zeile), sonst hielte er die Sperre, solange er
+    # laeuft (Regeln/03, "Sperre vererbt sich an Kinder"). byd.py sperrt
+    # zusaetzlich selbst. Ohne flock bleibt es beim bisherigen Weg.
+    if command -v flock >/dev/null 2>&1; then
+        exec 8<"$0"
+        if ! flock -n 8; then
+            echo "Ein anderer Start dieses Dienstes laeuft gerade - dieser Aufruf startet nichts."
+            return 1
+        fi
+    fi
     # Vor allem anderen: waehrend einer Aktualisierung wird nichts gestartet.
     # Der Rueckgabewert ist 0 und kein Fehler - es ist nichts schiefgegangen,
     # es ist nur nicht der Augenblick dafuer. Ein Fehler hier liesse den
@@ -253,8 +312,8 @@ starten() {
         echo "        Der Dienst wird am Ende der Installation gestartet."
         return 0
     fi
-    if laeuft; then
-        echo "laeuft bereits (PID $(cat "$PID"))"
+    if P=$(dienst_pid); then
+        echo "laeuft bereits (PID $P)"
         return 0
     fi
     if [ ! -x "$PY" ]; then
@@ -272,15 +331,29 @@ starten() {
         echo "        Einstellungen Benutzername und Passwort des BYD-Kontos eintragen."
         return 1
     fi
+    # C3: gilt die Anmeldesperre, wird nicht gestartet - und nicht "gestartet"
+    # gemeldet. Neue Zugangsdaten im Reiter Einstellungen heben sie auf.
+    if anmeldung_gesperrt; then
+        echo "FEHLER: Die Anmeldung bei BYD wurde wiederholt abgewiesen. Das Plugin meldet"
+        echo "        sich nicht mehr an, bis im Reiter Einstellungen neue Zugangsdaten"
+        echo "        gespeichert sind. Es wurde nichts gestartet."
+        return 1
+    fi
     # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
     # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
     ordner_anlegen
     : > "$STARTLOG"
-    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 &
+    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 8<&- &
     echo $! > "$PID"
-    sleep 2
-    if laeuft; then
+    # C3: "gestartet" erst nach drei Sekunden Lebenszeit (Regeln/03, an Python
+    # gemessen). Bis 0.9.19 stand hier "sleep 2".
+    NEU=$(cat "$PID" 2>/dev/null)
+    for i in 1 2 3; do
+        sleep 1
+        ist_dienst "$NEU" || break
+    done
+    if ist_dienst "$NEU" && ! anmeldung_gesperrt; then
         # Der Sollmerker wird erst NACH dem gelungenen Start gesetzt.
         #
         # Andersherum - Merker vor dem Startversuch - macht aus einem
@@ -288,8 +361,20 @@ starten() {
         # findet den Merker, versucht es jede Minute erneut, und die
         # Oberflaeche zeigt trotzdem "gestoppt".
         touch "$SOLL"
-        echo "gestartet (PID $(cat "$PID"))"
+        echo "gestartet (PID $NEU)"
         return 0
+    fi
+    # Endete der neue Prozess, weil ein ANDERER Dienst die Sperre von byd.py
+    # haelt (Rueckgabe 3), laeuft der Dienst - nur nicht dieser. Seine Nummer
+    # kommt zurueck in die PID-Datei, die eben ueberschrieben wurde.
+    if ANDERER=$(dienst_pid) && [ "$ANDERER" != "$NEU" ]; then
+        echo "$ANDERER" > "$PID"
+        echo "laeuft bereits (PID $ANDERER)"
+        return 0
+    fi
+    if anmeldung_gesperrt; then
+        echo "FEHLER: Die Anmeldung bei BYD wurde abgewiesen, die Anmeldesperre gilt jetzt."
+        echo "        Neue Zugangsdaten im Reiter Einstellungen speichern."
     fi
     echo "FEHLER: Start fehlgeschlagen. Die letzten Zeilen der Startdatei:"
     tail -n 5 "$STARTLOG" 2>/dev/null | sed 's/^/        /'
@@ -301,23 +386,34 @@ starten() {
 
 anhalten() {
     rm -f "$SOLL"
-    if ! laeuft; then
+    # C1: ALLE eigenen Dienste, nicht nur den aus der PID-Datei, und gemeldet
+    # wird nur, was geschah - nachgesehen, nicht angenommen.
+    LISTE=$(dienste_suchen)
+    if [ -z "$LISTE" ]; then
         rm -f "$PID"
         echo "laeuft nicht"
         return 0
     fi
-    P=$(cat "$PID")
-    kill "$P" 2>/dev/null
+    ALLE=$(printf '%s\n' "$LISTE" | tr '\n' ' ')
+    ALLE=${ALLE% }
+    kill $LISTE 2>/dev/null
     for i in 1 2 3 4 5 6 7 8 9 10; do
-        laeuft || break
+        [ -n "$(dienste_suchen)" ] || break
         sleep 1
     done
-    if laeuft; then
-        kill -9 "$P" 2>/dev/null
+    REST=$(dienste_suchen)
+    if [ -n "$REST" ]; then
+        kill -9 $REST 2>/dev/null
         sleep 1
     fi
+    UEBRIG=$(dienste_suchen)
+    if [ -n "$UEBRIG" ]; then
+        echo "FEHLER: Vorgang $(printf '%s\n' "$UEBRIG" | tr '\n' ' ')laeuft weiter - die PID-Datei bleibt stehen."
+        echo "        Gehoert er einem anderen Benutzer? ps -o user= -p $(printf '%s' "$UEBRIG" | sed -n '1p')"
+        return 1
+    fi
     rm -f "$PID"
-    echo "angehalten"
+    echo "angehalten ($ALLE)"
     return 0
 }
 
@@ -326,8 +422,8 @@ case "$1" in
     stop)    anhalten ;;
     restart) anhalten; sleep 1; starten ;;
     status)
-        if laeuft; then
-            echo "laeuft $(cat "$PID")"
+        if P=$(dienst_pid); then
+            echo "laeuft $P"
             exit 0
         fi
         echo "gestoppt"
@@ -349,6 +445,23 @@ case "$1" in
         if [ -f "$SOLL" ]; then
             # Der Protokollordner liegt auf der Ramdisk und kann fehlen.
             ordner_anlegen
+            if ! laeuft && anmeldung_gesperrt; then
+                # C3: gilt die Anmeldesperre, startet der Waechter nicht neu
+                # und zaehlt nicht. Einmal je Stunde steht es im Protokoll.
+                # Speichert der Anwender neue Zugangsdaten, gilt die Sperre
+                # nicht mehr, und der naechste Lauf startet den Dienst.
+                SPERRMERK="$PDATA/.waechter_anmeldesperre"
+                LETZT=$(cat "$SPERRMERK" 2>/dev/null || echo 0)
+                case "$LETZT" in ''|*[!0-9]*) LETZT=0 ;; esac
+                JETZT=$(date +%s 2>/dev/null)
+                case "$JETZT" in ''|*[!0-9]*) exit 0 ;; esac
+                if [ $((JETZT - LETZT)) -ge 3600 ]; then
+                    echo "$JETZT" > "$SPERRMERK"
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: die Anmeldesperre gilt - kein Neustart, bis neue Zugangsdaten gespeichert sind." >> "$LOGDATEI"
+                fi
+                exit 0
+            fi
+            rm -f "$PDATA/.waechter_anmeldesperre"
             if ! laeuft; then
                 GRUND="Dienst lief nicht"
             elif ! arbeitet; then
@@ -376,11 +489,14 @@ case "$1" in
             fi
             date +%s > "$PDATA/.waechter_zeit"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: $GRUND, wird neu gestartet (Fehlversuche bisher: $N)." >> "$LOGDATEI"
-            if starten >> "$STARTLOG" 2>&1; then
-                rm -f "$ZAEHLER"
-            else
-                echo $((N + 1)) > "$ZAEHLER"
-            fi
+            # C3: der Zaehler zaehlt JEDEN Neustart seit dem letzten Lauf, der
+            # den Dienst laufen sah - auch einen, den starten() "gestartet"
+            # nannte. Bis 0.9.19 loeschte ein solcher Start den Zaehler, und
+            # ein Dienst, der nach drei Sekunden an der Anmeldung starb, wurde
+            # jede Minute neu gestartet (gemessen, Code-Pruefer T3). Geloescht
+            # wird er nur im Zweig darunter.
+            echo $((N + 1)) > "$ZAEHLER"
+            starten >> "$STARTLOG" 2>&1 || true
         else
             rm -f "$PDATA/.waechter_fehl"
         fi

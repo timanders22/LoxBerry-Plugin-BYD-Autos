@@ -143,8 +143,25 @@ if (isset($_POST['activetab']) && in_array((string) $_POST['activetab'],
 
 $by_meldungen = array();   // Erfolgsmeldungen
 $by_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
+/* U10 (Durchgang 29.09.2026): ein Knopf, der nichts speichert (Dienst, Test,
+ * Protokoll), meldet sein Scheitern NICHT unter der Ueberschrift der
+ * Beanstandungsliste ("Bitte diese Punkte berichtigen") - Regeln/04. */
+$by_stoerungen = array();
 $by_ausgabe = '';
 $by_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
+// U1: war es ein POST? Bleibt wahr, auch wenn das Formularmerkmal nicht passt.
+$by_post_roh = $by_post;
+/* U1: die Einmalmeldung der vorigen Anfrage - NUR beim GET. Beim POST sind die
+ * Listen die Sammler der Eingabepruefung. */
+if (!$by_post) {
+    $by_einmal = by_einmal_lesen();
+    if ($by_einmal !== null) {
+        $by_meldungen = $by_einmal['meldungen'];
+        $by_fehler = $by_einmal['fehler'];
+        $by_stoerungen = $by_einmal['stoerungen'];
+        $by_ausgabe = $by_einmal['ausgabe'];
+    }
+}
 
 /* ================= Ein zentraler Schutz vor jedem Handler =================
  *
@@ -414,11 +431,22 @@ if ($by_post && $by_formular === 'einstellungen') {
         // Ist die FORM eines Geheimnisses erkennbar falsch, wird beim Speichern
         // abgewiesen, statt den Benutzer in eine Fehlermeldung des Anbieters
         // laufen zu lassen.
+        /* U6 (Durchgang 29.09.2026): eine beanstandete PIN oder Laenderkennung
+         * nimmt nur SICH zurueck. Bis 0.9.19 verwarf die elseif-Kette auch
+         * Benutzername und Passwort, waehrend die Meldung sagte, alles
+         * Uebrige sei gespeichert (gemessen, Oberflaechen-Pruefer Z2). Leer
+         * bzw. null heisst in by_zugang_speichern(): bisherigen Wert behalten. */
+        $by_pin_neu = $by_pin;
+        $by_land_neu = $by_land;
         if ($by_pin !== '' && !preg_match('/^[0-9]{4,8}$/', $by_pin)) {
             $by_fehler[] = by_t('EINST.FEHLER_PIN');
-        } elseif ($by_land !== '' && !preg_match('/^[A-Z]{2}$/', $by_land)) {
+            $by_pin_neu = '';
+        }
+        if ($by_land !== '' && !preg_match('/^[A-Z]{2}$/', $by_land)) {
             $by_fehler[] = by_t('EINST.FEHLER_LAND');
-        } elseif (!by_zugang_speichern($by_benutzer, $by_pw, $by_pin, $by_land)) {
+            $by_land_neu = null;
+        }
+        if (!by_zugang_speichern($by_benutzer, $by_pw, $by_pin_neu, $by_land_neu)) {
             $by_fehler[] = by_t('EINST.FEHLER_ZUGANG_SPEICHERN');
         }
     }
@@ -471,11 +499,18 @@ if ($by_post && $by_formular === 'einstellungen') {
 /* ---------------- MQTT (eigener Reiter, eigenes Formular) ---------------- */
 if ($by_post && $by_formular === 'mqtt') {
     $by_mcfg = by_config();
+    $by_malt = $by_mcfg;
     $by_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
     $by_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
         (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
     if ($by_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $by_mtopic)) {
         $by_fehler[] = by_t('EINST.FEHLER_TOPIC');
+    } elseif (strpos($by_mtopic, '//') !== false || trim($by_mtopic, '/') === '') {
+        /* M8 (Durchgang 29.09.2026): eine leere Ebene wird abgewiesen. Der
+         * Dienst zieht "a//b" zu "a/b" zusammen; die Seite zeigte "a//b/#"
+         * als Abo, und wer es abschrieb, abonnierte ein Thema, auf das nie
+         * etwas kommt (gemessen, MQTT-Pruefer B8). */
+        $by_fehler[] = by_t('EINST.FEHLER_TOPIC_EBENE');
     } else {
         $by_mcfg['mqtt_topic'] = trim($by_mtopic, '/');
     }
@@ -491,6 +526,30 @@ if ($by_post && $by_formular === 'mqtt') {
         $by_meldungen[] = $by_fehler
             ? sprintf(by_t('EINST.GESPEICHERT_MIT_EINWAND'), count($by_fehler))
             : by_t('EINST.GESPEICHERT');
+        /* M5: die Abodatei folgt dem Praefix - nur wenn sie abweicht. */
+        $by_abo = by_abodatei_nachfuehren($by_mcfg['mqtt_topic']);
+        if ($by_abo === 'neu') {
+            $by_meldungen[] = sprintf(by_t('MQTT.ABODATEI_NEU'),
+                by_e($by_mcfg['mqtt_topic'] . '/#'));
+        } elseif ($by_abo === 'fehler') {
+            $by_stoerungen[] = by_t('MQTT.ABODATEI_FEHLER');
+        }
+        /* M9: nach einem Praefixwechsel und beim Abschalten die behaltenen
+         * Themen unter dem ALTEN Praefix abraeumen - mit der Logik von
+         * byd.py --mqtt-leeren, und das Ergebnis melden. Bis 0.9.19 blieben
+         * sie stehen (MQTT-Pruefer B9). Nur, wenn MQTT vorher an war. */
+        $by_alt_praefix = trim((string) $by_malt['mqtt_topic'], '/');
+        if (!empty($by_malt['mqtt_ein']) && $by_alt_praefix !== ''
+            && (empty($by_mcfg['mqtt_ein']) || $by_alt_praefix !== $by_mcfg['mqtt_topic'])) {
+            list($by_arc, $by_atext) = by_mqtt_abraeumen($by_alt_praefix);
+            $by_azeile = sprintf(by_t('MQTT.ABGERAEUMT'), by_e($by_alt_praefix)) . ' '
+                       . by_e($by_atext);
+            if ($by_arc === 0) {
+                $by_meldungen[] = $by_azeile;
+            } else {
+                $by_stoerungen[] = $by_azeile;
+            }
+        }
     } else {
         $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
     }
@@ -505,7 +564,7 @@ if ($by_post && $by_formular === 'dienst') {
         $by_meldungen[] = by_t('EINST.DIENST_' . strtoupper($by_befehl)) . ' '
                         . by_e($by_text);
     } else {
-        $by_fehler[] = by_e($by_text);
+        $by_stoerungen[] = by_e($by_text);
     }
     $by_tab = 'tab-settings';
 }
@@ -534,13 +593,24 @@ if ($by_post && $by_formular === 'log' && !isset($_POST['log_leeren'])) {
     $by_post = false;
 }
 if ($by_post && $by_formular === 'log') {
-    @mkdir(dirname($by_p['log']), 0775, true);
-    @file_put_contents($by_p['log'], '[' . date('Y-m-d H:i:s') . '] '
-        . by_t('LOG.GELEERT') . "\n");
-    // Der Merker der Wiederholungsbremse gehoert mit weg: sonst unterdrueckt
-    // sie ausgerechnet die erste Zeile in der leeren Datei.
-    @unlink($by_p['log'] . '.wdh');
-    $by_meldungen[] = by_t('LOG.GELEERT');
+    /* U7 (Durchgang 29.09.2026): nur mit Bestaetigungshaken, und gemeldet wird
+     * nach dem ERGEBNIS. Bis 0.9.19 hiess es "Das Protokoll wurde geleert."
+     * auch dann, wenn nichts geschrieben wurde (gemessen, Oberflaechen-Pruefer
+     * L1), und ein Klick genuegte (Regeln/04, loeschender Knopf). */
+    if (!isset($_POST['log_bestaetigt'])) {
+        $by_stoerungen[] = by_t('LOG.NICHT_BESTAETIGT');
+    } else {
+        @mkdir(dirname($by_p['log']), 0775, true);
+        $by_lzeile = '[' . date('Y-m-d H:i:s') . '] ' . by_t('LOG.GELEERT') . "\n";
+        if (@file_put_contents($by_p['log'], $by_lzeile) === strlen($by_lzeile)) {
+            // Der Merker der Wiederholungsbremse gehoert mit weg: sonst
+            // unterdrueckt sie ausgerechnet die erste Zeile in der leeren Datei.
+            @unlink($by_p['log'] . '.wdh');
+            $by_meldungen[] = by_t('LOG.GELEERT') . ' ' . by_t('LOG.BLEIBT');
+        } else {
+            $by_stoerungen[] = sprintf(by_t('LOG.NICHT_GELEERT'), by_e($by_p['log']));
+        }
+    }
     $by_tab = 'tab-log';
 }
 
@@ -555,7 +625,7 @@ if ($by_post && $by_formular === 'test') {
         // noch eine Ablehnung, und es wird auch nicht als eines dargestellt.
         $by_meldungen[] = '<b>' . by_e(by_t('TEST.UNBEKANNT')) . '</b> ' . by_e($by_text);
     } else {
-        $by_fehler[] = by_e($by_text);
+        $by_stoerungen[] = by_e($by_text);
     }
     if (strpos($by_text, "\n") !== false) {
         /* Mehrzeiliges gehoert in den Ausgabekasten und nicht in die
@@ -570,7 +640,7 @@ if ($by_post && $by_formular === 'test') {
         if ($by_stand === 1 || $by_stand === 2) {
             array_pop($by_meldungen);
         } else {
-            array_pop($by_fehler);
+            array_pop($by_stoerungen);
         }
     }
     $by_tab = 'tab-test';
@@ -580,9 +650,100 @@ if ($by_post && $by_formular === 'selbsttest') {
     $by_tab = 'tab-test';
 }
 
-/* ---------------- Laden ---------------- */
-$by_cfg = by_config();
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das.
+ *
+ * C10 (Durchgang 29.09.2026): dazu Benutzername, Passwort, Steuer-PIN und
+ * Land des BYD-Kontos (Hausstandard CLAUDE.md 9, Regeln/05). Bis 0.9.19
+ * fehlten sie, obwohl der Text am Knopf "enthaelt Ihre Zugangsdaten" sagte.
+ *
+ * U4: dieser und der naechste Handler stehen seit dem Umbau VOR dem Laden -
+ * nach dem Zurueckspielen zeigte die Seite bis 0.9.19 den alten Stand. */
+if ($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern'])) {
+    $by_js = json_encode(array_merge(by_config(), by_sicherung_zugang()),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($by_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="byd_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $by_js;
+        exit;
+    }
+    $by_stoerungen[] = by_t('EINST.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
+    if (!isset($_FILES['by_sicherung']) || !is_array($_FILES['by_sicherung'])
+        || !isset($_FILES['by_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['by_sicherung']['tmp_name'])) {
+        $by_fehler[] = by_t('EINST.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['by_sicherung']['size'] > 262144) {
+        $by_fehler[] = by_t('EINST.SICH_ZU_GROSS');
+    } else {
+        list($by_neu, $by_mangel, $by_n, $by_zneu) = by_sicherung_lesen(
+            (string) @file_get_contents($_FILES['by_sicherung']['tmp_name']));
+        if ($by_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $by_fehler[] = by_t('EINST.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $by_mangel);
+        } elseif (by_config_speichern($by_neu)) {
+            $by_meldungen[] = sprintf(by_t('EINST.SICH_UEBERNOMMEN'), $by_n);
+            /* C10: die Zugangsdaten - mit denselben Regeln geprueft wie im
+             * Formular (by_sicherung_lesen). Leere Felder behalten den
+             * bisherigen Wert, wie im Formular. */
+            if ($by_zneu) {
+                $by_zb = isset($by_zneu['benutzer']) && $by_zneu['benutzer'] !== ''
+                    ? $by_zneu['benutzer'] : null;
+                $by_zl = isset($by_zneu['land']) && $by_zneu['land'] !== ''
+                    ? $by_zneu['land'] : null;
+                if (by_zugang_speichern($by_zb,
+                        isset($by_zneu['passwort']) ? $by_zneu['passwort'] : '',
+                        isset($by_zneu['pin']) ? $by_zneu['pin'] : '', $by_zl)) {
+                    $by_meldungen[] = by_t('EINST.SICH_ZUGANG_UEBERNOMMEN');
+                } else {
+                    $by_fehler[] = by_t('EINST.FEHLER_ZUGANG_SPEICHERN');
+                }
+            } else {
+                $by_meldungen[] = by_t('EINST.SICH_OHNE_ZUGANG');
+            }
+        } else {
+            $by_fehler[] = by_t('EINST.SICH_SCHREIBFEHLER');
+        }
+    }
+    $by_tab = 'tab-settings';
+}
+
+/* ---------------- U1: nach jedem POST umleiten ----------------
+ * Regeln/04 (Klasse 4): jeder POST-Handler endet mit 303, das Ergebnis reist
+ * als Einmalmeldung. Bis 0.9.19 renderten alle Zweige direkt (HTTP 200,
+ * gemessen F4-F7) - F5 im Browser wiederholte Speichern, Dienstbefehle,
+ * Zurueckspielen und die Schaltbefehle des Reiters Test. Die Downloads
+ * (Vorlagen, Sicherung) liefern vorher selbst und enden mit exit. */
+if ($by_post_roh && !($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern']))) {
+    if (by_einmal_schreiben(array('meldungen' => $by_meldungen, 'fehler' => $by_fehler,
+            'stoerungen' => $by_stoerungen, 'ausgabe' => $by_ausgabe))) {
+        header('Location: index.php?form=' . rawurlencode(substr($by_tab, 4)), true, 303);
+        exit;
+    }
+}
+
+/* ---------------- Laden ----------------
+ * U5 (Durchgang 29.09.2026): erst das Token, dann die Konfiguration, dann das
+ * Merkmal. Bis 0.9.19 kam das Merkmal aus der Konfiguration VOR dem Anlegen
+ * des Tokens - beim ersten Aufruf trugen alle 15 Formulare ein leeres
+ * Merkmal, und das erste Speichern wurde abgewiesen (gemessen F1/F2). */
 $by_token = by_token();
+$by_cfg = by_config();
 $by_ftoken = by_formtoken($by_cfg);
 $by_zg = by_zugang();
 $by_fahrzeuge = by_fahrzeuge();
@@ -605,57 +766,13 @@ $by_bilanz = by_pruefbilanz($by_pruefungen);
 
 $by_rahmen = class_exists('LBWeb', false);
 
-/* ---------------- Einstellungen sichern ----------------
- *
- * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
- * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
- * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
- * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
-if ($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern'])) {
-    $by_js = json_encode(by_config(),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($by_js !== false) {
-        header('Content-Type: application/json; charset=utf-8');
-        header('Content-Disposition: attachment; filename="byd_einstellungen_'
-               . date('Ymd_His') . '.json"');
-        echo $by_js;
-        exit;
-    }
-    $by_fehler[] = by_t('EINST.SICH_SCHREIBFEHLER');
-}
-
-/* ---------------- Einstellungen zurueckspielen ----------------
- *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
-if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
-    if (!isset($_FILES['by_sicherung']) || !is_array($_FILES['by_sicherung'])
-        || !isset($_FILES['by_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['by_sicherung']['tmp_name'])) {
-        $by_fehler[] = by_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['by_sicherung']['size'] > 262144) {
-        $by_fehler[] = by_t('EINST.SICH_ZU_GROSS');
-    } else {
-        list($by_neu, $by_mangel, $by_n) = by_sicherung_lesen(
-            (string) @file_get_contents($_FILES['by_sicherung']['tmp_name']));
-        if ($by_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $by_fehler[] = by_t('EINST.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $by_mangel);
-        } elseif (by_config_speichern($by_neu)) {
-            $by_meldungen[] = sprintf(by_t('EINST.SICH_UEBERNOMMEN'), $by_n);
-        } else {
-            $by_fehler[] = by_t('EINST.SICH_SCHREIBFEHLER');
-        }
-    }
-}
-
-
 if ($by_rahmen) {
     LBWeb::lbheader('BYD Autos', 'https://wiki.loxberry.de/', 'help.html');
 }
+/* U5: die Seite wird gepuffert, damit die Pruefzeile "Traegt jedes Formular
+ * ein Merkmal mit Wert?" am GERENDERTEN HTML zaehlen kann; by_merkmal_einsetzen()
+ * setzt sie und die Bilanz am Ende ein. */
+ob_start();
 
 ?>
 <style>
@@ -762,6 +879,15 @@ if ($by_rahmen) {
 <?php foreach ($by_fehler as $by_f) { ?><li><?= $by_f ?></li><?php } ?>
 </ul></div>
 <?php } ?>
+<?php if ($by_stoerungen) { ?>
+<div class="sm-fehler"><b><?= by_e(by_t('ALLG.VORGANG_GESCHEITERT')) ?></b>
+<ul style="margin:6px 0 0 18px;padding:0;">
+<?php foreach ($by_stoerungen as $by_f) { ?><li><?= $by_f ?></li><?php } ?>
+</ul></div>
+<?php } ?>
+<?php $by_asperre = by_anmeldesperre(); if ($by_asperre['gesperrt']) { ?>
+<div class="sm-fehler"><?= sprintf(by_e(by_t('ALLG.ANMELDESPERRE')), (int) $by_asperre['anzahl']) ?></div>
+<?php } ?>
 
 <!-- ================= Statuskacheln ================= -->
 <div class="sm-kacheln">
@@ -778,8 +904,8 @@ if ($by_rahmen) {
     <span class="sm-hilfe"><?= $by_libv !== '' ? 'pybyd ' . by_e($by_libv) : by_e(by_t('ALLG.LIB_FEHLT')) ?></span>
   </div>
   <div class="sm-kachel"><?= by_e(by_t('ALLG.SELBSTPRUEFUNG')) ?>
-    <b class="<?= $by_bilanz['nein'] ? 'sm-aus' : 'sm-an' ?>"><?= (int) $by_bilanz['ja'] ?>/<?= (int) $by_bilanz['summe'] ?></b>
-    <span class="sm-hilfe"><?= sprintf(by_e(by_t('ALLG.HINWEISE')), (int) $by_bilanz['hinweis']) ?></span>
+    <b class="@@BY_BILANZ_KLASSE@@">@@BY_BILANZ_KACHEL@@</b>
+    <span class="sm-hilfe">@@BY_BILANZ_HINWEISE@@</span>
   </div>
 </div>
 
@@ -1234,6 +1360,7 @@ if ($by_rahmen) {
 </table>
 </div>
 <div class="sm-warnung"><?= by_t('LOX.S3_STRICH') ?></div>
+<div class="sm-hinweis"><?= sprintf(by_t('LOX.S3_OK'), 3 * max(120, min(3600, (int) $by_cfg['intervall']))) ?></div>
 <div class="sm-hinweis"><?= by_t('LOX.S3_HERKUNFT') ?></div>
 <?php if (count($by_fahrzeuge) > 1) { ?>
 <p><b><?= by_e(by_t('LOX.MEHRERE_FAHRZEUGE')) ?></b></p>
@@ -1368,7 +1495,14 @@ function by_bausteine()
     $pf = '&larr; #';
     $b[] = array(++$n, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N_NICHT',  '',
                  'I ' . $pf . $nr_ok);
-    $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_ALT',    'BAUSTEIN.P_ALT',
+    /* U13 (Durchgang 29.09.2026): die Schwelle "Werte zu alt" ist das
+     * Dreifache des eingestellten Abruftakts - dieselbe Grenze, ab der der
+     * Endpunkt OK=0 meldet (C6). Bis 0.9.19 stand hier fest 900/700; bei einem
+     * Takt ueber 900 s meldete der Baustein zwischen zwei Abrufen jedes Mal
+     * "zu alt". Aus bleibt 200 s darunter, wie bisher. */
+    $takt = max(120, min(3600, (int) by_config(false)['intervall']));
+    $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_ALT',
+                 array('text' => sprintf(by_t('BAUSTEIN.P_ALT'), 3 * $takt, 3 * $takt - 200)),
                  'I ' . $pf . $nr_alter);
     $b[] = array(++$n, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N_STOER',  '',
                  'I1 ' . $pf . ($n - 2) . ', I2 ' . $pf . ($n - 1));
@@ -1413,7 +1547,7 @@ function by_bausteine()
 <?php foreach (by_bausteine() as $by_b) { ?>
 <tr><td><?= (int) $by_b[0] ?></td><td><?= by_t($by_b[1]) ?></td>
     <td><?= strpos($by_b[2], 'BAUSTEIN.') === 0 ? by_t($by_b[2]) : by_e($by_b[2]) ?></td>
-    <td><?= $by_b[3] === '' ? '&mdash;' : (strpos($by_b[3], 'BAUSTEIN.') === 0 ? by_t($by_b[3]) : '<span class="sm-mono">' . by_e($by_b[3]) . '</span>') ?></td>
+    <td><?= is_array($by_b[3]) ? by_e($by_b[3]['text']) : ($by_b[3] === '' ? '&mdash;' : (strpos($by_b[3], 'BAUSTEIN.') === 0 ? by_t($by_b[3]) : '<span class="sm-mono">' . by_e($by_b[3]) . '</span>')) ?></td>
     <td><?= $by_b[4] ?></td></tr>
 <?php } ?>
 </table>
@@ -1497,17 +1631,11 @@ foreach ($by_mit_kwh as $by_x) { $by_summe += $by_x['kwh']; }
 <div class="sm-seite<?= $by_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?= by_e(by_t('TEST.H_SELBSTPRUEFUNG')) ?></h2>
 <p class="sm-hilfe"><?= by_t('TEST.EINLEITUNG') ?></p>
-<p><b><?= sprintf(by_e(by_t('TEST.BILANZ')), (int) $by_bilanz['ja'], (int) $by_bilanz['summe'],
-    (int) $by_bilanz['hinweis']) ?></b></p>
+<p><b>@@BY_BILANZ_SATZ@@</b></p>
 <table class="sm-tbl">
 <tr><th style="width:36px;">&nbsp;</th><th><?= by_e(by_t('TEST.T_FRAGE')) ?></th><th><?= by_e(by_t('TEST.T_BEFUND')) ?></th></tr>
-<?php foreach ($by_pruefungen as $by_z) { ?>
-<tr><td style="text-align:center;"><?php
-    if ($by_z['stand'] === 1) { echo '<span class="sm-an">&#10004;</span>'; }
-    elseif ($by_z['stand'] === 0) { echo '<span class="sm-aus">&#10008;</span>'; }
-    else { echo '<span style="color:#888;">&#9679;</span>'; }
-?></td><td><?= $by_z['frage'] ?></td><td><?= $by_z['antwort'] ?></td></tr>
-<?php } ?>
+<?php foreach ($by_pruefungen as $by_z) { echo by_pruefzeile_html($by_z) . "\n"; } ?>
+@@BY_MERKMAL_ZEILE@@
 </table>
 <p class="sm-hilfe"><?= by_t('TEST.LEGENDE_PUNKT') ?></p>
 
@@ -1664,9 +1792,14 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
     <input data-role="none" type="hidden" name="log_leeren" value="1">
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
+    <label style="display:inline-flex;align-items:center;gap:8px;margin-right:10px;">
+      <input data-role="none" type="checkbox" name="log_bestaetigt" value="1">
+      <?= by_e(by_t('LOG.L_BESTAETIGEN')) ?>
+    </label>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= by_e(by_t('LOG.K_LEEREN')) ?></button>
   </form>
 </div>
+<p class="sm-hilfe"><?= by_t('LOG.H_BESTAETIGEN') ?></p>
 </div>
 
 </div><!-- /sm-wrap -->
@@ -1689,6 +1822,7 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
 })();
 </script>
 <?php
+echo by_merkmal_einsetzen((string) ob_get_clean(), $by_pruefungen);
 if ($by_rahmen) {
     LBWeb::lbfooter();
 }

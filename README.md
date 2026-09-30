@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.18
+Version 0.9.19
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,84 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.19
+
+Durchgang vom 29./30.09.2026 mit vier Prüfern (Code, Oberfläche, Installer,
+MQTT). Alles an Attrappen gemessen; ein BYD-Konto gibt es hier nicht. Befunde
+mit Datei:Zeile: `Pruefung-Durchgang-2026-09-29/BYD-Autos_BEFUNDE_UND_VERBESSERUNGEN.md`.
+
+**Schutz des BYD-Kontos**
+
+* **Anmeldesperre.** Abgewiesene Anmeldungen werden in einer Datei im
+  Datenordner gezählt, die Wächter und Neustart überlebt. Nach 5 Abweisungen in
+  24 Stunden meldet sich das Plugin nicht mehr an, bis im Reiter
+  *Einstellungen* neue Zugangsdaten gespeichert sind. Bis 0.9.18 löschte jeder
+  Wächterlauf den Zähler: bei falschem Passwort bis zu etwa 1 440
+  Fehlanmeldungen am Tag.
+* **PIN-Bremse.** Nach 3 gescheiterten Freischaltungen sind schaltende Befehle
+  60 Minuten gesperrt, dazu höchstens 30 schaltende Befehle je Stunde. Vorher
+  gingen 12 falsche PINs in 8 Sekunden hinaus.
+* Der Knopf *Feldzuordnung vorschlagen* meldet sich neben dem laufenden Dienst
+  nicht mehr eigens an, sondern liest dessen Abbild.
+* **Grenze:** Gezählt wird eine Ausnahme, deren Klasse auf
+  `AuthenticationError` endet. Ob die echte Bibliothek bei falschem Passwort
+  so wirft, ist ohne Konto nicht belegt.
+
+**Dienst**
+
+* Ein zweiter Start läuft gegen eine Sperre (`flock`); `stop` beendet alle
+  eigenen Dienste und sagt nur, was geschah. Bis 0.9.18 liefen nach zwei
+  gleichzeitigen Starts zwei Dienste mit zwei Anmeldungen.
+* Ein unbekannter Schalter (etwa `--selftest`) endet mit Rückgabewert 2 und
+  startet keinen Dienst mehr.
+
+**Endpunkt**
+
+* `OK=0`, sobald der letzte gelungene Abruf älter ist als das Dreifache des
+  eingestellten Takts. Vorher meldete ein toter Dienst beliebig lange `OK=1`.
+* Ohne Daten antwortet der Endpunkt mit HTTP 503 (vorher 200).
+* Ein Token als Liste (`token[]=`) wird nicht mehr in „Array“ umgewandelt
+  und damit immer abgewiesen.
+
+**Sicherung**
+
+* Die Sicherung enthält jetzt **Benutzer, Passwort, Steuer-PIN und Land**. So
+  verspricht es der Text am Knopf, und erst damit taugt sie für einen Umzug.
+  Behandeln Sie die Datei wie ein Passwort.
+* Beim Zurückspielen wird jeder Wert mit denselben Regeln geprüft wie im
+  Formular; eine halb gültige Datei ändert nichts. Bis 0.9.18 gab etwa
+  `steuerung_ein: "nein"` die Fahrzeugsteuerung **frei**.
+
+**MQTT**
+
+* Ein Zustand, den ein gelungener Abruf nicht liefert, geht als `-` retained
+  hinaus statt als stehengebliebener Altwert. Verschwindet ein Fahrzeug aus
+  dem Konto, bekommen seine Zustände einmal `-` und `OK` wird 0.
+* Scheitert die Anmeldung oder fehlen Zugangsdaten, gehen `ok 0` und
+  `fahrzeugN/OK 0` (flüchtig) hinaus. Vorher kam gar nichts, und Loxone
+  behielt `OK=1`.
+* Das Plugin führt `config/plugins/<ordner>/mqtt_subscriptions.cfg` mit
+  `<präfix>/#` selbst; Gateway V1 liest sie. Beim Präfixwechsel und beim
+  Abschalten von MQTT werden die alten retained Themen abgeräumt.
+
+**Oberfläche**
+
+* Jedes Absenden endet mit einer Umleitung. F5 wiederholt nichts mehr, auch
+  keinen Schaltbefehl im Reiter Test.
+* Schon beim ersten Seitenaufruf tragen alle Formulare ihr Merkmal.
+  Protokoll leeren nur mit Häkchen.
+* Klimatisieren, Sitz- und Batterieheizung stehen in der Loxone-Vorlage als
+  **analoge** Ausgänge, weil der Wert aus Loxone kommt. In Loxone Config nicht
+  nachgemessen.
+
+**Installation**
+
+* Eine **Neuinstallation** spielt liegengebliebene Zweitschriften nicht mehr
+  ein. Token, Zugangsdaten und Ladehistorie einer früheren Installation werden
+  nach `.alt` gelegt (0600), mit einer Warnung im Protokoll (`preinstall.sh`).
+  Eingespielt wird nur bei einem Update.
+* Die Deinstallation räumt auch `.alt`- und `.neu`-Reste ab und zählt nach.
 
 ## Neu in 0.9.18
 
@@ -754,8 +832,8 @@ Kandidatenliste.
    Fahrzeuge*, was das Konto führt.
 3. Reiter *Test*: die Selbstprüfung ansehen. Die **erste** Zeile beantwortet, ob
    der eigene Endpunkt über HTTP antwortet.
-4. Reiter *Einbindung in Loxone*: entweder das MQTT-Abo eintragen oder die
-   Importdatei für Loxone Config erzeugen.
+4. Reiter *Einbindung in Loxone*: MQTT einschalten (das Abo `<präfix>/#`
+   trägt das Plugin selbst ein) oder die Importdatei für Loxone Config erzeugen.
 5. Erst danach die Zusatzfunktionen: Vorklimatisierung und Ladeempfehlung sind
    ab Werk **aus**, und sie brauchen ein laufendes MQTT-Gateway. Der Reiter
    Test vergleicht dann, welche fremden Themen abonniert **sein sollten** und
@@ -786,6 +864,8 @@ in der App alles normal aus. Deshalb:
 * Über MQTT gehen bei **jedem** Durchlauf `ok` und `ts` hinaus, auch bei einer
   Störung. Über MQTT wird der Zeitstempel gesendet und nicht das Alter: beim
   Senden ist das Alter immer null.
+* Der Endpunkt setzt `OK=0`, sobald der letzte gelungene Abruf älter ist als
+  das Dreifache des Takts.
 * In Loxone werden zwei Werte verdrahtet: `OK` und `ALTER`. Der Sonderfall
   `ALTER = -1` heißt „es hat noch nie einen erfolgreichen Abruf gegeben" und
   sieht frischer aus als jeder echte Wert — `OK` ist deshalb immer mit
@@ -888,6 +968,8 @@ echten Fahrzeug zu klären, **ohne es zu bewegen**.
   Deinstallationsskript räumt sie ausdrücklich ab und überschreibt sie vorher.
 * Der **Standort** ist eine eigene Abfrage und lässt sich abschalten. Dann
   verlässt die Position des Fahrzeugs den Wagen nicht.
+* Die **Sicherungsdatei** enthält Benutzer, Passwort, Steuer-PIN und Land.
+  Sie ist für den Umzug gedacht und wie ein Passwort zu behandeln.
 * Das Token des unangemeldeten Endpunkts steht in `byd.json`, und die Datei
   bekommt deshalb ebenfalls 0600: wer es lesen kann, kann über HTTP das
   Fahrzeug schalten.

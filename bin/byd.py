@@ -38,12 +38,17 @@ Aufrufe:
     byd.py --einmal        ein einzelner Abruf, dann Ende
     byd.py --selbsttest    Pruefungen ohne Netz, Ausgabe als Klartext
     byd.py --felder        zeigt, welche Felder die Bibliothek gerade liefert
-                           (braucht Zugangsdaten und Netz)
+                           (braucht Zugangsdaten und Netz; laeuft der Dienst,
+                           zeigt es dessen letzte Antwort)
+    byd.py --mqtt-leeren [--praefix=<thema>]
+                           raeumt die behaltenen eigenen Themen am Broker ab
+Jeder andere Schalter endet mit Rueckgabe 2, ohne etwas zu tun.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -323,6 +328,39 @@ GRENZE_FREIGABE = 60
 BEFEHLE_JE_LAUF = 20
 BEFEHL_HOECHSTALTER = 300
 
+# C3 (Durchgang 29.09.2026): Anmeldebremse. Bis 0.9.19 wurde eine abgewiesene
+# Anmeldung nirgends vermerkt; der Dienst endete mit rc 1, und der Waechter
+# startete ihn jede Minute neu - mit falschem Passwort bis zu 1 440
+# Anmeldeversuche am Tag (in WSL gemessen, Code-Pruefer T3). Das ist der Weg
+# in eine Kontosperre bei BYD, die auch die BYD-App trifft. Jetzt: hoechstens
+# ANMELDE_GRENZE abgewiesene Anmeldungen in ANMELDE_FENSTER Sekunden, danach
+# meldet sich das Plugin nicht mehr an, bis neue Zugangsdaten gespeichert
+# sind (erkannt an der Pruefsumme von zugang.json). Die Zahlen sind gesetzt,
+# nicht gemessen: ab wie vielen Fehlversuchen BYD sperrt, ist nicht bekannt.
+ANMELDE_GRENZE = 5
+ANMELDE_FENSTER = 86400
+DATEI_ANMELDUNG = PDATA / "anmeldung.json"
+ANMELDESPERRE_TEXT = ("Die Anmeldung bei BYD wurde %d-mal innerhalb von 24 Stunden "
+                      "abgewiesen. Das Plugin meldet sich nicht mehr an, bis im Reiter "
+                      "Einstellungen neue Zugangsdaten gespeichert sind - so sperrt BYD "
+                      "das Konto nicht." % ANMELDE_GRENZE)
+
+# C5: PIN-Bremse und Obergrenze schaltender Befehle. Bis 0.9.19 wurde eine
+# gescheiterte Freischaltung nicht vermerkt: 12 Befehle mit falscher PIN
+# ergaben 12 Freischaltversuche in 8 s (gemessen, Code-Pruefer T5). Nach
+# PIN_GRENZE Fehlschlaegen sind alle schaltenden Befehle PIN_SPERRE Sekunden
+# gesperrt; eine neu gespeicherte PIN hebt die Sperre auf. Hoechstens
+# BEFEHLE_JE_STUNDE schaltende Befehle je Stunde (Bauform AudiConnect 0.9.22).
+# Gesetzt, nicht gemessen.
+PIN_GRENZE = 3
+PIN_SPERRE = 3600
+BEFEHLE_JE_STUNDE = 30
+DATEI_BEFEHLSBREMSE = PDATA / "befehlsbremse.json"
+
+# C4: Zeitpunkt des letzten Echtzeitabrufs aus --felder (der Dienst fuehrt
+# seinen in rohdaten.json).
+DATEI_FELDER_ZEIT = PDATA / "felder_zeit"
+
 # Klartext der Ablehnungsgruende beim Anmelden am Broker, fuer BEIDE
 # Zaehlweisen: MQTT 3.1.1 (paho 1.x, Codes 1-5) und die Ursachencodes von
 # MQTT 5, auf die paho 2.x dieselben Faelle abbildet (132-136). Am Geraet
@@ -334,6 +372,23 @@ CONNACK_KLARTEXT = {
     3: "Broker nicht verfuegbar", 136: "Broker nicht verfuegbar",
     4: "Benutzer oder Passwort falsch", 134: "Benutzer oder Passwort falsch",
     5: "nicht berechtigt", 135: "nicht berechtigt",
+}
+
+# M7 (Durchgang 29.09.2026): der Hinweis auf Brokeruser und Brokerpass gehoert
+# nur zu den Codes, die eine abgelehnte ANMELDUNG bedeuten (4/5 bzw. 134/135).
+# Bis 0.9.19 stand er auch bei "Broker nicht verfuegbar" und schickte den
+# Anwender zu Zugangsdaten, die stimmen (gemessen, MQTT-Pruefer C3).
+CONNACK_RAT = {
+    1: "Der Broker spricht eine andere MQTT-Fassung als die paho-Fassung dieses Plugins.",
+    132: "Der Broker spricht eine andere MQTT-Fassung als die paho-Fassung dieses Plugins.",
+    2: "Der Broker lehnt die Kennung dieses Clients ab.",
+    133: "Der Broker lehnt die Kennung dieses Clients ab.",
+    3: "Der Broker ist gerade nicht verfuegbar; es wird spaeter erneut versucht.",
+    136: "Der Broker ist gerade nicht verfuegbar; es wird spaeter erneut versucht.",
+    4: "Stehen Brokeruser und Brokerpass in der general.json des LoxBerry?",
+    134: "Stehen Brokeruser und Brokerpass in der general.json des LoxBerry?",
+    5: "Stehen Brokeruser und Brokerpass in der general.json des LoxBerry?",
+    135: "Stehen Brokeruser und Brokerpass in der general.json des LoxBerry?",
 }
 
 _LAUF = True
@@ -930,6 +985,73 @@ def zugang() -> dict:
     }
 
 
+def zugang_kennung() -> str:
+    """Pruefsumme der Zugangsdatei, so wie sie auf der Karte liegt (sha256
+    ueber die Bytes). Dieselbe Rechnung machen bin/dienst.sh
+    (anmeldung_gesperrt) und by_lib.php (by_anmeldesperre): wird im Reiter
+    Einstellungen etwas Neues gespeichert, aendert sich die Datei, und eine
+    Anmeldesperre gilt nicht mehr. Der Inhalt selbst wird nirgends abgelegt."""
+    try:
+        return hashlib.sha256(DATEI_ZUGANG.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def ist_anmeldefehler(err: BaseException) -> bool:
+    """Wurde die ANMELDUNG abgewiesen - und nicht bloss das Netz gestoert?
+
+    Erkannt an der Fehlerklasse, nicht am Text: ein Netz- oder Zeitfehler
+    darf nicht zaehlen, sonst legte eine Stoerung beim Anbieter das Plugin
+    still, bis jemand die Zugangsdaten neu speichert. Den Namen
+    BydAuthenticationError fuehrt schon fehlertext(); an der echten
+    Bibliothek ist er NICHT nachgemessen (kein BYD-Konto)."""
+    for k in type(err).__mro__:
+        if k.__name__.endswith("AuthenticationError"):
+            return True
+    return False
+
+
+def anmeldung_lesen() -> dict:
+    """Stand der Anmeldebremse fuer die GELTENDEN Zugangsdaten.
+
+    Rueckgabe {"fehl": [Zeitpunkte der letzten 24 h], "gesperrt": 0|1}. Gehoert
+    der Vermerk zu anderen Zugangsdaten (Pruefsumme weicht ab), gilt er nicht.
+    Einmal gesperrt bleibt gesperrt, bis neue Zugangsdaten gespeichert sind -
+    auch nach Ablauf der 24 Stunden."""
+    a = json_lesen(DATEI_ANMELDUNG)
+    if not a or a.get("zugang") != zugang_kennung():
+        return {"fehl": [], "gesperrt": 0}
+    jetzt = time.time()
+    fehl = [int(t) for t in (a.get("fehl") or [])
+            if isinstance(t, (int, float)) and not isinstance(t, bool)
+            and 0 <= jetzt - t < ANMELDE_FENSTER]
+    return {"fehl": fehl, "gesperrt": 1 if a.get("gesperrt") else 0}
+
+
+def anmeldung_abgewiesen(text: str) -> bool:
+    """Eine abgewiesene Anmeldung DAUERHAFT vermerken (Datenordner, 0600;
+    ueberlebt Neustart und Waechter). True, wenn die Sperre jetzt gilt."""
+    a = anmeldung_lesen()
+    fehl = a["fehl"] + [int(time.time())]
+    gesperrt = 1 if (a["gesperrt"] or len(fehl) >= ANMELDE_GRENZE) else 0
+    json_schreiben(DATEI_ANMELDUNG, {"zugang": zugang_kennung(), "fehl": fehl,
+                                     "gesperrt": gesperrt, "grund": str(text)[:300]}, 0o600)
+    if gesperrt:
+        _LOG.error(ANMELDESPERRE_TEXT)
+    else:
+        _LOG.error("Anmeldung bei BYD abgewiesen (%d von hoechstens %d in 24 Stunden): %s",
+                   len(fehl), ANMELDE_GRENZE, text)
+    return bool(gesperrt)
+
+
+def anmeldung_gelungen() -> None:
+    """Eine angenommene Anmeldung loescht den Vermerk."""
+    try:
+        DATEI_ANMELDUNG.unlink()
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # MQTT ueber das LoxBerry-Gateway
 #
@@ -988,24 +1110,28 @@ def mqtt_senden(paare: dict, praefix: str,
     schlecht = 0
     try:
         for k, v in paare.items():
-            if v is None:
-                # Was die Gegenstelle nicht geliefert hat, wird NICHT gesendet.
-                # Der virtuelle Eingang behaelt seinen letzten Wert, und dass er
-                # alt ist, beantwortet das Lebenszeichen. Eine leere Nutzlast
-                # laese Loxone als 0.
-                continue
+            ist_retain = k in retain
+            text = None if v is None else mqtt_wert_saeubern(v)
+            if text is None or text == "":
+                if not ist_retain:
+                    # Ein MESSWERT ohne Wert wird nicht gesendet - keine
+                    # erfundene 0, und nie eine leere Nutzlast (das Gateway
+                    # reicht sie als leeren Wert an den Miniserver weiter,
+                    # Regeln/07).
+                    continue
+                # M1 (Entscheidung 5 vom 29.09.2026): ein ZUSTAND ohne
+                # Aussage geht als "-" retained hinaus - nie als leere
+                # Nutzlast und nie als stehenbleibender Altwert. Bis 0.9.19
+                # ging fuer None nichts hinaus, und der alte retained Wert
+                # (Tuer zu, Kabel steckt, zu Hause) blieb im Broker stehen
+                # (gemessen, MQTT-Pruefer E2/E3).
+                text = "-"
             versucht += 1
             try:
                 # Gateway V1 kennt am UDP-Eingang "publish" und "retain"
                 # (mqttgateway.pl, am Geraet nachgelesen, Regeln/07). Welche
                 # Themen retained gehen, entscheidet der Aufrufer.
-                # Ein LEERER Wert geht nie retained hinaus: eine leere Nutzlast
-                # loescht ein zurueckbehaltenes Thema im Broker (Regeln/07,
-                # am Broker belegt 14.09.2026). Ob die BYD-Schnittstelle fuer
-                # ein Retain-Feld je "" liefert, ist nicht gemessen - bis
-                # 0.9.12 fing nur None ab.
-                text = mqtt_wert_saeubern(v)
-                befehl = "retain" if (k in retain and text != "") else "publish"
+                befehl = "retain" if ist_retain else "publish"
                 s.sendto(("%s %s/%s %s" % (befehl, praefix, k, text)
                           ).encode("utf-8"), ("127.0.0.1", z["udpport"]))
             except OSError:
@@ -1017,6 +1143,79 @@ def mqtt_senden(paare: dict, praefix: str,
                        "MQTT: %d von %d Werten liessen sich nicht absetzen."
                        % (schlecht, versucht))
     return (versucht, schlecht)
+
+
+def bekannte_nummern(merker: dict) -> list:
+    """Die Fahrzeugnummern, die der merker je vergeben hat (nummern_zuordnen()).
+    Sie sind die Adressen in Loxone - auch fuer ein Fahrzeug, das gerade
+    schweigt oder aus dem Konto verschwunden ist."""
+    tab = merker.get("nummern") if isinstance(merker, dict) else None
+    if not isinstance(tab, dict):
+        return []
+    aus = set()
+    for v in tab.values():
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 99:
+            aus.add(n)
+    return [str(n) for n in sorted(aus)]
+
+
+def mqtt_ausfall_melden(cfg: dict, merker: dict) -> None:
+    """M6 (Durchgang 29.09.2026): ohne Zugangsdaten, bei einer abgewiesenen
+    Anmeldung und bei jedem Abbruch des Dienstes gehen ok 0 und je bekanntem
+    Fahrzeug fahrzeugN/OK 0 hinaus - fluechtig, wie im Regelbetrieb. Bis
+    0.9.19 ging in diesen Faellen nichts hinaus, und Loxone behielt das letzte
+    OK=1 (gemessen, MQTT-Pruefer N). Der Zeitstempel ts wird dabei nicht
+    aufgefrischt; die Zustaende bleiben stehen (Frage 11)."""
+    if not cfg or not cfg.get("mqtt_ein"):
+        return
+    paare = {"ok": 0}
+    for n in bekannte_nummern(merker):
+        paare["fahrzeug%s/OK" % n] = 0
+    try:
+        mqtt_senden(paare, mqtt_thema_saeubern(cfg.get("mqtt_topic") or "byd"))
+    except Exception as err:  # noqa: BLE001
+        melde_gebremst("mqtt_ausfall", "MQTT: ok 0 liess sich nicht senden (%s)."
+                       % fehlertext(err))
+
+
+def abodatei_nachfuehren(cfg: dict) -> None:
+    """M5 (Durchgang 29.09.2026): config/plugins/<ordner>/mqtt_subscriptions.cfg
+    traegt "<praefix>/#". Das MQTT-Gateway V1 liest diese Datei und abonniert
+    daraus (Regeln/07, am Geraet belegt an Midea2Lox 4.5.4, 13.09.2026); ohne
+    sie kam unter V1 ohne Handeintrag nichts am Miniserver an. Geschrieben wird
+    beim Dienststart und beim Speichern im Reiter MQTT, nur wenn sie abweicht,
+    mit einer Protokollzeile (Bauart Einspeisebremse 0.9.20)."""
+    datei = PCONFIG / "mqtt_subscriptions.cfg"
+    soll = "%s/#\n" % mqtt_thema_saeubern(cfg.get("mqtt_topic") or "byd")
+    try:
+        ist = datei.read_text(encoding="utf-8")
+    except OSError:
+        ist = None
+    if ist == soll:
+        return
+    tmp = datei.with_name(datei.name + ".tmp." + str(os.getpid()))
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            try:
+                os.chmod(tmp, 0o644)
+            except OSError:
+                pass
+            geschrieben = f.write(soll)
+        if geschrieben != len(soll):
+            raise OSError("nur %d von %d Zeichen geschrieben" % (geschrieben, len(soll)))
+        os.replace(tmp, datei)
+        _LOG.info("MQTT: Abodatei %s auf '%s' gesetzt.", datei, soll.strip())
+    except OSError as err:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        melde_gebremst("abodatei", "MQTT: Abodatei %s liess sich nicht schreiben (%s)."
+                       % (datei, err), 86400)
 
 
 # ---------------------------------------------------------------------------
@@ -1261,7 +1460,7 @@ def _udp_leeren(praefix: str) -> int:
     return 2
 
 
-def mqtt_leeren(warten: float = 3.0) -> int:
+def mqtt_leeren(warten: float = 3.0, praefix: str = "") -> int:
     """Fuer die Deinstallation (uninstall/uninstall, Abschnitt 1b): alle
     behaltenen EIGENEN Themen am Broker loeschen und nachmessen.
 
@@ -1270,8 +1469,13 @@ def mqtt_leeren(warten: float = 3.0) -> int:
     behalten liegt. Ausgabe im Format des Installers (<OK>, <INFO>,
     <WARNING>). Rueckgabe 0 geleert/nichts zu leeren, 1 es blieb etwas
     stehen, 2 nicht am Broker moeglich (dann der UDP-Rueckfall).
+
+    M9 (Durchgang 29.09.2026): mit praefix (Schalter --praefix=<thema>) wird
+    unter diesem Praefix abgeraeumt statt unter dem eingestellten - so raeumt
+    die Oberflaeche nach einem Praefixwechsel und beim Abschalten von MQTT die
+    Themen unter dem ALTEN Praefix ab. Bis 0.9.19 blieben sie stehen.
     """
-    praefix = mqtt_thema_saeubern(config().get("mqtt_topic") or "byd")
+    praefix = mqtt_thema_saeubern(praefix or config().get("mqtt_topic") or "byd")
     erg = _broker_leeren(praefix, lambda t: bool(mqtt_eigenes_thema(praefix, t)), warten)
     if erg["rc"] == 0:
         if erg["geleert"]:
@@ -1535,9 +1739,10 @@ class Horcher:
             # 135 (nicht berechtigt), nicht 134.
             grund = CONNACK_KLARTEXT.get(rc, "")
             self.fehler = ("Der Broker hat die Anmeldung ABGELEHNT (Code %d%s). "
-                           "Es wird nichts empfangen. Stehen Brokeruser und "
-                           "Brokerpass in der general.json des LoxBerry?"
-                           % (rc, (" - " + grund) if grund else ""))
+                           "Es wird nichts empfangen. %s"
+                           % (rc, (" - " + grund) if grund else "",
+                              CONNACK_RAT.get(rc, "Die Bedeutung dieses Codes ist hier "
+                                                  "nicht hinterlegt.")))
             melde_gebremst("horcher_connack", self.fehler, 900)
             return
         self.verbunden = True
@@ -2556,6 +2761,34 @@ def vin_waehlen(fahrzeuge: dict, schluessel) -> str:
     return str(f.get("vin", "")) if isinstance(f, dict) else ""
 
 
+def befehlsbremse_lesen() -> dict:
+    """C5: Stand der PIN-Bremse und der Stundenobergrenze.
+
+    pin_fehl: gescheiterte Freischaltungen der letzten Stunde, pin_bis: Ende
+    der PIN-Sperre, befehle: abgesetzte schaltende Befehle der letzten Stunde.
+    PIN-Angaben gelten nur fuer die Zugangsdatei, unter der sie entstanden -
+    eine neu gespeicherte PIN hebt die Sperre auf."""
+    b = json_lesen(DATEI_BEFEHLSBREMSE)
+    jetzt = time.time()
+
+    def zeiten(werte, fenster):
+        return [int(t) for t in (werte or []) if isinstance(t, (int, float))
+                and not isinstance(t, bool) and 0 <= jetzt - t < fenster]
+
+    gleich = b.get("zugang") == zugang_kennung()
+    return {
+        "pin_fehl": zeiten(b.get("pin_fehl"), PIN_SPERRE) if gleich else [],
+        "pin_bis": ganz(b.get("pin_bis"), 0) if gleich else 0,
+        "befehle": zeiten(b.get("befehle"), 3600),
+    }
+
+
+def befehlsbremse_schreiben(d: dict) -> None:
+    d = dict(d)
+    d["zugang"] = zugang_kennung()
+    json_schreiben(DATEI_BEFEHLSBREMSE, d, 0o600)
+
+
 async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
                             b: dict, freigeschaltet: set) -> tuple[int, str, dict]:
     """Rueckgabe: (ok, Meldung, Zusatzfelder). ok = 1 angenommen, 0 abgelehnt.
@@ -2612,6 +2845,26 @@ async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
                    % (b.get("fahrzeug"), len(fahrzeuge)), {})
 
     eig = BEFEHLE[aktion]
+    # C5: PIN-Sperre und Stundenobergrenze VOR jedem Kontakt mit BYD. Im
+    # Trockenlauf wird beides nur benannt.
+    bremse = befehlsbremse_lesen()
+    rest_pin = bremse["pin_bis"] - int(time.time())
+    if rest_pin > 0:
+        text_pin = ("PIN_GESPERRT: Die Steuer-PIN wurde %d-mal nicht angenommen. Schaltende "
+                    "Befehle sind noch %d Minuten gesperrt, damit BYD die Fernsteuerung "
+                    "nicht sperrt. Die PIN im Reiter Einstellungen pruefen; eine neu "
+                    "gespeicherte PIN hebt die Sperre auf."
+                    % (PIN_GRENZE, (rest_pin + 59) // 60))
+        if not probe:
+            return (0, text_pin, {})
+        hemmnisse.append(text_pin)
+    if len(bremse["befehle"]) >= BEFEHLE_JE_STUNDE:
+        text_std = ("STUNDENGRENZE: In der letzten Stunde wurden schon %d schaltende Befehle "
+                    "abgesetzt; mehr laesst das Plugin je Stunde nicht zu."
+                    % BEFEHLE_JE_STUNDE)
+        if not probe:
+            return (0, text_std, {})
+        hemmnisse.append(text_std)
     # Im Trockenlauf ohne Verbindung gibt es kein Client-Objekt; dann wird die
     # KLASSE gefragt. Das beantwortet dieselbe Frage - bietet die installierte
     # Fassung diese Methode an? - ohne eine Verbindung zu brauchen.
@@ -2660,8 +2913,22 @@ async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
                     erg = await mit_frist(erg, GRENZE_FREIGABE,
                                           "Die Freischaltung der Steuer-PIN")
             except Exception as err:  # noqa: BLE001
-                return (0, "Die Steuer-PIN wurde nicht angenommen (%s): %s"
-                           % (name, fehlertext(err)), {})
+                # C5: die gescheiterte Freischaltung wird VERMERKT. Nach
+                # PIN_GRENZE Fehlschlaegen gilt die Sperre fuer alle
+                # schaltenden Befehle.
+                bremse = befehlsbremse_lesen()
+                bremse["pin_fehl"].append(int(time.time()))
+                zusatz_text = ""
+                if len(bremse["pin_fehl"]) >= PIN_GRENZE:
+                    bremse["pin_bis"] = int(time.time()) + PIN_SPERRE
+                    bremse["pin_fehl"] = []
+                    zusatz_text = (" PIN_GESPERRT: nach %d Fehlschlaegen sind schaltende Befehle "
+                                   "%d Minuten gesperrt." % (PIN_GRENZE, PIN_SPERRE // 60))
+                    _LOG.error("Steuer-PIN %d-mal nicht angenommen - schaltende Befehle "
+                               "fuer %d Minuten gesperrt.", PIN_GRENZE, PIN_SPERRE // 60)
+                befehlsbremse_schreiben(bremse)
+                return (0, "Die Steuer-PIN wurde nicht angenommen (%s): %s%s"
+                           % (name, fehlertext(err), zusatz_text), {})
             freigeschaltet.add(vin)
 
     zusatz: dict = {}
@@ -2728,6 +2995,11 @@ async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
             text += " Es steht ihm nichts entgegen."
         return (1, text, {"vin": vin, "methode": gefunden, "probe": 1})
 
+    # C5: jeder abgesetzte schaltende Befehl zaehlt gegen die Stundenobergrenze
+    # - gezaehlt VOR dem Absenden, auch ein gescheiterter Versuch ging an BYD.
+    bremse = befehlsbremse_lesen()
+    bremse["befehle"].append(int(time.time()))
+    befehlsbremse_schreiben(bremse)
     try:
         erg, fehlt = await methode_rufen(f, vin, zusatz)
     except Exception as err:  # noqa: BLE001
@@ -2747,7 +3019,8 @@ async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
 
 
 async def warteschlange(client, fahrzeuge: dict, cfg: dict, z: dict,
-                        freigeschaltet: set, letzter_versuch: int = 0) -> bool:
+                        freigeschaltet: set, letzter_versuch: int = 0,
+                        kontingent: dict | None = None) -> bool:
     """Arbeitet die vorliegenden Befehle ab. True, wenn ein Sofortabruf
     angefordert wurde UND die Bremse ihn durchlaesst.
 
@@ -2769,14 +3042,19 @@ async def warteschlange(client, fahrzeuge: dict, cfg: dict, z: dict,
     sofort = False
     jetzt = int(time.time())
     dateien = sorted(ORDNER_BEFEHLE.glob("*.json"))
-    if len(dateien) > BEFEHLE_JE_LAUF:
+    # C5: BEFEHLE_JE_LAUF gilt je TAKT, nicht je Aufruf. Bis 0.9.19 wurde
+    # gezaehlt, sooft diese Funktion lief - in der Wartezeit jede Sekunde.
+    # Das Kontingent fuehrt dienst_lauf() und setzt es je Takt zurueck.
+    if kontingent is None:
+        kontingent = {"rest": BEFEHLE_JE_LAUF}
+    if len(dateien) > kontingent["rest"]:
         melde_gebremst(
             "warteschlange_voll",
-            "Es liegen %d Befehle vor. Hoechstens %d werden je Durchlauf "
+            "Es liegen %d Befehle vor. Hoechstens %d werden je Takt "
             "ausgefuehrt; die uebrigen werden abgewiesen und nicht "
             "aufgehoben." % (len(dateien), BEFEHLE_JE_LAUF), 900)
 
-    for nr, datei in enumerate(dateien, start=1):
+    for datei in dateien:
         b = json_lesen(datei)
         kennung = datei.stem
         try:
@@ -2786,11 +3064,11 @@ async def warteschlange(client, fahrzeuge: dict, cfg: dict, z: dict,
         if not b:
             antwort_schreiben(kennung, 0, "Befehlsdatei war leer oder unlesbar.")
             continue
-        if nr > BEFEHLE_JE_LAUF:
+        if kontingent["rest"] <= 0:
             antwort_schreiben(kennung, 0,
-                              "Abgewiesen: es lagen %d Befehle vor, ausgefuehrt "
-                              "werden hoechstens %d je Durchlauf."
-                              % (len(dateien), BEFEHLE_JE_LAUF))
+                              "Abgewiesen: in diesem Takt wurden schon %d Befehle "
+                              "ausgefuehrt; mehr laesst das Plugin je Takt nicht zu."
+                              % BEFEHLE_JE_LAUF)
             continue
         # Das Alter nur pruefen, wenn ein Zeitstempel da ist. Fehlt er, ist
         # der Befehl von Hand oder aus einer aelteren Fassung - dann wird er
@@ -2817,6 +3095,7 @@ async def warteschlange(client, fahrzeuge: dict, cfg: dict, z: dict,
                                   "Abruf ist in %d s moeglich."
                                   % (jetzt - int(letzter_versuch), TAKT_MIN, rest))
                 continue
+        kontingent["rest"] -= 1
         try:
             # Unter eine Frist: die Warteschlange laeuft im selben Ablauf wie
             # der Abruf. Ein Schaltbefehl, der nie zurueckkommt, hielte auch
@@ -2880,7 +3159,8 @@ def stand_zusammenfuehren(alt: dict, neu: dict) -> dict:
     return zusammen
 
 
-def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
+def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "",
+                     bekannte=(), weg=()) -> dict:
     """Schreibt den Zwischenspeicher.
 
     Bei einem fehlgeschlagenen Abruf bleiben die zuletzt gueltigen Werte
@@ -2937,8 +3217,19 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
     # laesst die Gegenseite rechnen. Ohne ihn ist ein toter Dienst von einem
     # gesunden nicht zu unterscheiden - es wird schlicht nichts mehr gesendet,
     # und die letzten Werte stehen weiter im Broker.
-    paare: dict = {"ok": ok, "ts": int(stand.get("ts") or 0),
-                   "fahrzeuge": len(fahrzeuge)}
+    paare: dict = {"ok": ok, "ts": int(stand.get("ts") or 0)}
+    # M2 (Durchgang 29.09.2026): die Fahrzeugzahl geht erst hinaus, wenn ein
+    # Abruf in diesem Lauf Fahrzeuge geliefert hat. Bis 0.9.19 ging nach einem
+    # Neustart mit gedrosseltem ersten Abruf "fahrzeuge 0" RETAINED hinaus -
+    # eine falsche Zustandsaussage, die auch einen Broker-Neustart uebersteht
+    # (gemessen, MQTT-Pruefer E4).
+    if fahrzeuge:
+        paare["fahrzeuge"] = len(fahrzeuge)
+    else:
+        # ... und je BEKANNTEM Fahrzeug fahrzeugN/OK 0 (fluechtig): sonst
+        # behielten die Fahrzeug-OK-Eingaenge in Loxone ihre letzte 1.
+        for n in bekannte:
+            paare["fahrzeug%s/OK" % n] = 0
     for nummer, f in fahrzeuge.items():
         # Je Fahrzeug entscheiden und nicht am Sammelergebnis: bei einem
         # Teilausfall ist ok=1 (irgendetwas kam), aber fuer das ausgefallene
@@ -2973,6 +3264,17 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
         # ist. Was es NICHT sagt: wie lange dieses Fahrzeug schon ausfaellt.
         # Diese Dauer ist in Loxone aus dem Verlauf von OK zu bilden.
         paare["fahrzeug%s/OK" % nummer] = fz_ok
+    # M3 (Entscheidung 5): ein Fahrzeug, das aus dem Konto VERSCHWUNDEN ist,
+    # bekommt seine retained Zustaende einmal als "-" (None wird in
+    # mqtt_senden() zu "-") und OK 0. Bis 0.9.19 blieben seine 25 Zustaende
+    # retained stehen und wurden nach jedem Neustart von Broker oder Gateway
+    # weiter gemeldet (gemessen, MQTT-Pruefer E3). Ein nur zeitweise
+    # SCHWEIGENDES Fahrzeug ist etwas anderes (Frage 11): seine Zustaende
+    # bleiben, nur OK geht auf 0 - das leistet der Zweig darueber.
+    for n in weg:
+        for feld in sorted(RETAIN_FELDER):
+            paare["fahrzeug%s/%s" % (n, feld)] = None
+        paare["fahrzeug%s/OK" % n] = 0
     # Welche Themen zurueckbehalten hinausgehen - Begruendung je Feld bei
     # RETAIN_FELDER. Die Fahrzeugzahl ist ein Zustand; ok und ts sind das
     # Lebenszeichen und gehen nie retained, FEHLFOLGE ebenso nicht.
@@ -3115,6 +3417,13 @@ async def dienst_lauf(einmal: bool) -> int:
         _LOG.error("Zugangsdaten fehlen. Reiter Einstellungen der Plugin-Oberflaeche "
                    "oeffnen.")
         zustand_schreiben(ok=0, fehler="Zugangsdaten fehlen.")
+        mqtt_ausfall_melden(cfg, merker_lesen())
+        return 1
+    # C3: gilt die Anmeldesperre, meldet sich der Dienst gar nicht erst an.
+    if anmeldung_lesen()["gesperrt"]:
+        melde_gebremst("anmeldesperre", ANMELDESPERRE_TEXT, 3600)
+        zustand_schreiben(ok=0, fehler=ANMELDESPERRE_TEXT)
+        mqtt_ausfall_melden(cfg, merker_lesen())
         return 1
 
     try:
@@ -3135,6 +3444,13 @@ async def dienst_lauf(einmal: bool) -> int:
     freigeschaltet: set = set()
     horcher = Horcher()
     merker = merker_lesen()
+    # M3: welche verschwundenen Fahrzeuge in DIESEM Lauf schon "-" bekamen.
+    # Bewusst im Speicher und nicht im merker: ueber UDP bestaetigt nichts, ob
+    # es ankam (Regeln/07) - nach einem Neustart des Dienstes geht es noch
+    # einmal hinaus.
+    weg_gemeldet: set = set()
+    # M5: die Abodatei beim Dienststart.
+    abodatei_nachfuehren(cfg)
 
     client = None
     _sitzung = None
@@ -3151,8 +3467,16 @@ async def dienst_lauf(einmal: bool) -> int:
         # zwar unbegrenzt. Die Grenze am Abruf half da nicht, denn es kam nie
         # zu einem Abruf.
         _sitzung = BydClient(konf)
-        client = await mit_frist(_sitzung.__aenter__(), GRENZE_ANMELDUNG,
-                                 "Die Anmeldung bei BYD")
+        try:
+            client = await mit_frist(_sitzung.__aenter__(), GRENZE_ANMELDUNG,
+                                     "Die Anmeldung bei BYD")
+        except Exception as err:  # noqa: BLE001
+            # C3: eine ABGEWIESENE Anmeldung wird dauerhaft vermerkt; ein
+            # Netz- oder Zeitfehler nicht (ist_anmeldefehler()).
+            if ist_anmeldefehler(err):
+                anmeldung_abgewiesen(fehlertext(err))
+            raise
+        anmeldung_gelungen()
         # Wann wurde zuletzt bei BYD angefragt - gelungen ODER nicht. Nicht
         # stand["ts"]: der bleibt bei einer Stoerung absichtlich stehen, und
         # die Bremse gegen den Mindesttakt oeffnete dann gerade dann, wenn die
@@ -3188,6 +3512,11 @@ async def dienst_lauf(einmal: bool) -> int:
                 fehler = fehlertext(err)
                 fehler_folge += 1
                 melde_gebremst("abruf", "Abruf fehlgeschlagen: " + fehler, 900)
+                # C3: weist BYD waehrend des Betriebs die Anmeldung ab (etwa
+                # nach einer Passwortaenderung in der App), zaehlt das ebenso;
+                # gilt danach die Sperre, endet der Dienst.
+                if ist_anmeldefehler(err) and anmeldung_abgewiesen(fehler):
+                    raise
 
             # Die gerechneten Groessen erst NACH dem Abruf und nur auf
             # frischen Werten: sie leiten aus SOC und Kilometerstand ab, und
@@ -3217,7 +3546,20 @@ async def dienst_lauf(einmal: bool) -> int:
                 for fz in (stand.get("fahrzeuge") or {}).values():
                     fz["FEHLFOLGE"] = int(fehler_folge)
                     fz["LADEEMPF"] = empfehlung
-            abbild_schreiben(stand, cfg, ok, fehler)
+            # M3: verschwunden ist ein bekanntes Fahrzeug, das ein Abruf mit
+            # Fahrzeugliste NICHT mehr fuehrt. Taucht es wieder auf, darf es
+            # beim naechsten Verschwinden erneut gemeldet werden.
+            weg: list = []
+            if fahrzeuge:
+                for n in bekannte_nummern(merker):
+                    if n in fahrzeuge:
+                        weg_gemeldet.discard(n)
+                    elif n not in weg_gemeldet:
+                        weg.append(n)
+            abbild_schreiben(stand, cfg, ok, fehler,
+                             bekannte=bekannte_nummern(merker), weg=weg)
+            if cfg.get("mqtt_ein"):
+                weg_gemeldet.update(weg)
             zustand_schreiben(ok=ok, fehler=fehler, fehler_folge=fehler_folge,
                               pid=os.getpid(), intervall=cfg["intervall"],
                               anzahl_fahrzeuge=len(stand["fahrzeuge"]),
@@ -3245,6 +3587,8 @@ async def dienst_lauf(einmal: bool) -> int:
                 return 0 if ok else 1
 
             rest = cfg["intervall"]
+            # C5: das Kontingent schaltender Befehle gilt je Takt.
+            kontingent = {"rest": BEFEHLE_JE_LAUF}
             if fehler_folge >= 3:
                 rest = min(3600, cfg["intervall"] * min(8, fehler_folge))
                 melde_gebremst("bremse",
@@ -3260,7 +3604,8 @@ async def dienst_lauf(einmal: bool) -> int:
                     # den Mindesttakt. Die Zahl stand bisher nur im Abbild und
                     # wurde von niemandem gelesen.
                     if await warteschlange(client, stand["fahrzeuge"], cfg, z,
-                                           freigeschaltet, letzter_versuch):
+                                           freigeschaltet, letzter_versuch,
+                                           kontingent):
                         break     # Sofortabruf angefordert und durchgelassen
                 except Exception as err:  # noqa: BLE001
                     _LOG.error("Warteschlange: %s", fehlertext(err))
@@ -3270,6 +3615,8 @@ async def dienst_lauf(einmal: bool) -> int:
         meldung = fehlertext(err)
         _LOG.error("Dienst abgebrochen: %s", meldung)
         zustand_schreiben(ok=0, fehler=meldung)
+        # M6: der Dienst endet - Loxone erfaehrt es ueber ok 0 (fluechtig).
+        mqtt_ausfall_melden(cfg, merker)
         return 1
     finally:
         # Die Sitzung von Hand schliessen - das Gegenstueck zum Betreten
@@ -3298,7 +3645,40 @@ async def dienst_lauf(einmal: bool) -> int:
 # Blatt mit seinem Pfad auf - samt der Angabe, welches Feld der Feldtabelle
 # darauf getroffen hat.
 # ---------------------------------------------------------------------------
-async def felder_zeigen() -> int:
+async def felder_zeigen(frei: bool = True) -> int:
+    """C4 (Durchgang 29.09.2026): bis 0.9.19 meldete sich jeder Aufruf neu an
+    und weckte das Fahrzeug - dreimal den Knopf gedrueckt, vier Anmeldungen
+    und vier Echtzeitabrufe in 4 s (gemessen, Code-Pruefer). Jetzt:
+      * haelt ein anderer Lauf die Sperre (der Dienst), wird seine letzte
+        Antwort gezeigt (rohdaten.json) - kein Abruf;
+      * liegt der letzte Echtzeitabruf keine TAKT_MIN Sekunden zurueck, ebenso;
+      * sonst gilt dieselbe Anmeldebremse wie im Dienst (C3)."""
+    roh_datei = json_lesen(DATEI_ROH)
+    try:
+        felder_ts = int(DATEI_FELDER_ZEIT.read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        felder_ts = 0
+    jetzt = int(time.time())
+    zuletzt = max(ganz(roh_datei.get("ts"), 0), felder_ts)
+    if not frei or (zuletzt and 0 <= jetzt - zuletzt < TAKT_MIN):
+        if not frei:
+            print("[INFO] Ein anderer Lauf dieses Plugins (der Abrufdienst) haelt die Sperre. "
+                  "Gezeigt wird seine letzte Antwort - es wurde nichts neu abgerufen, das "
+                  "Fahrzeug wird nicht geweckt.")
+        else:
+            print("[INFO] Der letzte Abruf ist erst %d s her (Mindestabstand %d s). Gezeigt "
+                  "wird die letzte gespeicherte Antwort - es wurde nichts neu abgerufen."
+                  % (jetzt - zuletzt, TAKT_MIN))
+        roh = roh_datei.get("roh") if isinstance(roh_datei.get("roh"), dict) else {}
+        if not roh:
+            print("[FEHL] Es liegt noch keine gespeicherte Antwort vor. Nach dem ersten "
+                  "Abruf des Dienstes erneut versuchen.")
+            return 1
+        print("[INFO] Stand der gezeigten Antwort: %s"
+              % time.strftime("%d.%m.%Y %H:%M:%S", time.localtime(ganz(roh_datei.get("ts"), 0))))
+        fahrzeuge = json_lesen(DATEI_LOXONE).get("fahrzeuge")
+        return felder_ausgeben(fahrzeuge if isinstance(fahrzeuge, dict) else {}, roh)
+
     from pybyd import BydClient  # noqa: PLC0415
 
     cfg = config()
@@ -3306,21 +3686,40 @@ async def felder_zeigen() -> int:
     if not z["benutzer"] or not z["passwort"]:
         print("[FEHL] Es sind keine Zugangsdaten hinterlegt.")
         return 1
+    if anmeldung_lesen()["gesperrt"]:
+        print("[FEHL] " + ANMELDESPERRE_TEXT)
+        return 1
     konf, bericht = konfiguration_bauen(z, cfg)
     for k, v in sorted(bericht.items()):
         print("[INFO] Konfiguration: %-9s -> %s" % (k, v))
-    async with BydClient(konf) as client:
-        # Den merker MITGEBEN, damit dieser Handaufruf dieselben Nummern zeigt
-        # wie der laufende Dienst. Ohne ihn zaehlte er neu durch, und wer die
-        # Ausgabe zum Verdrahten benutzt, verdrahtete bei mehreren Fahrzeugen
-        # womoeglich das falsche.
-        fahrzeuge, fehler, roh = await einmal_abrufen(client, cfg, merker_lesen())
+    # VOR dem Abruf vermerken: auch ein gescheiterter zaehlt gegen die Bremse.
+    try:
+        PDATA.mkdir(parents=True, exist_ok=True)
+        DATEI_FELDER_ZEIT.write_text("%d\n" % jetzt, encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        async with BydClient(konf) as client:
+            anmeldung_gelungen()
+            # Den merker MITGEBEN, damit dieser Handaufruf dieselben Nummern
+            # zeigt wie der laufende Dienst. Ohne ihn zaehlte er neu durch, und
+            # wer die Ausgabe zum Verdrahten benutzt, verdrahtete bei mehreren
+            # Fahrzeugen womoeglich das falsche.
+            fahrzeuge, fehler, roh = await einmal_abrufen(client, cfg, merker_lesen())
+    except Exception as err:  # noqa: BLE001
+        if ist_anmeldefehler(err):
+            anmeldung_abgewiesen(fehlertext(err))
+        raise
     if fehler:
         print("[INFO] " + fehler)
     if not roh:
         print("[FEHL] Es kam keine Antwort - es gibt nichts zu zeigen.")
         return 1
+    return felder_ausgeben(fahrzeuge, roh)
 
+
+def felder_ausgeben(fahrzeuge: dict, roh: dict) -> int:
+    """Die Ausgabe von --felder: jedes Blatt mit Pfad und getroffenem Feld."""
     # Welcher Pfad ist welchem Feld zugeordnet?
     for nummer, teile in sorted(roh.items()):
         print("")
@@ -3634,7 +4033,48 @@ def selbsttest() -> int:
     return 1 if fehler else 0
 
 
+# C2 (Durchgang 29.09.2026): bis 0.9.19 lief jeder andere Aufruf als Dienst -
+# "byd.py --gibtsnicht" meldete sich an und lief bis zur Zeitgrenze (gemessen,
+# Code-Pruefer T1). Erlaubt sind genau diese Schalter; --praefix=<thema> nur
+# zusammen mit --mqtt-leeren (M9).
+SCHALTER = ("--einmal", "--selbsttest", "--felder", "--mqtt-leeren")
+_SPERRE = None
+
+
+def dienst_sperre():
+    """C1: nicht blockierende Sperre auf dieser Datei - ein Dienst, ein
+    --einmal oder ein --felder zur Zeit. Zwei gleichzeitige Starts ergaben bis
+    0.9.19 zwei Dienste und zwei Anmeldungen (gemessen, Code-Pruefer T2). Die
+    Sperre haengt an dieser Datei: sie liegt immer da, es muss nichts angelegt
+    werden, und eine zweite Installation (anderer Ordner) sperrt eine andere
+    Datei. Bauform AudiConnect 0.9.22.
+    Rueckgabe: der Griff (haelt die Sperre), None = ein anderer haelt sie."""
+    import fcntl  # noqa: PLC0415
+    try:
+        griff = open(os.path.abspath(__file__), "rb")
+    except OSError as err:
+        sys.stderr.write("WARNUNG: Sperrdatei nicht lesbar (%s) - ohne Sperre weiter.\n" % err)
+        return True
+    try:
+        fcntl.flock(griff.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        griff.close()
+        return None
+    return griff
+
+
 def main() -> int:
+    global _SPERRE
+    praefix_arg = [a for a in sys.argv[1:] if a.startswith("--praefix=")]
+    fremd = [a for a in sys.argv[1:] if a not in SCHALTER and a not in praefix_arg]
+    if praefix_arg and "--mqtt-leeren" not in sys.argv:
+        fremd += praefix_arg
+    if fremd:
+        sys.stderr.write("FEHLER: unbekannter Schalter %s. Erlaubt: %s (--praefix=<thema> nur "
+                         "mit --mqtt-leeren), oder ohne Schalter fuer den Dienst. Es wurde "
+                         "nichts gestartet und nichts veraendert.\n"
+                         % (" ".join(fremd), ", ".join(SCHALTER)))
+        return 2
     # --mqtt-leeren kommt aus uninstall/uninstall und redet im Format des
     # Installers auf stdout - deshalb VOR log_einrichten(). Nur aus der
     # Anlage: aus einem Archiv unter einer echten Wurzel leerte es sonst die
@@ -3644,13 +4084,18 @@ def main() -> int:
             print("<WARNING> MQTT: dieses byd.py (%s) liegt nicht im bin-Ordner der "
                   "Anlage - es wird nichts geleert." % SELF)
             return 2
+        if praefix_arg:
+            return mqtt_leeren(praefix=praefix_arg[-1][len("--praefix="):])
         return mqtt_leeren()
     log_einrichten()
     if "--selbsttest" in sys.argv:
         return selbsttest()
     if "--felder" in sys.argv:
+        # C4: dieselbe Sperre wie der Dienst; haelt sie ein anderer, wird
+        # dessen letzte Antwort gezeigt.
+        _SPERRE = dienst_sperre()
         try:
-            return asyncio.run(felder_zeigen())
+            return asyncio.run(felder_zeigen(_SPERRE is not None))
         except Exception as err:  # noqa: BLE001
             print("[FEHL] " + fehlertext(err))
             return 1
@@ -3662,6 +4107,13 @@ def main() -> int:
               "wird kein Dienst gestartet und nichts angelegt." % (SELF, LBHOME),
               file=sys.stderr)
         return 1
+    _SPERRE = dienst_sperre()
+    if _SPERRE is None:
+        text = ("Ein anderer Lauf dieses Plugins (Dienst, --einmal oder --felder) haelt die "
+                "Sperre - dieser Aufruf endet, ohne sich bei BYD anzumelden.")
+        sys.stderr.write("FEHLER: " + text + "\n")
+        _LOG.warning(text)
+        return 3
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, signal_behandeln)
     signal.signal(signal.SIGINT, signal_behandeln)

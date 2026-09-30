@@ -706,6 +706,12 @@ function by_token($erzeugen = true)
     if ($t === '' && $erzeugen) {
         $cfg['aktionstoken'] = by_token_erzeugen();
         by_config_speichern($cfg);
+        /* C9 (Durchgang 29.09.2026): nie still wuerfeln. Bis 0.9.19 entstand
+         * nach dem Zurueckspielen einer Sicherung mit leerem Token beim
+         * naechsten Seitenaufruf ein neues - ohne eine Protokollzeile, und
+         * jede Adresse im Miniserver war stumm ungueltig (gemessen). */
+        by_log('Es gab kein Aktionstoken - ein neues wurde erzeugt. Adressen im '
+             . 'Miniserver, die ein frueheres Token tragen, sind damit ungueltig.', 'WARN');
         return (string) $cfg['aktionstoken'];
     }
     return $t;
@@ -744,6 +750,91 @@ function by_formtoken_pruefen($cfg = null)
         return false;
     }
     return hash_equals($soll, $ist);
+}
+
+/**
+ * U1 (Durchgang 29.09.2026): das Ergebnis eines POST reist als Einmalmeldung
+ * ueber die Umleitung (303) - in data/plugins/<ordner>/einmalmeldung.json,
+ * 0600, hoechstens 120 s gueltig, beim GET gelesen und dabei geloescht.
+ * Bauform AudiConnect 0.9.22 (au_einmal_schreiben). Scheitert das Schreiben,
+ * rendert die Seite wie bisher direkt - lieber ohne Umleitung als ohne Meldung.
+ */
+function by_einmal_schreiben($daten)
+{
+    $p = by_paths();
+    if (!is_dir($p['datadir'])) {
+        return false;
+    }
+    $daten['zeit'] = time();
+    $js = json_encode($daten, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($js === false) {
+        return false;
+    }
+    $datei = $p['datadir'] . '/einmalmeldung.json';
+    $tmp = $datei . '.tmp.' . getmypid();
+    $fh = @fopen($tmp, 'c');
+    if ($fh === false) {
+        return false;
+    }
+    @chmod($tmp, 0600);
+    $ok = ftruncate($fh, 0) && (@fwrite($fh, $js) === strlen($js));
+    fflush($fh);
+    fclose($fh);
+    if (!$ok || !@rename($tmp, $datei)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
+function by_einmal_lesen()
+{
+    $f = by_paths()['datadir'] . '/einmalmeldung.json';
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = json_decode((string) @file_get_contents($f), true);
+    @unlink($f);
+    if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) {
+        return null;
+    }
+    $aus = array();
+    foreach (array('meldungen', 'fehler', 'stoerungen') as $k) {
+        $aus[$k] = array();
+        if (isset($d[$k]) && is_array($d[$k])) {
+            foreach ($d[$k] as $m) {
+                if (is_string($m)) {
+                    $aus[$k][] = $m;
+                }
+            }
+        }
+    }
+    $aus['ausgabe'] = isset($d['ausgabe']) && is_string($d['ausgabe']) ? $d['ausgabe'] : '';
+    return $aus;
+}
+
+/**
+ * C3 (Durchgang 29.09.2026): gilt die Anmeldesperre des Dienstes fuer die
+ * GELTENDEN Zugangsdaten? Dieselbe Rechnung wie anmeldung_lesen() in
+ * bin/byd.py: anmeldung.json traegt die sha256-Pruefsumme von zugang.json.
+ * Neue Zugangsdaten aendern die Datei - dann gilt die Sperre nicht mehr.
+ */
+function by_anmeldesperre()
+{
+    $p = by_paths();
+    $aus = array('gesperrt' => 0, 'anzahl' => 0);
+    $a = by_json_lesen($p['datadir'] . '/anmeldung.json');
+    if (!$a || empty($a['gesperrt']) || !isset($a['zugang']) || !is_string($a['zugang'])
+        || !is_file($p['zugang'])) {
+        return $aus;
+    }
+    $k = (string) @hash_file('sha256', $p['zugang']);
+    if ($k === '' || !hash_equals($k, $a['zugang'])) {
+        return $aus;
+    }
+    $aus['gesperrt'] = 1;
+    $aus['anzahl'] = isset($a['fehl']) && is_array($a['fehl']) ? count($a['fehl']) : 0;
+    return $aus;
 }
 
 /* ---------------- Zwischenspeicher lesen ---------------- */
@@ -838,18 +929,19 @@ function by_dienst_soll()
 /** $befehl ist 'start', 'stop' oder 'restart'. Rueckgabe: array(ok, Ausgabe) */
 function by_dienst($befehl)
 {
+    /* U10 (Durchgang 29.09.2026): die Texte stehen in den Sprachdateien; bis
+     * 0.9.19 kamen sie auch in der englischen Oberflaeche deutsch. */
     if (!in_array($befehl, array('start', 'stop', 'restart'), true)) {
-        return array(0, 'Unbekannter Befehl.');
+        return array(0, by_t('MELDUNG.DIENST_UNBEKANNT'));
     }
     if (!function_exists('exec')) {
         // Eine Absicherung, die genau dann zuschlaegt, wenn sie nicht messen
         // kann, ist keine - deshalb wird der Grund benannt.
-        return array(0, 'exec() ist in dieser PHP-Einrichtung gesperrt. Der Dienst '
-                      . 'laesst sich von hier aus nicht schalten.');
+        return array(0, by_t('MELDUNG.EXEC_DIENST'));
     }
     $skript = by_paths()['bindir'] . '/dienst.sh';
     if (!is_file($skript)) {
-        return array(0, 'dienst.sh nicht gefunden: ' . $skript);
+        return array(0, sprintf(by_t('MELDUNG.DIENSTSKRIPT_FEHLT'), $skript));
     }
     $ausgabe = array();
     $code = 0;
@@ -920,14 +1012,10 @@ function by_python_ruf($schalter, &$code = null)
     $py = $p['bindir'] . '/venv/bin/python3';
     $skript = $p['bindir'] . '/byd.py';
     if (!is_file($py) || !is_file($skript)) {
-        return "[FEHL] Die virtuelle Python-Umgebung oder byd.py fehlt.\n"
-             . "       Erwartet: " . $py . "\n"
-             . "                 " . $skript . "\n"
-             . "       Abhilfe: Plugin neu installieren; die Installation legt beides an.";
+        return '[FEHL] ' . sprintf(by_t('MELDUNG.VENV_FEHLT'), $py, $skript);
     }
     if (!function_exists('exec')) {
-        return "[FEHL] exec() ist in dieser PHP-Einrichtung gesperrt - der Selbsttest "
-             . "laesst sich von hier aus nicht aufrufen.";
+        return '[FEHL] ' . by_t('MELDUNG.EXEC_GESPERRT');
     }
     $ausgabe = array();
     $rc = 1;
@@ -965,13 +1053,12 @@ function by_befehl_absetzen($befehl, $wartezeit = null)
     // naechsten Start in der Warteschlange und wirkte dann Stunden spaeter am
     // Fahrzeug. Ein Befehl mit Verfallsdatum ist besser als eine Ueberraschung.
     if (by_dienst_pid() === 0) {
-        return array(0, 'Der Abrufdienst laeuft nicht - es wurde nichts eingereiht. '
-                      . 'Reiter Einstellungen, Knopf "Dienst starten".');
+        return array(0, by_t('MELDUNG.KEIN_DIENST'));
     }
 
     $ordner = $p['datadir'] . '/befehle';
     if (!is_dir($ordner) && !@mkdir($ordner, 0775, true) && !is_dir($ordner)) {
-        return array(0, 'Der Ordner fuer die Warteschlange liess sich nicht anlegen: ' . $ordner);
+        return array(0, sprintf(by_t('MELDUNG.ORDNER_FEHLT'), $ordner));
     }
     $kennung = bin2hex(random_bytes(8));
     $datei = $ordner . '/' . $kennung . '.json';
@@ -979,11 +1066,11 @@ function by_befehl_absetzen($befehl, $wartezeit = null)
     $befehl['ts'] = time();
     $by_js = json_encode($befehl);
     if ($by_js === false) {
-        return array(0, 'Der Befehl liess sich nicht als JSON darstellen (ungueltiges UTF-8).');
+        return array(0, by_t('MELDUNG.KEIN_JSON'));
     }
     if (@file_put_contents($tmp, $by_js) !== strlen($by_js) || !@rename($tmp, $datei)) {
         @unlink($tmp);
-        return array(0, 'Der Befehl liess sich nicht ablegen: ' . $datei);
+        return array(0, sprintf(by_t('MELDUNG.NICHT_ABGELEGT'), $datei));
     }
     $antwort = $p['datadir'] . '/antworten/' . $kennung . '.json';
     for ($i = 0; $i < $wartezeit * 10; $i++) {
@@ -997,9 +1084,7 @@ function by_befehl_absetzen($befehl, $wartezeit = null)
         }
         usleep(100000);
     }
-    return array(2, 'Eingereiht, aber der Dienst hat innerhalb von ' . $wartezeit
-                  . ' s nicht geantwortet. Das Ergebnis ist damit unbekannt - es wird '
-                  . 'kein Erfolg gemeldet, den niemand geprueft hat.');
+    return array(2, sprintf(by_t('MELDUNG.OHNE_ANTWORT'), $wartezeit));
 }
 
 /* ---------------- Verlauf ---------------- */
@@ -1483,14 +1568,128 @@ function by_mqtt_themen()
         'ok'        => 'BY_MQTT.OK',
         'ts'        => 'BY_MQTT.TS',
         'fahrzeuge' => 'BY_MQTT.FAHRZEUGE',
+        /* M4 (Durchgang 29.09.2026): das OK je Fahrzeug. Der Dienst sendet es
+         * seit 0.9.x (abbild_schreiben), in dieser Liste fehlte es bis 0.9.19
+         * - ausgerechnet das Thema, an dem ein Teilausfall in Loxone
+         * erkennbar ist (gemessen, MQTT- und Oberflaechen-Pruefer). */
+        'fahrzeugN/OK' => 'BY_MQTT.FZ_OK',
     );
     foreach (by_felder() as $name => $eig) {
         if ($name === 'OK' || $name === 'ALTER') {
-            continue;   // stehen als eigene Themen oben
+            continue;   // OK steht oben je Fahrzeug, ALTER ueber MQTT als ts
         }
         $aus['fahrzeugN/' . $name] = $eig['bez'];
     }
     return $aus;
+}
+
+/**
+ * M4: die Themen, die der DIENST sendet - aus bin/byd.py gelesen, nicht aus
+ * dieser Bibliothek. Pruefung 13 im Reiter Test haelt diese Menge gegen
+ * by_mqtt_themen(), in beide Richtungen; eine Tabelle gegen sich selbst zu
+ * pruefen hiesse, nichts zu pruefen. null heisst "nicht lesbar".
+ */
+function by_py_schluessel($text, $name)
+{
+    $pos = strpos($text, "\n" . $name . ' = {');
+    if ($pos === false) {
+        return array();
+    }
+    $ende = strpos($text, "\n}", $pos + 1);
+    if ($ende === false) {
+        return array();
+    }
+    preg_match_all('/^    "([A-Z0-9_]+)": \{/m', substr($text, $pos, $ende - $pos), $m);
+    return $m[1];
+}
+
+function by_themen_dienst()
+{
+    $f = by_paths()['bindir'] . '/byd.py';
+    $t = is_file($f) ? (string) @file_get_contents($f) : '';
+    if ($t === '' || !preg_match('/^MQTT_OBEN = \(([^)]*)\)/m', $t, $m)) {
+        return null;
+    }
+    preg_match_all('/"([a-z_]+)"/', $m[1], $x);
+    $felder = by_py_schluessel($t, 'FELDER');
+    $abgeleitet = by_py_schluessel($t, 'ABGELEITET');
+    if (!$x[1] || !$felder || !$abgeleitet) {
+        return null;
+    }
+    $aus = $x[1];
+    // Das OK je Fahrzeug setzt abbild_schreiben() von Hand, nicht aus einer
+    // Tabelle - gesucht wird die Zuweisung selbst.
+    if (preg_match('/paare\["fahrzeug%s\/OK" % nummer\] = fz_ok/', $t)) {
+        $aus[] = 'fahrzeugN/OK';
+    }
+    foreach (array_merge($felder, $abgeleitet) as $k) {
+        $aus[] = 'fahrzeugN/' . $k;
+    }
+    return array_values(array_unique($aus));
+}
+
+/**
+ * M5: die Abodatei config/plugins/<ordner>/mqtt_subscriptions.cfg auf
+ * "<praefix>/#" setzen - nur wenn sie abweicht. Gegenstueck zu
+ * abodatei_nachfuehren() in bin/byd.py; das Gateway V1 liest sie
+ * (Regeln/07). Rueckgabe 'gleich', 'neu' oder 'fehler'.
+ */
+function by_abodatei_nachfuehren($praefix)
+{
+    $p = by_paths();
+    $datei = $p['configdir'] . '/mqtt_subscriptions.cfg';
+    $soll = trim((string) $praefix, '/') . "/#\n";
+    if (is_file($datei) && (string) @file_get_contents($datei) === $soll) {
+        return 'gleich';
+    }
+    if (!is_dir($p['configdir'])) {
+        return 'fehler';
+    }
+    $tmp = $datei . '.tmp.' . getmypid();
+    $fh = @fopen($tmp, 'c');
+    if ($fh === false) {
+        return 'fehler';
+    }
+    @chmod($tmp, 0644);
+    $ok = ftruncate($fh, 0) && (@fwrite($fh, $soll) === strlen($soll));
+    fflush($fh);
+    fclose($fh);
+    if (!$ok || !@rename($tmp, $datei)) {
+        @unlink($tmp);
+        return 'fehler';
+    }
+    by_log('MQTT: Abodatei auf ' . trim($soll) . ' gesetzt.');
+    return 'neu';
+}
+
+/**
+ * M9: die behaltenen eigenen Themen unter $praefix am Broker abraeumen -
+ * mit der Logik von byd.py --mqtt-leeren (loeschen, nachlesen, UDP nur als
+ * Rueckfall). Rueckgabe array(rc, Text ohne die Marken des Installers).
+ */
+function by_mqtt_abraeumen($praefix)
+{
+    $p = by_paths();
+    $py = $p['bindir'] . '/venv/bin/python3';
+    $skript = $p['bindir'] . '/byd.py';
+    if (!is_file($py) || !is_file($skript)) {
+        return array(2, by_t('MELDUNG.VENV_FEHLT_KURZ'));
+    }
+    if (!function_exists('exec')) {
+        return array(2, by_t('MELDUNG.EXEC_GESPERRT'));
+    }
+    $ausgabe = array();
+    $rc = 2;
+    @exec(escapeshellarg($py) . ' ' . escapeshellarg($skript) . ' --mqtt-leeren '
+        . escapeshellarg('--praefix=' . (string) $praefix) . ' 2>&1', $ausgabe, $rc);
+    $zeilen = array();
+    foreach ($ausgabe as $z) {
+        $z = trim(preg_replace('/^<(OK|INFO|WARNING|FAIL)>\s*/', '', (string) $z));
+        if ($z !== '') {
+            $zeilen[] = $z;
+        }
+    }
+    return array((int) $rc, implode(' ', $zeilen));
 }
 
 /* Welche Themen gehen ZURUECKBEHALTEN (retain) hinaus? Gegenstueck zu
@@ -1644,9 +1843,23 @@ function by_xml_virtual_out($kopf, $cmds)
         $o .= 'CmdOffHTTP="" ';
         $o .= 'CmdOffPost="" ';
         $o .= 'CmdAnswer="" ';
-        $o .= 'Analog="false" ';
+        /* U11 (Durchgang 29.09.2026): ein Befehl mit Wertplatzhalter <v>
+         * gehoert an einen ANALOGEN Ausgang (Regeln/07, Ausfuhr
+         * VO_Rasenmaeher). Bis 0.9.19 stand hier fest "false"; ein digitaler
+         * Ausgang setzt fuer <v> nur 1 oder 0 ein - Klima mit temp=1. Der
+         * analoge Befehl traegt zwischen RepeatRate und HintText die
+         * Skalierung; 0/0/100/100 reicht den Wert unveraendert durch. Am
+         * Miniserver NICHT gemessen. */
+        $analog = !empty($c['analog']);
+        $o .= 'Analog="' . ($analog ? 'true' : 'false') . '" ';
         $o .= 'Repeat="0" ';
         $o .= 'RepeatRate="0" ';
+        if ($analog) {
+            $o .= 'SourceValLow="0" ';
+            $o .= 'DestValLow="0" ';
+            $o .= 'SourceValHigh="100" ';
+            $o .= 'DestValHigh="100" ';
+        }
         $o .= 'HintText=""';
         $o .= '/>' . $crlf;
     }
@@ -1766,6 +1979,7 @@ function by_vorlage_vo($nummer = 1)
                 'on'      => $basis . '&aktion=klima_start&fahrzeug=' . (int) $nummer
                            . '&temp=<v>',
                 'off'     => $basis . '&aktion=klima_stop&fahrzeug=' . (int) $nummer,
+                'analog'  => 1,
             );
             continue;
         }
@@ -1791,6 +2005,7 @@ function by_vorlage_vo($nummer = 1)
                 'on'      => $basis . '&aktion=' . $aktion . '&fahrzeug=' . (int) $nummer
                            . '&stufe=<v>',
                 'off'     => '',
+                'analog'  => 1,
             );
             continue;
         }
@@ -1960,16 +2175,144 @@ function by_wert_taugt($w)
     return preg_match('/[\x00-\x08\x0A-\x1F\x7F]/', $s) !== 1;
 }
 
+/**
+ * C8/C9 (Durchgang 29.09.2026): die Regel je Schluessel, die nicht schon in
+ * by_grenzen() steht - dieselben Regeln wie das Formular. Bis 0.9.19 wurden
+ * nur die Zahlenfelder geprueft; eine Sicherung mit steuerung_ein "nein"
+ * schaltete die Fahrzeugsteuerung frei, ein Token "Array" liess jede Liste
+ * als Token passieren (gemessen, Code- und Oberflaechen-Pruefer).
+ */
+function by_sicherung_regeln()
+{
+    return array(
+        'aktionstoken'    => 'token',
+        'mqtt_ein'        => 'schalter',
+        'steuerung_ein'   => 'schalter',
+        'gps_ein'         => 'schalter',
+        'mqtt_bibliothek' => 'schalter',
+        'abfahrt_ein'     => 'schalter',
+        'ladeempf_ein'    => 'schalter',
+        'ladeempf_unter'  => 'schalter',
+        'mqtt_topic'      => 'praefix',
+        'abfahrt_praefix' => 'thema',
+        'ladeempf_thema'  => 'thema',
+        'ladeempf_grenze' => 'grenzwert',
+        'heim_breite'     => 'breite',
+        'heim_laenge'     => 'laenge',
+    );
+}
+
+/** Rueckgabe array(taugt, Wert, Sprachschluessel des Grundes). */
+function by_sicherung_regel($art, $w)
+{
+    $s = is_string($w) ? $w : '';
+    switch ($art) {
+        case 'token':
+            // Muster wie Regeln/05: was ohne Kodierung in eine Adresse passt,
+            // 1 bis 64 Zeichen (gemessen am Bestand, nicht an der Erzeugung).
+            // Leer heisst "kein Token gesichert".
+            if (!is_string($w)) {
+                return array(false, null, 'EINST.SICH_R_TOKEN');
+            }
+            if ($w === '' || preg_match('/^[A-Za-z0-9_.\-]{1,64}\z/', $w)) {
+                return array(true, $w, '');
+            }
+            return array(false, null, 'EINST.SICH_R_TOKEN');
+        case 'schalter':
+            if ($w === 0 || $w === 1 || $w === '0' || $w === '1') {
+                return array(true, (int) $w, '');
+            }
+            return array(false, null, 'EINST.SICH_R_SCHALTER');
+        case 'praefix':
+            // Formular (Reiter MQTT): Buchstaben, Ziffern, _ / -, keine leere
+            // Ebene (M8), ohne Schraegstrich am Rand.
+            if (is_string($w) && preg_match('#^[A-Za-z0-9_/\-]{1,64}\z#', $w)
+                && strpos($w, '//') === false && trim($w, '/') === $w) {
+                return array(true, $w, '');
+            }
+            return array(false, null, 'EINST.SICH_R_PRAEFIX');
+        case 'thema':
+            if ($w === '' || (is_string($w) && preg_match('#^[A-Za-z0-9_/\-]{1,128}\z#', $w)
+                              && trim($w, '/') === $w)) {
+                return array(true, $w, '');
+            }
+            return array(false, null, 'EINST.SICH_R_THEMA');
+        case 'grenzwert':
+        case 'breite':
+        case 'laenge':
+            $g = array('grenzwert' => 100000, 'breite' => 90, 'laenge' => 180);
+            if ($art !== 'grenzwert' && $w === '') {
+                return array(true, '', '');
+            }
+            if (is_int($w) || is_float($w)) {
+                $z = (float) $w;
+            } elseif (preg_match('/^-?[0-9]{1,6}(\.[0-9]{1,8})?\z/', $s)) {
+                $z = (float) $s;
+            } else {
+                return array(false, null, 'EINST.SICH_R_DEZIMAL');
+            }
+            if ($z < -$g[$art] || $z > $g[$art]) {
+                return array(false, null, 'EINST.SICH_R_DEZIMAL');
+            }
+            return array(true, $w, '');
+    }
+    return array(false, null, 'EINST.SICH_R_UNBEKANNT');
+}
+
+/**
+ * C10: ein Feld der Zugangsdaten aus der Sicherung - dieselben Regeln wie das
+ * Formular (index.php, Reiter Einstellungen). Rueckgabe: Sprachschluessel des
+ * Grundes, '' wenn es taugt.
+ */
+function by_zugang_wert_pruefen($feld, $w)
+{
+    if (!is_string($w)) {
+        return 'EINST.SICH_R_ZUGANG';
+    }
+    if ($feld === 'benutzer') {
+        // Das Formular entfernt Steuerzeichen und Anfuehrungszeichen und
+        // meldet es; eine Sicherung wird nicht zurechtgebogen, sondern
+        // abgewiesen.
+        return preg_match('/[\x00-\x1F\x7F"\']/', $w) ? 'EINST.SICH_R_BENUTZER' : '';
+    }
+    if ($feld === 'passwort') {
+        return preg_match('/[\x00-\x1F\x7F]/', $w) ? 'EINST.SICH_R_ZUGANG' : '';
+    }
+    if ($feld === 'pin') {
+        return ($w === '' || preg_match('/^[0-9]{4,8}\z/', $w)) ? '' : 'EINST.SICH_R_PIN';
+    }
+    if ($feld === 'land') {
+        return ($w === '' || preg_match('/^[A-Z]{2}\z/', $w)) ? '' : 'EINST.SICH_R_LAND';
+    }
+    return 'EINST.SICH_R_ZUGANG';
+}
+
+/**
+ * C10: die Zugangsdaten fuer die Sicherungsdatei - Benutzername, Passwort,
+ * Steuer-PIN und Land aus zugang.json, unter eigenen Schluesseln.
+ */
+function by_sicherung_zugang()
+{
+    $z = by_json_lesen(by_paths()['zugang']);
+    $aus = array();
+    foreach (array('benutzer', 'passwort', 'pin', 'land') as $k) {
+        $aus['zugang_' . $k] = isset($z[$k]) && is_scalar($z[$k]) ? (string) $z[$k] : '';
+    }
+    return $aus;
+}
+
 function by_sicherung_lesen($roh)
 {
     $mangel = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(by_t('EINST.SICH_KEIN_JSON')), 0);
+        return array(null, array(by_t('EINST.SICH_KEIN_JSON')), 0, array());
     }
     $neu = by_vorgaben();
     $bekannt = array_keys($neu);
     $grenzen = by_grenzen();
+    $regeln = by_sicherung_regeln();
+    $zugang = array();
     $anzahl = 0;
     foreach ($daten as $k => $w) {
         /* Der lesbare Kopf einer Sicherungsdatei wird UEBERGANGEN, nicht
@@ -1977,6 +2320,21 @@ function by_sicherung_lesen($roh)
          * Bibliothek zwei Zeilen vorher erzeugt hat. Heute schreibt das Plugin
          * keinen solchen Kopf; wer einen ergaenzt, hat die Leseseite schon. */
         if (is_string($k) && $k !== '' && $k[0] === '_') {
+            continue;
+        }
+        /* C10: die Zugangsdaten stehen unter zugang_<feld>. Sie sind
+         * freiwillig - eine Sicherung aus 0.9.18 oder frueher traegt sie
+         * nicht und bleibt zurueckspielbar. */
+        if (in_array($k, array('zugang_benutzer', 'zugang_passwort', 'zugang_pin',
+                               'zugang_land'), true)) {
+            $feld = substr($k, 7);
+            $grund = by_wert_taugt($w) ? by_zugang_wert_pruefen($feld, $w) : 'EINST.SICH_R_ZUGANG';
+            if ($grund !== '') {
+                $mangel[] = sprintf(by_t('EINST.SICH_REGEL'),
+                    htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'), by_t($grund));
+                continue;
+            }
+            $zugang[$feld] = $w;
             continue;
         }
         if (!in_array($k, $bekannt, true)) {
@@ -1999,12 +2357,32 @@ function by_sicherung_lesen($roh)
                 continue;
             }
             $w = (int) $s;
+        } elseif (isset($regeln[$k])) {
+            list($by_taugt, $by_wert, $by_grund) = by_sicherung_regel($regeln[$k], $w);
+            if (!$by_taugt) {
+                $mangel[] = sprintf(by_t('EINST.SICH_REGEL'),
+                    htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'), by_t($by_grund));
+                continue;
+            }
+            $w = $by_wert;
         }
         $neu[$k] = $w;
         $anzahl++;
     }
     if ($anzahl === 0) {
         $mangel[] = by_t('EINST.SICH_LEER');
+    }
+    /* C9: die Paarregeln des Formulars. temp_min groesser als temp_max wird
+     * abgewiesen, nicht getauscht (der Dienst tauschte still); die
+     * Zieltemperatur der Vorklimatisierung muss dazwischen liegen. */
+    if (!$mangel) {
+        if ((int) $neu['temp_min'] > (int) $neu['temp_max']) {
+            $mangel[] = by_t('EINST.FEHLER_TEMP_TAUSCH');
+        } elseif ((int) $neu['abfahrt_temp'] < (int) $neu['temp_min']
+                  || (int) $neu['abfahrt_temp'] > (int) $neu['temp_max']) {
+            $mangel[] = sprintf(by_t('EINST.FEHLER_ABFAHRT_TEMP'), (int) $neu['abfahrt_temp'],
+                                (int) $neu['temp_min'], (int) $neu['temp_max']);
+        }
     }
     /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
      *
@@ -2033,5 +2411,14 @@ function by_sicherung_lesen($roh)
         $mangel[] = sprintf(by_t('EINST.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    /* C9: ein LEERES Token heisst "kein Token gesichert" - eingesetzt wird das
+     * geltende. Bis 0.9.19 wurde '' gespeichert, und der naechste
+     * Seitenaufruf wuerfelte still ein neues. Gibt es keines, entsteht es beim
+     * naechsten Seitenaufruf - mit Protokollzeile (by_token()). */
+    if (!$mangel && $neu['aktionstoken'] === '') {
+        $geltend = by_config(false);
+        $neu['aktionstoken'] = trim((string) (isset($geltend['aktionstoken'])
+            ? $geltend['aktionstoken'] : ''));
+    }
+    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? array() : $zugang);
 }

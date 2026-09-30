@@ -85,11 +85,27 @@ function by_endpunkt_pruefen($frisch = false)
         // gerufen - und im Pruefaufbau ist "kein Webserver erreichbar" der
         // Normalfall, nicht ein Befund.
         set_error_handler(function () { return true; });
-        $rumpf = file_get_contents($url, false, $ctx);
+        /* C11 (Durchgang 29.09.2026): die Kopfzeilen kamen aus der Variablen,
+         * die PHP 8.5 als verfallen meldet (php -l 8.5: Deprecated). Jetzt
+         * aus stream_get_meta_data() - in PHP 7.4 bis 8.5 gleich -, und
+         * scheitert fopen, aus http_get_last_response_headers(), wo es sie
+         * gibt (ab 8.4). Bauform Abfahrts-Assistent 1.6.16. */
+        $by_koepfe = null;
+        $by_fh = fopen($url, 'rb', false, $ctx);
+        if ($by_fh !== false) {
+            $rumpf = stream_get_contents($by_fh);
+            $by_meta = stream_get_meta_data($by_fh);
+            fclose($by_fh);
+            if (isset($by_meta['wrapper_data']) && is_array($by_meta['wrapper_data'])) {
+                $by_koepfe = $by_meta['wrapper_data'];
+            }
+        } elseif (function_exists('http_get_last_response_headers')) {
+            $by_koepfe = http_get_last_response_headers();
+        }
         restore_error_handler();
-        if (isset($http_response_header) && is_array($http_response_header)) {
-            foreach ($http_response_header as $z) {
-                if (preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $m)) {
+        if (is_array($by_koepfe)) {
+            foreach ($by_koepfe as $z) {
+                if (preg_match('#^HTTP/\S+\s+([0-9]{3})#', (string) $z, $m)) {
                     $code = (int) $m[1];   // bei Weiterleitung gilt die letzte
                 }
             }
@@ -261,7 +277,8 @@ function by_pruefungen()
         $pyok = ((int) $teile[0] > 3
                  || ((int) $teile[0] === 3 && isset($teile[1]) && (int) $teile[1] >= 11)) ? 1 : 0;
     }
-    $zeilen[] = by_pruefzeile($pyv === '' ? 0 : $pyok, by_t('TEST.F_PYTHON'),
+    // U9: "nicht feststellbar" ist ein Hinweis, kein Kreuz (Klasse 8).
+    $zeilen[] = by_pruefzeile($pyv === '' ? -1 : $pyok, by_t('TEST.F_PYTHON'),
         $pyv !== '' ? by_e($pyv) . ($pyok ? '' : ' &mdash; ' . by_t('TEST.A_PYTHON_ZU_ALT'))
                     : by_t('TEST.A_PYTHON_UNBEKANNT'));
 
@@ -271,7 +288,9 @@ function by_pruefungen()
 
     /* ---- 3. Dienst ---- */
     $pid = by_dienst_pid();
-    $zeilen[] = by_pruefzeile($pid > 0 ? 1 : 0, by_t('TEST.F_DIENST'),
+    // U9: ein bewusst angehaltener Dienst ist grau; ein Kreuz nur, wenn er
+    // laufen SOLL und es nicht tut.
+    $zeilen[] = by_pruefzeile($pid > 0 ? 1 : (by_dienst_soll() ? 0 : -1), by_t('TEST.F_DIENST'),
         $pid > 0 ? by_t('TEST.A_DIENST_LAEUFT') . ' ' . $pid
                  : (by_dienst_soll() ? by_t('TEST.A_DIENST_SOLL_TOT')
                                      : by_t('TEST.A_DIENST_GESTOPPT')));
@@ -293,7 +312,8 @@ function by_pruefungen()
     }
 
     $rechte = is_file($p['zugang']) ? (fileperms($p['zugang']) & 0777) : -1;
-    $zeilen[] = by_pruefzeile(($rechte >= 0 && ($rechte & 0077) === 0) ? 1 : 0,
+    // U9: ueber eine Datei, die es nicht gibt, wird nicht geurteilt.
+    $zeilen[] = by_pruefzeile($rechte < 0 ? -1 : ((($rechte & 0077) === 0) ? 1 : 0),
         by_t('TEST.F_RECHTE'),
         $rechte >= 0 ? '0' . decoct($rechte) : by_t('TEST.A_ZUGANGSDATEI_FEHLT'));
 
@@ -306,7 +326,10 @@ function by_pruefungen()
      * Jede Zeile, die ueber eine Menge urteilt, prueft zuerst, ob die Menge
      * leer ist. */
     $fahrzeuge = by_fahrzeuge();
-    $zeilen[] = by_pruefzeile(count($fahrzeuge) > 0 ? 1 : 0, by_t('TEST.F_FAHRZEUGE'),
+    // U9: keine Fahrzeuge vor dem ersten erfolgreichen Abruf ist normal - grau.
+    // Ein Kreuz nur, wenn ein Abbild da ist und trotzdem keines fuehrt.
+    $zeilen[] = by_pruefzeile(count($fahrzeuge) > 0 ? 1 : (by_alter() < 0 ? -1 : 0),
+        by_t('TEST.F_FAHRZEUGE'),
         count($fahrzeuge) > 0 ? sprintf(by_t('TEST.A_FAHRZEUGE'), count($fahrzeuge))
                               : by_t('TEST.A_KEINE_FAHRZEUGE'));
 
@@ -368,7 +391,13 @@ function by_pruefungen()
 
     /* ---- 8. Alter des Abbilds ---- */
     $alter = by_alter();
-    if ($alter < 0) {
+    if ($pid <= 0) {
+        // U9: ueber die Frische wird ohne laufenden Dienst nicht geurteilt -
+        // ein angehaltener Dienst ruft nichts ab, das Abbild altert mit Absicht.
+        $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_ABRUF'),
+            ($alter < 0 ? by_t('TEST.A_NIE_ABGERUFEN') : sprintf(by_t('TEST.A_ABRUF_ALTER'), $alter))
+            . ' &mdash; ' . by_t('TEST.A_ABRUF_OHNE_DIENST'));
+    } elseif ($alter < 0) {
         $zeilen[] = by_pruefzeile(0, by_t('TEST.F_ABRUF'), by_t('TEST.A_NIE_ABGERUFEN'));
     } else {
         $frisch = $alter <= max(600, 3 * (int) $cfg['intervall']);
@@ -447,21 +476,36 @@ function by_pruefungen()
      * ausgerechnet die gerechneten Groessen. Der Anwender importiert dann eine
      * Reichweite, die dauerhaft auf 0 steht, und sucht den Fehler bei seinem
      * Auto. Geprueft wird an den ERZEUGTEN Stuecken. */
-    $inzeile = array_keys(by_felder_zeile());
-    $themen = array();
-    foreach (array_keys(by_mqtt_themen()) as $t) {
-        if (strpos($t, 'fahrzeugN/') === 0) {
-            $themen[] = substr($t, strlen('fahrzeugN/'));
+    /* M4/U8 (Durchgang 29.09.2026): bis 0.9.19 verglich diese Zeile nur in
+     * EINER Richtung und nahm OK ausdruecklich heraus - fahrzeugN/OK wurde
+     * gesendet, stand nicht in der Liste, und die Zeile blieb gruen. Jetzt
+     * ohne Ausnahme: (a) jedes Feld der Statuszeile hat sein Thema (OK als
+     * fahrzeugN/OK, ALTER als ts), (b) die Liste der Oberflaeche und die
+     * Themen, die bin/byd.py sendet, decken sich in beide Richtungen. */
+    $ui_themen = array_keys(by_mqtt_themen());
+    $zuordnung = array('OK' => 'fahrzeugN/OK', 'ALTER' => 'ts');
+    $fehlt_mqtt = array();
+    foreach (array_keys(by_felder_zeile()) as $feld) {
+        $soll_thema = isset($zuordnung[$feld]) ? $zuordnung[$feld] : 'fahrzeugN/' . $feld;
+        if (!in_array($soll_thema, $ui_themen, true)) {
+            $fehlt_mqtt[] = $feld;
         }
     }
-    // OK und ALTER stehen ueber MQTT als eigene Themen (ok, ts) - sie gehoeren
-    // hier nicht in den Vergleich.
-    $inzeile_ohne = array_values(array_diff($inzeile, array('OK', 'ALTER')));
-    $fehlt_mqtt = array_diff($inzeile_ohne, $themen);
-    $zeilen[] = by_pruefzeile(count($fehlt_mqtt) === 0 ? 1 : 0, by_t('TEST.F_WEGE'),
-        count($fehlt_mqtt) === 0
-            ? sprintf(by_t('TEST.A_WEGE_OK'), count($inzeile), count($themen))
-            : sprintf(by_t('TEST.A_WEGE_FEHL'), by_e(implode(', ', $fehlt_mqtt))));
+    $dienst_themen = by_themen_dienst();
+    if ($dienst_themen === null) {
+        $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_WEGE'), by_t('TEST.A_WEGE_UNKLAR'));
+    } else {
+        $nur_dienst = array_values(array_diff($dienst_themen, $ui_themen));
+        $nur_ui = array_values(array_diff($ui_themen, $dienst_themen));
+        $gut = !$fehlt_mqtt && !$nur_dienst && !$nur_ui;
+        $zeilen[] = by_pruefzeile($gut ? 1 : 0, by_t('TEST.F_WEGE'),
+            $gut
+                ? sprintf(by_t('TEST.A_WEGE_OK'), count(by_felder_zeile()), count($ui_themen))
+                : sprintf(by_t('TEST.A_WEGE_FEHL'),
+                          by_e(implode(', ', $fehlt_mqtt) ?: '-'),
+                          by_e(implode(', ', $nur_dienst) ?: '-'),
+                          by_e(implode(', ', $nur_ui) ?: '-')));
+    }
 
     /* ---- 14. Jeder Feldname hat einen Satz ----
      * Die Oberflaeche gibt bei einem fehlenden Schluessel den Schluessel selbst
@@ -854,6 +898,69 @@ function by_pruefungen()
     }
 
     return $zeilen;
+}
+
+/**
+ * Eine Zeile der Selbstpruefung als Tabellenzeile - EINE Stelle fuer die
+ * Schleife in index.php und fuer die nachtraeglich eingesetzte Zeile U5.
+ */
+function by_pruefzeile_html($z)
+{
+    if ($z['stand'] === 1) {
+        $zeichen = '<span class="sm-an">&#10004;</span>';
+    } elseif ($z['stand'] === 0) {
+        $zeichen = '<span class="sm-aus">&#10008;</span>';
+    } else {
+        $zeichen = '<span style="color:#888;">&#9679;</span>';
+    }
+    return '<tr><td style="text-align:center;">' . $zeichen . '</td><td>' . $z['frage']
+         . '</td><td>' . $z['antwort'] . '</td></tr>';
+}
+
+/**
+ * U5 (Durchgang 29.09.2026): traegt jedes POST-Formular der GERENDERTEN Seite
+ * ein Merkmal mit Wert? Bis 0.9.19 zaehlte die Pruefung nur formular= im
+ * Quelltext - beim allerersten Aufruf trugen alle 15 Formulare ein leeres
+ * Merkmal, und die Zeile zeigte einen Haken (gemessen, Oberflaechen-Pruefer
+ * F1). Gezaehlt wird am HTML, das eben ausgegeben wird; index.php setzt die
+ * Zeile und die Bilanz danach ein (by_merkmal_einsetzen).
+ */
+function by_merkmal_zeile($html)
+{
+    preg_match_all('#<form\b[^>]*>.*?</form>#s', (string) $html, $m);
+    $post = 0;
+    $mit = 0;
+    foreach ($m[0] as $f) {
+        if (!preg_match('#^<form\b[^>]*method="post"#i', $f)) {
+            continue;
+        }
+        $post++;
+        if (preg_match('#name="formtoken" value="[^"]+"#', $f)) {
+            $mit++;
+        }
+    }
+    if ($post === 0) {
+        return by_pruefzeile(-1, by_t('TEST.F_MERKMAL'), by_t('TEST.A_MERKMAL_KEINE'));
+    }
+    return by_pruefzeile($mit === $post ? 1 : 0, by_t('TEST.F_MERKMAL'),
+        sprintf(by_t($mit === $post ? 'TEST.A_MERKMAL_OK' : 'TEST.A_MERKMAL_FEHL'), $mit, $post));
+}
+
+/** Setzt die Zeile U5 und die Bilanz in die gerenderte Seite ein. */
+function by_merkmal_einsetzen($html, $pruefungen)
+{
+    $zeile = by_merkmal_zeile($html);
+    $pruefungen[] = $zeile;
+    $b = by_pruefbilanz($pruefungen);
+    return str_replace(
+        array('@@BY_MERKMAL_ZEILE@@', '@@BY_BILANZ_KLASSE@@', '@@BY_BILANZ_KACHEL@@',
+              '@@BY_BILANZ_HINWEISE@@', '@@BY_BILANZ_SATZ@@'),
+        array(by_pruefzeile_html($zeile), $b['nein'] ? 'sm-aus' : 'sm-an',
+              (int) $b['ja'] . '/' . (int) $b['summe'],
+              sprintf(by_e(by_t('ALLG.HINWEISE')), (int) $b['hinweis']),
+              sprintf(by_e(by_t('TEST.BILANZ')), (int) $b['ja'], (int) $b['summe'],
+                      (int) $b['hinweis'])),
+        (string) $html);
 }
 
 /**

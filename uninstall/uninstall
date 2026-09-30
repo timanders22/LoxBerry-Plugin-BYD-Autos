@@ -20,13 +20,16 @@
 #   1. Die Sicherungsdateien
 #        config/plugins/<ordner>.backup.byd.json
 #        config/plugins/<ordner>.backup.zugang.json
-#      Sie liegen bewusst NEBEN dem Konfigordner, damit sie ein Update und
-#      sogar eine Neuinstallation ueberstehen. Beim Deinstallieren ist genau
-#      das falsch: in zugang.json stehen Benutzername, Passwort und Steuer-PIN
+#      Sie liegen bewusst NEBEN dem Konfigordner, damit sie ein Update
+#      ueberstehen. BERICHTIGT in 0.9.19 (I1): hier stand, sie sollten "sogar
+#      eine Neuinstallation" ueberstehen. Seit Entscheidung 1 vom 29.09.2026
+#      legt preinstall.sh sie bei einer Neuinstallation nach <name>.alt;
+#      eingespielt werden sie nur bei einem Update. Beim Deinstallieren sind
+#      sie falsch: in zugang.json stehen Benutzername, Passwort und Steuer-PIN
 #      des BYD-Kontos. Die Datei ist nicht umsonst mit 0600 angelegt. Wer das
 #      Plugin entfernt, erwartet nicht, dass seine Zugangsdaten auf der Karte
-#      bleiben - und eine spaetere NEUinstallation holte daraus stillschweigend
-#      die alte Konfiguration samt altem Aktionstoken zurueck.
+#      bleiben. Mit weg muessen deshalb auch die .alt und die Reste eines
+#      abgebrochenen Kopiervorgangs (.neu).
 #
 #      Anmerkung zu einer verbreiteten Sorge: LoxBerry loescht beim
 #      Deinstallieren config/plugins/<ordner>/ - also das VERZEICHNIS. Eine
@@ -57,7 +60,10 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 # Dritter Rueckfall: der eigene Ablageort. Bewusst kein fest verdrahteter
 # Systempfad - LoxBerry laesst sich anderswohin installieren, und der
 # Plugin-Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu sehen.
-# Dieses Skript liegt unter <home>/data/plugins/<ordner>/uninstall/
+# Installiert liegt dieses Skript unter <home>/data/system/uninstall/<name>
+# (plugininstall.pl:1158, Regeln/06; BERICHTIGT in 0.9.19 - hier stand
+# data/plugins/<ordner>/uninstall/). Die Suche unten rechnet deshalb keine
+# feste Zahl von Ebenen, sondern verlangt general.json.
 # Und die Wurzel wird GEPRUEFT, nicht nur auf Vorhandensein: ein Verzeichnis,
 # das es gibt, ist noch keine LoxBerry-Wurzel. Traefe der Rueckfall daneben,
 # griffe der Fehlerzweig unten NICHT - und Benutzername, Passwort und Steuer-PIN
@@ -227,7 +233,13 @@ mqtt_behaltene_themen_loeschen
 # ---------------------------------------------------------------
 # 2. Dateien ausserhalb der Plugin-Ordner
 # ---------------------------------------------------------------
-for f in byd.json zugang.json; do
+# I2 (Durchgang 29.09.2026): mit weg gehen die .alt aus preinstall.sh bzw.
+# preupgrade.sh und die .neu-Reste eines abgebrochenen by_kopie. Bis 0.9.19
+# blieben sie liegen, und die Schlusszeile meldete die Zugangsdaten trotzdem
+# als entfernt (gemessen, Installer-Pruefer Fall D1). Gemeldet wird erst nach
+# der Nachzaehlung unten.
+BY_ENTFERNT=""
+for f in byd.json zugang.json byd.json.alt zugang.json.alt byd.json.neu zugang.json.neu; do
     BK="$PCONFIG/$PFOLDER.backup.$f"
     if [ -f "$BK" ]; then
         # Ueberschreiben, dann entfernen - und die Zusage dazu bleibt klein.
@@ -247,7 +259,7 @@ for f in byd.json zugang.json; do
         case "$LAENGE" in ''|*[!0-9]*) LAENGE=0 ;; esac
         [ "$LAENGE" -gt 0 ] && dd if=/dev/zero of="$BK" bs=1 count="$LAENGE" \
             conv=notrunc >/dev/null 2>&1
-        rm -f "$BK" && echo "<OK> Sicherung entfernt: $PFOLDER.backup.$f"
+        rm -f "$BK" && BY_ENTFERNT="$BY_ENTFERNT $PFOLDER.backup.$f"
     fi
 done
 rm -f "$PCONFIG/$PFOLDER.lief_vorher" 2>/dev/null
@@ -271,20 +283,23 @@ fi
 # liegengebliebene Zweitschrift ueberlebt die Deinstallation und braechte
 # einer spaeteren NEUinstallation die Daten des Vorgaengers zurueck. Eine
 # saubere Neuinstallation waere dann keine.
-if [ -f "$PCONFIG/$PFOLDER.backup.verlauf.tar" ]; then
-    rm -f "$PCONFIG/$PFOLDER.backup.verlauf.tar" \
-        && echo "<OK> Gesicherte Ladehistorie entfernt: $PFOLDER.backup.verlauf.tar"
-fi
+for f in verlauf.tar verlauf.tar.alt verlauf.tar.neu; do
+    if [ -f "$PCONFIG/$PFOLDER.backup.$f" ]; then
+        rm -f "$PCONFIG/$PFOLDER.backup.$f" && BY_ENTFERNT="$BY_ENTFERNT $PFOLDER.backup.$f"
+    fi
+done
 
 # Nachgezaehlt statt behauptet: "entfernt" wird nur gemeldet, wenn wirklich
 # nichts mehr daliegt. Ein "alles entfernt" nach einem fehlgeschlagenen rm
 # waere die schlechteste Zeile dieser Datei.
 REST=0
-for f in byd.json zugang.json verlauf.tar; do
+for f in byd.json zugang.json verlauf.tar byd.json.alt zugang.json.alt verlauf.tar.alt \
+         byd.json.neu zugang.json.neu verlauf.tar.neu; do
     [ -e "$PCONFIG/$PFOLDER.backup.$f" ] && REST=$((REST + 1))
 done
 [ -e "$PCONFIG/$PFOLDER.lief_vorher" ] && REST=$((REST + 1))
 if [ "$REST" -eq 0 ]; then
+    [ -n "$BY_ENTFERNT" ] && echo "<OK> Entfernt:$BY_ENTFERNT"
     echo "<INFO> Benutzername, Passwort und Steuer-PIN des BYD-Kontos sind damit vom"
     echo "<INFO> LoxBerry entfernt."
 else

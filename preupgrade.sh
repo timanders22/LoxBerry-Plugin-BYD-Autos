@@ -149,6 +149,14 @@ by_kopie() {   # $1 Quelle, $2 Ziel
 # Installation darf das Plugin nicht fuer immer stilllegen. Entfernt wird
 # sie vom LETZTEN Hakenskript, postupgrade.sh; postinstall.sh nimmt sie bei
 # einem Abbruch ueber seinen EXIT-Trap mit.
+# I3 (Durchgang 29.09.2026): VOR dem Anlegen festhalten, ob die Marke schon
+# lag. Nur dann ist dies der zweite Anlauf eines Updates, das nicht zu Ende
+# kam, und eine Sicherung ohne Datenordner die einzige Abschrift. Bis 0.9.19
+# legte die naechste Zeile die Marke an, bevor irgendetwas nach ihr fragen
+# konnte, und eine Sicherung aus einem frueheren Vorgang wurde eingespielt
+# (gemessen, Installer-Pruefer Fall S1).
+VORHER_MARKE=0
+[ -f "$MARKE" ] && VORHER_MARKE=1
 mkdir -p "$BASE/data/plugins" 2>/dev/null
 date +%s > "$MARKE" 2>/dev/null
 if grep -Eq '^[0-9]+$' "$MARKE" 2>/dev/null; then
@@ -205,7 +213,11 @@ fi
 # nach postinstall.sh 0 statt 1 Dienst.
 # Liegt ein Merker, lief der Dienst vor einem Update, das nicht zu Ende kam;
 # er wird dann nach DIESEM Update gestartet, und das Protokoll sagt es.
+# I4: ob der Dienst JETZT lief, haelt LIEF_JETZT fest - daran haengt in
+# Schritt 2 die Meldung, nicht am Merker.
+LIEF_JETZT=0
 if [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" status >/dev/null 2>&1; then
+    LIEF_JETZT=1
     touch "$MERKER"
     echo "<INFO> Der Dienst laeuft - er wird nach dem Update wieder gestartet."
 elif [ -f "$MERKER" ]; then
@@ -226,10 +238,19 @@ fi
 # nach /dev/null. Aufgefallen am ersten echten Upgrade am Geraet
 # (11.09.2026): der Dienst war gestoppt, das Protokoll meldete ihn angehalten.
 # Angehalten wird trotzdem in jedem Fall - stop entfernt auch den Sollmerker.
+#
+# I4 (Durchgang 29.09.2026): die Meldung haengt am Ergebnis von "status" -
+# vorher (LIEF_JETZT) und nachher. Bis 0.9.19 hing sie am Merker; lag der aus
+# einem frueheren Lauf, stand "Laufender Dienst angehalten.", ohne dass einer
+# lief (gemessen, Installer-Pruefer Fall P2).
 if [ -x "$PBIN/dienst.sh" ]; then
     "$PBIN/dienst.sh" stop >/dev/null 2>&1
-    if [ -f "$MERKER" ]; then
-        echo "<INFO> Laufender Dienst angehalten."
+    if [ "$LIEF_JETZT" = "1" ]; then
+        if "$PBIN/dienst.sh" status >/dev/null 2>&1; then
+            echo "<WARNING> Der Dienst liess sich nicht anhalten - er laeuft noch."
+        else
+            echo "<INFO> Laufender Dienst angehalten."
+        fi
     else
         echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
     fi
@@ -336,12 +357,30 @@ if [ -d "$VERLAUF" ] && [ -n "$(ls -A "$VERLAUF" 2>/dev/null)" ]; then
             fi
         fi
     fi
-elif [ -f "$SICHERUNG" ]; then
-    # Kein Datenordner, aber eine Sicherung: so sieht der zweite Anlauf nach
-    # einem abgebrochenen Update aus. Sie ist jetzt die einzige Abschrift.
+elif [ -f "$SICHERUNG" ] && [ "$VORHER_MARKE" = "1" ]; then
+    # Kein Datenordner, aber eine Sicherung, und die Marke lag schon vor
+    # diesem Lauf: so sieht der zweite Anlauf nach einem abgebrochenen Update
+    # aus. Sie ist jetzt die einzige Abschrift.
     echo "<INFO> Im Datenordner liegt keine Ladehistorie, wohl aber die Sicherung eines"
     echo "<INFO> frueheren, nicht zu Ende gebrachten Updates."
     by_bleibt
+elif [ -f "$SICHERUNG" ]; then
+    # I3 (Entscheidung 1): ohne Marke vor diesem Lauf stammt die Sicherung aus
+    # einem FRUEHEREN Vorgang - sie wird nicht eingespielt, sondern nach .alt
+    # gelegt (die Deinstallation raeumt es ab). Der Startmerker .lief_vorher
+    # bleibt davon unberuehrt: nach einem Abbruch in postinstall.sh hat dessen
+    # EXIT-Trap die Marke schon entfernt, und der Merker ist die einzige
+    # Auskunft, dass der Dienst vorher lief (Faelle P1 -> P2).
+    rm -f "${SICHERUNG:?}.alt" 2>/dev/null
+    if mv -f "$SICHERUNG" "$SICHERUNG.alt" 2>/dev/null; then
+        chmod 600 "$SICHERUNG.alt" 2>/dev/null
+        echo "<WARNING> Eine gesicherte Ladehistorie aus einem frueheren Vorgang lag noch neben"
+        echo "<WARNING> dem Konfigordner. Sie wird NICHT eingespielt und liegt beiseite:"
+        echo "<WARNING> $SICHERUNG.alt (die Deinstallation raeumt sie ab)."
+    else
+        echo "<WARNING> Eine gesicherte Ladehistorie aus einem frueheren Vorgang liess sich nicht"
+        echo "<WARNING> beiseitelegen und wird nach dem Update eingespielt: $SICHERUNG"
+    fi
 fi
 
 # Alte Python-Zwischendateien wegraeumen. Eine .pyc, die aelter ist als der
