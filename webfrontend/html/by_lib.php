@@ -1168,6 +1168,205 @@ function by_selbsttest()
     return by_python_ruf('--selbsttest');
 }
 
+/* ---------------- Gleichwert-Unterdrueckung fuer Sollwerte (X-7) ----------------
+ *
+ * B-Nachzug 01.10.2026, Entscheidung Nr. 19: derselbe Sollwert fuer dasselbe
+ * Fahrzeug innerhalb von 60 s wird nicht noch einmal eingereiht - der
+ * Endpunkt antwortet HTTP 200 mit UNVERAENDERT=1. Kein zusaetzliches 429:
+ * ein anderer Wert geht sofort hinaus. Die Bremse des Dienstes (C5: PIN-
+ * Sperre, hoechstens 30 schaltende Befehle je Stunde, 20 je Takt) bleibt,
+ * wie sie ist; diese Unterdrueckung kommt davor.
+ *
+ * Warum: Loxone sendet einen Ausgang bei jeder Aenderung, und ein
+ * flatternder Baustein sendet denselben Wert mehrmals. Jeder Befehl weckt das
+ * Fahrzeug, verlangt die Steuer-PIN und zaehlt gegen die Stundengrenze -
+ * nach 30 gleichen Befehlen waere eine Stunde lang auch der eine noetige
+ * gesperrt.
+ *
+ * Gebremst werden nur Sollwerte: Klima an (samt Temperatur und Laufzeit) und
+ * aus, Klimaplan, Ver-/Entriegeln, Sitzklima- und Batterieheizungsstufe,
+ * Fenster schliessen. Nicht: Abruf, Suchen (Hupe/Licht), Blinken.
+ *
+ * Bauform AudiConnect (B-Nachzug 01.10.2026): Merker unter flock, geoeffnet
+ * mit "e" (close-on-exec), faellt geschlossen aus (503). Der Befehl wird VOR
+ * dem Einreihen vorgemerkt, und die Sperre wird nicht ueber das Warten auf den
+ * Dienst gehalten (bis 30 s): ein zweiter gleicher Aufruf waehrend des
+ * Wartens ist damit schon "unveraendert". Lehnt der Dienst ab (OK=0), wird
+ * der Eintrag wieder verworfen; OK=2 (eingereiht, Ergebnis unbekannt) bleibt
+ * gemerkt - ein zweiter Befehl waere genau die Mehrfachanfrage, vor der die
+ * Meldung warnt.
+ */
+define('BY_GLEICHWERT_S', 60);
+
+/** Pfad des Merkers. */
+function by_gleichwert_datei()
+{
+    return by_paths()['datadir'] . '/gleichwert.json';
+}
+
+/** Eine Zahl als Vergleichstext: "21", "21.0" und "21,0" sind derselbe Wert. */
+function by_gleichwert_zahl($w)
+{
+    if (!is_scalar($w) || trim((string) $w) === '') {
+        return '';
+    }
+    $s = str_replace(',', '.', trim((string) $w));
+    return is_numeric($s) ? (string) (float) $s : $s;
+}
+
+/**
+ * Gruppe und Sollwert eines Befehls (wie er in die Warteschlange ginge).
+ * null = nicht gebremst (Ereignis, Taster, Abruf, Unbekanntes).
+ */
+function by_gleichwert_gruppe(array $befehl)
+{
+    $aktion = isset($befehl['aktion']) ? (string) $befehl['aktion'] : '';
+    $temp = isset($befehl['temp']) ? by_gleichwert_zahl($befehl['temp']) : '';
+    $minuten = isset($befehl['minuten']) ? by_gleichwert_zahl($befehl['minuten']) : '';
+    $stufe = isset($befehl['stufe']) ? by_gleichwert_zahl($befehl['stufe']) : '';
+    switch ($aktion) {
+        case 'klima_start':
+            // Die Temperatur gehoert zum Sollwert: 21 und 22 sind zwei Befehle.
+            return array('klima', 'an|' . $temp . '|' . $minuten);
+        case 'klima_stop':
+            return array('klima', 'aus');
+        case 'klima_plan':
+            return array('klimaplan', $temp . '|' . $minuten);
+        case 'verriegeln':
+            return array('schloss', 'zu');
+        case 'entriegeln':
+            return array('schloss', 'auf');
+        case 'sitzklima':
+        case 'batterieheizung':
+            return array($aktion, $stufe);
+        case 'fenster_zu':
+            return array('fenster', 'zu');
+    }
+    return null;
+}
+
+/**
+ * Der Schluessel des Fahrzeugs: die VIN, sonst die Nummer. So trifft ein
+ * Aufruf mit fahrzeug=1 denselben Eintrag wie einer mit der VIN.
+ */
+function by_gleichwert_fz($fz, $ersatz)
+{
+    if (is_array($fz) && isset($fz['vin']) && is_string($fz['vin']) && trim($fz['vin']) !== '') {
+        return strtoupper(trim($fz['vin']));
+    }
+    return 'nr' . preg_replace('/[^0-9A-Za-z]/', '', (string) $ersatz);
+}
+
+/**
+ * Das Urteil - rein, ohne Datei.
+ * Rueckgabe: array('' | 'UNVERAENDERT', Sekunden seit dem gemerkten Befehl).
+ */
+function by_gleichwert_urteil(array $m, $schluessel, $wert, $jetzt)
+{
+    if (!isset($m[$schluessel]) || !is_array($m[$schluessel])
+        || !isset($m[$schluessel]['w'], $m[$schluessel]['t'])
+        || !is_scalar($m[$schluessel]['w']) || !is_scalar($m[$schluessel]['t'])) {
+        return array('', 0);
+    }
+    $seit = (int) $jetzt - (int) $m[$schluessel]['t'];
+    // Uhr zurueckgesprungen: der Merker sagt nichts mehr.
+    if ($seit < 0) {
+        return array('', 0);
+    }
+    if ((string) $m[$schluessel]['w'] === (string) $wert && $seit < BY_GLEICHWERT_S) {
+        return array('UNVERAENDERT', $seit);
+    }
+    return array('', $seit);
+}
+
+/**
+ * Vor dem Einreihen. Rueckgabe: array(Urteil, Sekunden, Marke).
+ *   'UNVERAENDERT' - derselbe Wert ging vor weniger als 60 s hinaus;
+ *   'MERKER'       - der Merker laesst sich nicht oeffnen, sperren oder
+ *                    schreiben: geschlossen ausfallen;
+ *   ''             - einreihen; der Befehl ist dann unter der Marke vorgemerkt.
+ */
+function by_gleichwert_pruefen($schluessel, $wert)
+{
+    $f = by_gleichwert_datei();
+    if (!is_dir(dirname($f))) {
+        @mkdir(dirname($f), 0775, true);
+    }
+    $fh = @fopen($f, 'c+e');
+    if ($fh === false || !@flock($fh, LOCK_EX)) {
+        if (is_resource($fh)) {
+            fclose($fh);
+        }
+        return array('MERKER', 0, '');
+    }
+    $m = json_decode((string) stream_get_contents($fh), true);
+    if (!is_array($m)) {
+        $m = array();     // unlesbar gilt als leer: im Zweifel senden
+    }
+    $jetzt = time();
+    list($urteil, $seit) = by_gleichwert_urteil($m, $schluessel, $wert, $jetzt);
+    if ($urteil !== '') {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+        return array($urteil, $seit, '');
+    }
+    // Abgelaufene Eintraege fallen heraus - der Merker bleibt klein.
+    foreach ($m as $k => $e) {
+        if (!is_array($e) || !isset($e['t']) || !is_scalar($e['t'])
+            || $jetzt - (int) $e['t'] >= BY_GLEICHWERT_S || (int) $e['t'] > $jetzt) {
+            unset($m[$k]);
+        }
+    }
+    $marke = bin2hex(random_bytes(6));
+    $m[$schluessel] = array('w' => (string) $wert, 't' => $jetzt, 'm' => $marke);
+    $js = json_encode($m);
+    $ok = $js !== false && ftruncate($fh, 0) && rewind($fh)
+          && fwrite($fh, $js) === strlen($js) && fflush($fh);
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    if (!$ok) {
+        // Nicht vermerkt heisst: die Unterdrueckung wuerde den naechsten
+        // gleichen Befehl nicht erkennen. Geschlossen ausfallen.
+        return array('MERKER', 0, '');
+    }
+    return array('', 0, $marke);
+}
+
+/**
+ * Einen Eintrag verwerfen - nach OK=0, oder weil ein Befehl an der
+ * Unterdrueckung vorbei ging (Reiter Test). $marke '' verwirft jeden Eintrag
+ * des Schluessels, sonst nur den eigenen. Rueckgabe: true, wenn danach kein
+ * passender Eintrag mehr steht.
+ */
+function by_gleichwert_vergessen($schluessel, $marke = '')
+{
+    $f = by_gleichwert_datei();
+    clearstatcache(true, $f);
+    if (!is_file($f)) {
+        return true;
+    }
+    $fh = @fopen($f, 'c+e');
+    if ($fh === false || !@flock($fh, LOCK_EX)) {
+        if (is_resource($fh)) {
+            fclose($fh);
+        }
+        return false;
+    }
+    $m = json_decode((string) stream_get_contents($fh), true);
+    $ok = true;
+    if (is_array($m) && isset($m[$schluessel]) && ($marke === ''
+            || (is_array($m[$schluessel]) && isset($m[$schluessel]['m'])
+                && (string) $m[$schluessel]['m'] === (string) $marke))) {
+        unset($m[$schluessel]);
+        $js = json_encode($m);
+        $ok = $js !== false && ftruncate($fh, 0) && rewind($fh)
+              && fwrite($fh, $js) === strlen($js) && fflush($fh);
+    }
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $ok;
+}
+
 /* ---------------- Befehlswarteschlange ----------------
  *
  * Sowohl der Miniserver-Endpunkt als auch der Reiter Test setzen Befehle ueber
@@ -2065,8 +2264,12 @@ function by_xml_virtual_out($kopf, $cmds)
         $o .= "\t" . '<VirtualOutCmd ';
         $o .= 'Title="' . by_x($c['title']) . '" ';
         $o .= 'Comment="' . by_x(isset($c['comment']) ? $c['comment'] : '') . '" ';
-        $o .= 'CmdOnMethod="0" ';
-        $o .= 'CmdOffMethod="0" ';
+        /* B-Nachzug 01.10.2026: die Methode ist "GET", wie in den Ausfuhren
+         * aus Loxone Config (Regeln/07, VO_Rasenmaeher und VQU_Govee: GET
+         * auch ohne Ausbefehl). Bis 0.9.22 stand hier "0" - keine Methode,
+         * die Config kennt; vorlagen_pruefen.py meldete sie als unbekannt. */
+        $o .= 'CmdOnMethod="GET" ';
+        $o .= 'CmdOffMethod="GET" ';
         $o .= 'CmdOn="' . by_x(isset($c['on']) ? $c['on'] : '') . '" ';
         $o .= 'CmdOnHTTP="" ';
         $o .= 'CmdOnPost="" ';

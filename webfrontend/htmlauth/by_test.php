@@ -1108,7 +1108,19 @@ function by_test_aktion($aktion)
         }
         $b['stufe'] = (int) $st;
     }
-    return by_befehl_absetzen($b);
+    $erg = by_befehl_absetzen($b);
+    /* X-7 (B-Nachzug 01.10.2026): dieser Befehl ging an der Gleichwert-
+     * Unterdrueckung des Endpunkts vorbei. Hat er etwas abgesetzt (kein
+     * Trockenlauf, nicht abgelehnt), verwirft er den Eintrag seiner Gruppe -
+     * sonst hielte der Endpunkt den naechsten Sollwert aus Loxone fuer
+     * "unveraendert", obwohl das Fahrzeug eben etwas anderes bekam. */
+    $gr = by_gleichwert_gruppe($b);
+    if ($gr !== null && !$probe && (int) $erg[0] !== 0) {
+        $alle = by_fahrzeuge();
+        by_gleichwert_vergessen(by_gleichwert_fz(isset($alle[$nr]) ? $alle[$nr] : null, $nr)
+            . '|' . $gr[0]);
+    }
+    return $erg;
 }
 
 /** Mini-SVG: Ladezustand ueber den heutigen Tag (0 bis 24 h, 0 bis 100 %). */

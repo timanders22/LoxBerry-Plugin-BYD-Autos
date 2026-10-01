@@ -382,8 +382,29 @@ if ($by_post && $by_formular === 'einstellungen') {
     foreach (array('abfahrt_praefix' => 'EINST.L_ABFAHRT_PRAEFIX',
                    'ladeempf_thema'  => 'EINST.L_LADEEMPF_THEMA',
                    'preisempf_praefix' => 'EINST.L_PREISEMPF_PRAEFIX') as $by_f => $by_bez) {
-        $by_w = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
-            isset($_POST[$by_f]) ? (string) $_POST[$by_f] : ''));
+        /* Nr. 19 (B-Nachzug 01.10.2026): nichts mehr still entfernen. Bis
+         * 0.9.22 fielen Steuer- und Anfuehrungszeichen hier wortlos weg (ein
+         * Thema mit Anfuehrungszeichen wurde ohne gespeichert), ein Feld statt
+         * Text wurde zu "Array" und als Thema gespeichert, und "/" wurde zu
+         * "" - die Funktion stand still ohne Thema da. Jetzt wird das
+         * beanstandet; still bleibt nur der Leerraum am Rand. */
+        $by_roh = isset($_POST[$by_f]) ? $_POST[$by_f] : '';
+        if (!is_string($by_roh)) {
+            $by_fehler[] = sprintf(by_t('EINST.FEHLER_THEMA'), by_t($by_bez));
+            $by_beanstandet[] = $by_f;
+            continue;
+        }
+        $by_w = trim($by_roh);
+        /* Nachbesserung 01.10.2026 (Koordinator, Nr. 19/21): auch ein
+         * Schraegstrich am Anfang oder Ende wird beanstandet statt still
+         * abgeschnitten - "/haus/byd" ist im Broker ein anderes Thema als
+         * "haus/byd". Wie Midea2Lox 4.5.12 und wie das Zurueckspielen
+         * (by_sicherung_regel 'thema'). Das deckt auch "/" allein. */
+        if ($by_w !== '' && trim($by_w, '/') !== $by_w) {
+            $by_fehler[] = sprintf(by_t('EINST.FEHLER_THEMA_RAND'), by_t($by_bez));
+            $by_beanstandet[] = $by_f;
+            continue;
+        }
         if ($by_w === '') {
             // Leer ist erlaubt: die zugehoerige Funktion ist dann ohne Thema
             // und wird - sichtbar - nichts tun.
@@ -395,12 +416,10 @@ if ($by_post && $by_formular === 'einstellungen') {
             $by_beanstandet[] = $by_f;
             continue;
         }
-        // Das Beschneiden der Schraegstriche bleibt STILL, und zwar mit
-        // Absicht: "haus/byd/" und "haus/byd" bezeichnen dasselbe Thema, ein
-        // Schraegstrich am Rand ist Schreibweise und nicht Inhalt. Gemeldet
-        // wird nur, wo Zeichen verschwinden, die etwas bedeuten - siehe den
-        // Benutzernamen und das Länderkürzel weiter unten.
-        $by_cfg[$by_f] = trim($by_w, '/');
+        // Bis 0.9.22 wurde hier ein Schraegstrich am Rand STILL abgeschnitten.
+        // Seit der Nachbesserung vom 01.10.2026 ist er oben beanstandet; was
+        // hier ankommt, wird gespeichert, wie es eingegeben wurde.
+        $by_cfg[$by_f] = $by_w;
     }
 
     /* Dezimalzahlen: Grenze und Heimatposition. Ein Komma wird zum Punkt -
@@ -411,9 +430,15 @@ if ($by_post && $by_formular === 'einstellungen') {
         'heim_breite'     => array(-90, 90, 'EINST.L_HEIM_BREITE'),
         'heim_laenge'     => array(-180, 180, 'EINST.L_HEIM_LAENGE'),
     ) as $by_f => $by_g) {
-        $by_w = str_replace(',', '.', trim(isset($_POST[$by_f]) ? (string) $_POST[$by_f] : ''));
-        if ($by_w === '') {
-            $by_cfg[$by_f] = ($by_f === 'ladeempf_grenze') ? 0 : '';
+        /* Nr. 19 (B-Nachzug 01.10.2026): ein leeres Feld der Grenze wurde
+         * bis 0.9.22 still als 0 gespeichert (Vorgabe eingesetzt) - jetzt ist
+         * es eine Beanstandung ("bitte eine Zahl eintragen"). Leer bleibt nur
+         * bei der Heimatposition erlaubt: beide leer heisst "keine". Ein Feld
+         * statt Text wird ohne PHP-Warnung beanstandet. */
+        $by_roh = isset($_POST[$by_f]) ? $_POST[$by_f] : '';
+        $by_w = is_string($by_roh) ? str_replace(',', '.', trim($by_roh)) : '#';
+        if ($by_w === '' && $by_f !== 'ladeempf_grenze') {
+            $by_cfg[$by_f] = '';
             continue;
         }
         if (!preg_match('/^-?[0-9]{1,6}(\.[0-9]{1,8})?$/', $by_w)) {
@@ -454,6 +479,19 @@ if ($by_post && $by_formular === 'einstellungen') {
      * irgendwo steht, dass der eingegebene Name nicht der gespeicherte ist.
      * Ein stillschweigend veraenderter Anmeldename ist der unangenehmste Fall
      * dieser Art: er sieht im Feld richtig aus. */
+    /* Nr. 19 (B-Nachzug 01.10.2026): kommt ein Zugangsfeld als Feld statt als
+     * Text (benutzer[]=...), wurde daraus bis 0.9.22 "Array" - als
+     * Anmeldename bzw. Passwort gespeichert, unter PHP 8 mit einer Warnung in
+     * der Seite. Jetzt: Beanstandung, nichts gespeichert; der Wert wird
+     * danach als leer behandelt, damit keine Warnung entsteht. */
+    foreach (array('benutzer' => 'EINST.L_BENUTZER', 'passwort' => 'EINST.L_PASSWORT',
+                   'pin' => 'EINST.L_PIN', 'land' => 'EINST.L_LAND') as $by_zf => $by_zb) {
+        if (isset($_POST[$by_zf]) && !is_string($_POST[$by_zf])) {
+            $by_fehler[] = sprintf(by_t('EINST.FEHLER_KEIN_TEXT'), by_t($by_zb));
+            $by_beanstandet[] = $by_zf;
+            $_POST[$by_zf] = '';
+        }
+    }
     $by_benutzer_roh = trim(isset($_POST['benutzer']) ? (string) $_POST['benutzer'] : '');
     $by_benutzer = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', $by_benutzer_roh));
     if ($by_benutzer !== $by_benutzer_roh) {
@@ -492,7 +530,8 @@ if ($by_post && $by_formular === 'einstellungen') {
         /* Passwort ohne Benutzername: VOR dem Schreiben gefragt, an dem Stand,
          * der entstuende (ein leeres Passwortfeld behaelt das gespeicherte). */
         $by_zg_alt = by_zugang();
-        if ($by_benutzer === '' && ($by_pw !== '' || $by_zg_alt['laenge'] > 0)) {
+        if ($by_benutzer === '' && ($by_pw !== '' || $by_zg_alt['laenge'] > 0)
+            && !in_array('benutzer', $by_beanstandet, true)) {
             $by_fehler[] = by_t('EINST.WARN_PW_OHNE_KONTO');
             $by_beanstandet[] = 'benutzer';
         }
@@ -554,8 +593,13 @@ if ($by_post && $by_formular === 'mqtt') {
     $by_mcfg = by_config();
     $by_malt = $by_mcfg;
     $by_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
-    $by_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
-        (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
+    /* Nr. 19 (B-Nachzug 01.10.2026): bis 0.9.22 fielen Steuer- und
+     * Anfuehrungszeichen hier still weg, und ein Feld statt Text wurde zu
+     * "Array" - das die Pruefung bestand und gespeichert wurde. Jetzt
+     * entscheidet die Pruefung darunter ueber die Eingabe, wie sie kam (nur
+     * Leerraum am Rand faellt still). */
+    $by_mroh = isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '';
+    $by_mtopic = is_string($by_mroh) ? trim($by_mroh) : '';
     if ($by_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $by_mtopic)) {
         $by_fehler[] = by_t('EINST.FEHLER_TOPIC');
         $by_beanstandet[] = 'mqtt_topic';
@@ -566,8 +610,14 @@ if ($by_post && $by_formular === 'mqtt') {
          * etwas kommt (gemessen, MQTT-Pruefer B8). */
         $by_fehler[] = by_t('EINST.FEHLER_TOPIC_EBENE');
         $by_beanstandet[] = 'mqtt_topic';
+    } elseif (trim($by_mtopic, '/') !== $by_mtopic) {
+        /* Nachbesserung 01.10.2026 (Nr. 19/21): ein Schraegstrich am Anfang
+         * oder Ende wurde bis 0.9.22 still abgeschnitten - jetzt beanstandet,
+         * wie beim Zurueckspielen (by_sicherung_regel 'praefix'). */
+        $by_fehler[] = sprintf(by_t('EINST.FEHLER_THEMA_RAND'), by_t('EINST.L_MQTT_TOPIC'));
+        $by_beanstandet[] = 'mqtt_topic';
     } else {
-        $by_mcfg['mqtt_topic'] = trim($by_mtopic, '/');
+        $by_mcfg['mqtt_topic'] = $by_mtopic;
     }
     /* Der Fehlerfall wurde bisher VERSCHWIEGEN: liess sich die Datei nicht
      * schreiben, war die Bedingung falsch, und es geschah nichts weiter - kein

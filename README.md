@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.21
+Version 0.9.22
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,24 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.22
+
+Verbesserungen aus dem Durchgang (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Entscheidungen 16, 19 und 21).
+Gemessen an einer pybyd-Attrappe unter PHP 7.4, 8.3 und 8.5; nicht am Fahrzeug.
+
+* **Befehlsbremse:** Derselbe Sollwert je Fahrzeug (Klima an/aus samt Temperatur
+  und Laufzeit, Klimaplan, Verriegeln, Sitzklima, Batterieheizung, Fenster
+  schließen) geht innerhalb von 60 s nur einmal hinaus; sonst `UNVERAENDERT=1`.
+  Abruf, Suchen und Blinken sind ausgenommen, ein 429 gibt es nicht, die
+  Stundengrenze bleibt. Lässt sich der Merker nicht führen, antwortet der Endpunkt
+  mit 503 und sendet nichts.
+* Die Importdatei der Ausgänge trägt an jedem Befehl die Methode `GET`.
+* **Nach einer Beanstandung wird nichts gespeichert:** Themen mit Anführungs- oder
+  Steuerzeichen, mit Schrägstrich am Rand oder nur aus `/`, ein leerer Grenzwert
+  und Felder, die nicht als Text ankommen, werden beanstandet statt still
+  angepasst; die Eingaben kommen markiert zurück.
 
 ## Neu in 0.9.21
 
@@ -837,6 +855,22 @@ Miniserver damit in Millisekunden statt in Sekunden. Schreibende Befehle laufen
 arbeitet sie ab und legt die Antwort daneben. **Der Endpunkt spricht nie selbst
 mit BYD.**
 
+Derselbe **Sollwert** für dasselbe Fahrzeug geht innerhalb von 60 Sekunden nur
+einmal in die Warteschlange: Klima an (samt Temperatur und Laufzeit) oder aus,
+Klimaplan, Ver- oder Entriegeln, Sitzklima- und Batterieheizungsstufe, Fenster
+schließen. Die Wiederholung beantwortet der Endpunkt mit HTTP 200 und
+`SET;OK=1;AKTION=…;UNVERAENDERT=1;SEIT_S=…` und sendet nichts. Ein anderer Wert
+geht sofort hinaus; ein zusätzliches 429 gibt es nicht. Abruf, Suchen und
+Blinken sind Ereignisse und davon ausgenommen. Die Bremse des Dienstes
+(höchstens 30 schaltende Befehle je Stunde, PIN-Sperre) bleibt daneben
+bestehen. Lehnt der Dienst einen Befehl ab, gilt er nicht als gesendet; ein
+Befehl aus dem Reiter *Test* hebt die Sperre seiner Gruppe auf. Lässt sich die
+Merkerdatei im Datenordner nicht führen, antwortet der Endpunkt mit HTTP 503 und
+`GRUND=BREMSE_MERKER`, statt ungebremst zu senden.
+
+Die Importdatei der virtuellen Ausgänge trägt an jedem Befehl die Methode `GET`
+(wie die Ausfuhren aus Loxone Config).
+
 Die gemeinsame Bibliothek `by_lib.php` liegt unter `webfrontend/html/`, weil
 der Endpunkt sie ebenso braucht wie die Oberfläche — eine Datei statt zweier
 Kopien, die auseinanderlaufen. Installiert liegen `html/` und `htmlauth/` in
@@ -1054,6 +1088,14 @@ echten Fahrzeug zu klären, **ohne es zu bewegen**.
   danach wieder im Formular (das beanstandete Feld rot umrandet). Passwort und
   Steuer-PIN reisen dabei nie mit — ein eben eingetipptes Passwort ist also
   noch einmal einzugeben.
+* Als Beanstandung gilt auch, was früher still angepasst wurde: ein Thema oder
+  Themenpfad mit Anführungs- oder Steuerzeichen oder mit Schrägstrich am Anfang
+  oder Ende (im Broker ist `/haus/byd` ein anderes Thema als `haus/byd`), ein
+  leeres Feld *Grenzwert* der Ladeempfehlung (vorher still 0) und ein Feld, das
+  nicht als einzelner Text ankommt. Still bleiben nur Leerraum am Rand, das
+  Komma als Dezimalzeichen und die Großschreibung des Länderkürzels. Das
+  Zurückspielen prüft die Themen nach derselben Regel; „Einstellungen sichern“
+  warnt gelb, wenn ein gespeichertes Thema sie nicht erfüllt.
 * Das Token des unangemeldeten Endpunkts steht in `byd.json`, und die Datei
   bekommt deshalb ebenfalls 0600: wer es lesen kann, kann über HTTP das
   Fahrzeug schalten.

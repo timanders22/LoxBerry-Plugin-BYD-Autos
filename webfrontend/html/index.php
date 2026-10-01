@@ -23,6 +23,15 @@
  *   sitzklima &stufe=<n>     batterieheizung &stufe=<n>
  *   suchen  blinken  fenster_zu
  *
+ * Gleichwert-Unterdrueckung (X-7, B-Nachzug 01.10.2026, Entscheidung Nr. 19):
+ * derselbe Sollwert fuer dasselbe Fahrzeug innerhalb von 60 s geht nicht noch
+ * einmal hinaus - HTTP 200, SET;OK=1;AKTION=..;UNVERAENDERT=1;SEIT_S=n, nichts
+ * eingereiht. Gilt fuer klima_start/klima_stop (samt Temperatur und Laufzeit),
+ * klima_plan, verriegeln/entriegeln, sitzklima, batterieheizung und
+ * fenster_zu; nicht fuer abruf, suchen und blinken. Ein anderer Wert geht
+ * sofort hinaus (kein 429); die Stundengrenze des Dienstes bleibt. Laesst sich
+ * der Merker nicht fuehren: HTTP 503, GRUND=BREMSE_MERKER.
+ *
  * Und einer, der nichts tut:
  *   ?selftest=1&token=<TOKEN>
  *
@@ -364,6 +373,32 @@ if ($by_eig['zusatz'] === 'temp') {
     $by_befehl['stufe'] = (int) $by_stufe;
 }
 
+/* X-7 (B-Nachzug 01.10.2026): Gleichwert-Unterdrueckung fuer Sollwerte,
+ * siehe Kopf und by_lib.php. Erst hier, hinter Token, Haken und allen
+ * Parameterpruefungen: ein abgewiesener Aufruf merkt nichts. */
+$by_gw = by_gleichwert_gruppe($by_befehl);
+$by_gw_schl = '';
+$by_gw_marke = '';
+if ($by_gw !== null) {
+    $by_gw_schl = by_gleichwert_fz($by_f, $by_fahrzeug) . '|' . $by_gw[0];
+    list($by_gw_urteil, $by_gw_seit, $by_gw_marke) = by_gleichwert_pruefen($by_gw_schl, $by_gw[1]);
+    if ($by_gw_urteil === 'MERKER') {
+        by_log('Endpunkt: der Merker der Gleichwert-Unterdrueckung (' . by_gleichwert_datei()
+             . ') laesst sich nicht oeffnen, sperren oder schreiben - Sollwert-Befehle werden '
+             . 'mit 503 abgewiesen, bis das behoben ist.', 'ERROR');
+        by_ende(503, sprintf('SET;OK=0;AKTION=%s;GRUND=BREMSE_MERKER', $by_aktion),
+            'Die Merkerdatei der Gleichwert-Unterdrueckung laesst sich nicht oeffnen oder '
+            . 'schreiben - Sollwert-Befehle werden abgewiesen, bis das behoben ist. Pruefen: '
+            . 'Platz und Eigentuemer (loxberry) des Datenordners des Plugins.');
+    }
+    if ($by_gw_urteil === 'UNVERAENDERT') {
+        by_ende(200, sprintf('SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=%s', $by_aktion,
+            (int) $by_gw_seit, by_sicher('Derselbe Befehl ging vor ' . (int) $by_gw_seit
+                . ' s hinaus - es wurde nichts gesendet. Gleiche Sollwerte innerhalb von '
+                . BY_GLEICHWERT_S . ' s gehen nur einmal an BYD.')));
+    }
+}
+
 /* Der eigentliche Vorgang laeuft in einem Netz: stirbt etwas darin - eine
  * fehlende Erweiterung, ein TypeError, was auch immer -, bekommt der
  * Miniserver sonst null Byte und HTTP 500. Kein Protokolleintrag, keine
@@ -371,6 +406,9 @@ if ($by_eig['zusatz'] === 'temp') {
 try {
     list($by_erg, $by_meldung) = by_befehl_absetzen($by_befehl);
 } catch (Throwable $by_t) {
+    if ($by_gw_marke !== '') {
+        by_gleichwert_vergessen($by_gw_schl, $by_gw_marke);
+    }
     by_log('Endpunkt: der Befehl ' . $by_aktion . ' ist abgestuerzt: '
          . $by_t->getMessage(), 'ERROR');
     by_ende(500, sprintf('SET;OK=0;AKTION=%s;ERR=%s (%s:%d)', $by_aktion,
@@ -382,6 +420,10 @@ try {
  * und kein Erfolg. HTTP 202 sagt genau das; ein 200 wuerde einen Erfolg
  * behaupten, den niemand geprueft hat, ein 500 einen Fehler, den es nicht
  * gibt. */
+if ($by_gw_marke !== '' && (int) $by_erg === 0) {
+    // Abgelehnt: nicht gemerkt, der naechste gleiche Befehl geht hinaus.
+    by_gleichwert_vergessen($by_gw_schl, $by_gw_marke);
+}
 $by_code = 200;
 if ($by_erg === 0) {
     $by_code = 400;
