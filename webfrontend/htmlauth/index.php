@@ -1135,6 +1135,7 @@ ob_start();
 
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-seite<?= $by_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
+<div class="sm-hinweis"><?= by_t('EINST.WAS_IST_DAS') ?></div>
 
 <div class="sm-warnung"><?= by_t('EINST.UNGEPRUEFT') ?></div>
 
