@@ -25,6 +25,10 @@ if (!function_exists('by_e')) {
     }
 }
 
+/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, Nr. 36 b, seit
+ * 0.9.23). Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sprachausgabe.php';
+
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
@@ -272,6 +276,11 @@ function by_vorgaben()
         'heim_breite'  => '',
         'heim_laenge'  => '',
         'heim_radius'  => 150,
+        // Nr. 36 b (seit 0.9.23): Ansageanlaesse, je einzeln abwaehlbar - dieselben Werte wie
+        // VORGABEN in bin/byd.py. Gesprochen wird erst mit einer Ausgabeart (tts, ab Werk 'aus').
+        'ansage_laden_fertig' => 1,
+        'ansage_ausfall'      => 1,
+        'tts'          => ansage_vorgaben('aus'),
     );
 }
 
@@ -794,6 +803,13 @@ function by_eingabe_felder($form)
             'haken' => array('mqtt_ein'),
         ),
     );
+    /* Nr. 36 b (seit 0.9.23): die Sprachausgabe und die Anlass-Haken reisen mit - nie die Sprechtoken
+     * (ansage_x2_felder() nennt sie nicht; markiert werden koennen sie). */
+    $by_th = array('tts_alexa_token_loeschen', 'tts_google_token_loeschen');
+    $felder['einstellungen']['text'] = array_merge($felder['einstellungen']['text'],
+        array_values(array_diff(ansage_x2_felder(by_ansage_opt()), $by_th)));
+    $felder['einstellungen']['haken'] = array_merge($felder['einstellungen']['haken'], $by_th,
+        array('ansage_laden_fertig', 'ansage_ausfall'));
     return isset($felder[$form]) ? $felder[$form] : null;
 }
 
@@ -836,7 +852,8 @@ function by_eingaben_setzen($roh = null)
     }
     $f = by_eingabe_felder($roh['form']);
     $felder = array_merge($f['text'], $f['haken']);
-    $erlaubt = array_merge($felder, array('passwort', 'pin'));
+    // Nr. 36 b: die Sprechtoken werden markiert, ihr Wert reist nie mit.
+    $erlaubt = array_merge($felder, array('passwort', 'pin', 'tts_alexa_token', 'tts_google_token'));
     $werte = array();
     if (isset($roh['werte']) && is_array($roh['werte'])) {
         foreach ($roh['werte'] as $k => $v) {
@@ -1614,8 +1631,9 @@ function by_preisempfehlung_stand()
 /** Schluessel, die in einer aelteren Sicherung fehlen duerfen (Laden-1). */
 function by_sicherung_spaeter()
 {
-    return array('preisempf_ein', 'preisempf_quelle', 'preisempf_praefix',
-                 'preisempf_stunden');
+    // Nr. 36 b (seit 0.9.23): eine Sicherung von 0.9.22 oder frueher kennt die Sprachausgabe nicht.
+    return array_merge(array('preisempf_ein', 'preisempf_quelle', 'preisempf_praefix',
+                             'preisempf_stunden'), by_ansage_neue_schluessel());
 }
 
 function by_horcher_themen($cfg = null)
@@ -2637,6 +2655,8 @@ function by_sicherung_regeln()
         'ladeempf_grenze' => 'grenzwert',
         'heim_breite'     => 'breite',
         'heim_laenge'     => 'laenge',
+        'ansage_laden_fertig' => 'schalter',
+        'ansage_ausfall'      => 'schalter',
     );
 }
 
@@ -2745,6 +2765,103 @@ function by_sicherung_zugang()
     return $aus;
 }
 
+/* ==================================================================
+ * Sprachausgabe (Nr. 36 b, Stufe 2, seit 0.9.23)
+ *
+ * Der Dienst bin/byd.py erkennt die Anlaesse und ruft bin/by_ansage.php;
+ * dort entsteht der Satz aus der Sprachdatei, gesprochen wird mit der
+ * gemeinsamen Sprachausgabe (sprachausgabe.php). Ab Werk ist die Ausgabe aus.
+ * ================================================================== */
+
+/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' (die Linie gibt keinen Text an Loxone). */
+function by_ansage_modi()
+{
+    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox');
+}
+
+/** Optionen fuer Formular-Baustein und Formular-Lesen. */
+function by_ansage_opt()
+{
+    return array('modi' => by_ansage_modi());
+}
+
+/**
+ * Die Anlaesse: Name => array(Konfigschluessel, Beschriftung, Satz). Dieselbe
+ * Liste wie ANSAGE_ANLAESSE in bin/byd.py; die Bruecke nimmt nur diese Namen an.
+ * Nur zwei: BYD liefert keine Ladegrenze, kein Licht- und kein Klimafeld, und
+ * Tueren und Schloss sind geraetespezifische Rohwerte.
+ */
+function by_ansage_anlaesse()
+{
+    return array(
+        'laden_fertig' => array('ansage_laden_fertig', 'EINST.L_ANSAGE_LADEN_FERTIG', 'BY_ANSAGE.S_LADEN_FERTIG'),
+        'ausfall'      => array('ansage_ausfall', 'EINST.L_ANSAGE_AUSFALL', 'BY_ANSAGE.S_AUSFALL'),
+    );
+}
+
+/** Die Schluessel, die mit 0.9.23 dazukamen - eine aeltere Sicherung kennt sie nicht. */
+function by_ansage_neue_schluessel()
+{
+    $s = array('tts');
+    foreach (by_ansage_anlaesse() as $a) {
+        $s[] = $a[0];
+    }
+    return $s;
+}
+
+/**
+ * Der Block tts, geprueft und vervollstaendigt (ab Werk 'aus'). by_config()
+ * prueft keine Einzelwerte; ein unzulaessiger Block (von Hand geschrieben)
+ * gilt deshalb hier als "aus", und das eigene Zurueckspielen nennt ihn (X-3).
+ * $heilen = false schreibt nichts (Bruecke).
+ */
+function by_tts($heilen = true)
+{
+    $c = by_config($heilen);
+    $t = isset($c['tts']) && is_array($c['tts']) ? $c['tts'] : array();
+    $g = '';
+    if (ansage_wert_pruefen($t, $g, by_ansage_modi()) === null) {
+        $t = array();
+    }
+    list($t) = ansage_vervollstaendigen($t, 'aus');
+    return $t;
+}
+
+/** Der Kontext des Moduls: Webport, Kopfzeile, Ordner fuer <art>_letzte.json, Texte. */
+function by_ansage_k()
+{
+    $p = by_paths();
+    return array(
+        'port'   => ansage_webport(($p['home'] !== '' ? $p['home'] : dirname(dirname(__DIR__)))
+                                   . '/config/system/general.json'),
+        'kopf'   => array('User-Agent: LoxBerry BYD Autos'),
+        'ordner' => @is_dir($p['datadir']) ? $p['datadir'] : '',
+        't'      => function ($s) { return by_t($s); },
+        /* Zu dieser Kennung hat das Modul (1.1.1) keinen Satz in [ANSAGE]; linieneigen wie Intercom
+         * 2.2.18, bis der Modulschluessel mit einer ergaenzenden Fassung kommt (Entwurf, Stufe 2). */
+        'schluessel' => array('K_TTS_EINTRAG' => 'EINST.SICH_TTS_EINTRAG'),
+    );
+}
+
+/**
+ * Der Satz zu einem Anlass, aus der Sprachdatei. $name ist der Fahrzeugname
+ * aus dem Konto; fehlt er, heisst es "Fahrzeug <nr>". Der Ladestand nur, wenn
+ * er bekannt ist; $grenze kennt BYD nicht (die Bruecke reicht ihn durch).
+ */
+function by_ansage_satz($anlass, $nr, $name, $soc = null, $grenze = null)
+{
+    $a = by_ansage_anlaesse();
+    if (!isset($a[$anlass])) {
+        return '';
+    }
+    $wer = ($name !== '') ? $name : sprintf(by_t('BY_ANSAGE.FAHRZEUG_NR'), (int) $nr);
+    if ($anlass === 'ausfall') {
+        return by_t('BY_ANSAGE.S_AUSFALL');
+    }
+    $s = sprintf(by_t('BY_ANSAGE.S_LADEN_FERTIG'), $wer);
+    return $soc === null ? $s : $s . ' ' . sprintf(by_t('BY_ANSAGE.S_LADESTAND'), (int) $soc);
+}
+
 /**
  * BYD-b2 (Verbesserungsbau 30.09.2026): die Sicherungsdatei - EINE Stelle
  * fuer den Knopf "Einstellungen sichern" und fuer die Pruefung X-3.
@@ -2756,10 +2873,16 @@ function by_sicherung_zugang()
  */
 function by_sicherung_bauen()
 {
+    $c = by_config();
+    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung (Entwurf 5) -
+     * anders als Aktionstoken und Zugangsdaten, die diese Linie bewusst mitsichert (C10). */
+    if (isset($c['tts']) && is_array($c['tts'])) {
+        $c['tts'] = ansage_sicherung_bereinigen($c['tts']);
+    }
     return array_merge(array(
         '_hinweis' => by_t('EINST.SICH_KOPF_HINWEIS'),
         '_stand'   => date('Y-m-d H:i'),
-    ), by_config(), by_sicherung_zugang());
+    ), $c, by_sicherung_zugang());
 }
 
 /**
@@ -2827,6 +2950,32 @@ function by_sicherung_lesen($roh, &$namen = null)
                 continue;
             }
             $zugang[$feld] = $w;
+            continue;
+        }
+        if ((string) $k === 'tts') {
+            /* Nr. 36 b (seit 0.9.23): eine Sicherung dieses Plugins traegt nie ein Sprechtoken -
+             * traegt die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus
+             * "Einstellungen sichern" und wird abgewiesen; die geltenden Sprechtoken bleiben.
+             * Ausgabeart, Adresse und Vorlage werden wie im Formular geprueft (Heimnetz). */
+            $by_tm = ansage_sicherung_mangel($w);
+            if ($by_tm) {
+                $mangel[] = sprintf(by_t('EINST.SICH_TTS_TOKEN'),
+                                    htmlspecialchars(implode(', ', $by_tm), ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'tts';
+                continue;
+            }
+            $by_tg = '';
+            $by_tp = ansage_wert_pruefen($w, $by_tg, by_ansage_modi());
+            if ($by_tp === null) {
+                $mangel[] = sprintf(by_t('EINST.SICH_TTS'), htmlspecialchars(
+                    ansage_kennung_text($by_tg, by_ansage_k()), ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'tts';
+                continue;
+            }
+            $by_tj = by_tts();
+            list($by_tv) = ansage_vervollstaendigen($by_tp + $by_tj, 'aus');
+            $neu['tts'] = ansage_sicherung_tokens_behalten($by_tv, $by_tj);
+            $anzahl++;
             continue;
         }
         if (!in_array($k, $bekannt, true)) {

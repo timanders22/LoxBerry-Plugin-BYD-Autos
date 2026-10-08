@@ -906,7 +906,29 @@ function by_pruefungen()
         }
     }
 
+    /* ---- Nr. 36 b (seit 0.9.23): die Sprachausgabe ----
+     * Alexa-NG/Chromecast werden nur gefragt, wenn der Reiter Test der offene ist
+     * (selftest=1, spricht nicht); der Music Server nie. */
+    $zeilen[] = by_ansage_zeile(isset($GLOBALS['by_tab']) && $GLOBALS['by_tab'] === 'tab-test');
+
     return $zeilen;
+}
+
+/** Nr. 36 b: die Zeile der Sprachausgabe - Ausgabeart, letzte Ansage und die eingeschalteten Anlaesse. */
+function by_ansage_zeile($offen)
+{
+    $cfg = by_config();
+    list($st, $html) = ansage_pruefzeile(by_tts(), (bool) $offen, by_ansage_k());
+    $an = array();
+    foreach (by_ansage_anlaesse() as $a) {
+        if ((string) (isset($cfg[$a[0]]) ? $cfg[$a[0]] : '') === '1') {
+            $an[] = by_e(by_t($a[1]));
+        }
+    }
+    $html .= ' ' . sprintf(by_t('TEST.A_ANSAGE_ANLAESSE'), count($an),
+                           $an ? implode('; ', $an) : by_e(by_t('TEST.A_ANSAGE_KEINE')));
+    // -2 (aus, nicht gefragt) ist hier ein Hinweis, kein Haken.
+    return by_pruefzeile($st === -2 ? -1 : $st, by_t('TEST.F_ANSAGE'), $html);
 }
 
 /**

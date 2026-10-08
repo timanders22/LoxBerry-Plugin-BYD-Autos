@@ -219,8 +219,9 @@ $by_formular = ($by_post && isset($_POST['formular'])) ? (string) $_POST['formul
  * sicherung_verdrahtung.py die POST-Bedingung - beide waren richtig. Die
  * Positivliste sieht keines von beiden an. Die Zeile im Reiter Test, die es
  * findet, steht seit dieser Fassung dort. */
+/* Nr. 36 b (seit 0.9.23): 'ansage' - der Knopf "Testansage" im Reiter Test. */
 $by_formulare = array('einstellungen', 'mqtt', 'dienst', 'token', 'log', 'test',
-                      'vorlage', 'selbsttest', 'sichern', 'zurueck', 'ladungen');
+                      'vorlage', 'selbsttest', 'sichern', 'zurueck', 'ladungen', 'ansage');
 if ($by_post && !in_array($by_formular, $by_formulare, true)) {
     $by_fehler[] = by_t('ALLG.FEHLER_FORMULAR');
     $by_post = false;
@@ -536,6 +537,22 @@ if ($by_post && $by_formular === 'einstellungen') {
             $by_beanstandet[] = 'benutzer';
         }
     }
+    /* Nr. 36 b (Stufe 2, seit 0.9.23): Sprachausgabe und Anlaesse. Jede Beanstandung verhindert
+     * das Speichern (Nr. 16); kein Sprechtoken steht in einer Meldung, ein leeres Tokenfeld heisst
+     * "behalten", der Haken loescht, beides zugleich ist ein Widerspruch. */
+    foreach (by_ansage_anlaesse() as $by_a) {
+        $by_cfg[$by_a[0]] = isset($_POST[$by_a[0]]) ? 1 : 0;
+    }
+    $by_tmangel = array();
+    $by_tbean = array();
+    $by_cfg['tts'] = ansage_formular_lesen($_POST, by_tts(), $by_tmangel, $by_tbean, by_ansage_opt(),
+                                           by_ansage_k());
+    foreach ($by_tmangel as $by_tm) {
+        $by_fehler[] = by_e($by_tm['text']);
+    }
+    foreach ($by_tbean as $by_tb) {
+        $by_beanstandet[] = $by_tb;     // X-2
+    }
     $by_nichts_speichern = (bool) $by_fehler;
     if ($by_nichts_speichern) {
         // Nichts - auch kein Loeschen der Zugangsdaten.
@@ -755,6 +772,30 @@ if ($by_post && $by_formular === 'test') {
     }
     $by_tab = 'tab-test';
 }
+/* ---------------- Testansage (Nr. 36 b, seit 0.9.23) ----------------
+ * Spricht den Pruefsatz des Moduls ueber die eingestellte Ausgabeart - unabhaengig
+ * von den Anlaessen. Ins Protokoll nur die Kurzform ohne Text und Token. F5 nach dem
+ * Knopf spricht nicht erneut: der Block U1 unten leitet um (303). Wie die anderen
+ * Aktionsformulare verlangt der Zweig zusaetzlich seinen Marker (ansage_test). */
+if ($by_post && $by_formular === 'ansage' && !isset($_POST['ansage_test'])) {
+    $by_fehler[] = by_t('ALLG.FEHLER_FORMULAR');
+    $by_post = false;
+}
+if ($by_post && $by_formular === 'ansage') {
+    $by_ak = by_ansage_k();
+    $by_ar = ansage_testansage(by_tts(), $by_ak);
+    by_log('Testansage: ' . ansage_kurz($by_ar), $by_ar['stand'] === 0 ? 'WARN' : 'INFO', 0);
+    if ($by_ar['stand'] === 1) {
+        $by_meldungen[] = by_e(by_t('TEST.M_ANSAGE_TEST_OK'));
+    } elseif ($by_ar['stand'] === -1) {
+        $by_meldungen[] = by_e(sprintf(by_t('TEST.M_ANSAGE_TEST_NICHTS'),
+                                       ansage_kennung_text($by_ar['kennung'], $by_ak)));
+    } else {
+        $by_stoerungen[] = by_e(sprintf(by_t('TEST.M_ANSAGE_TEST_FEHL'),
+                                        ansage_kennung_text($by_ar['kennung'], $by_ak)));
+    }
+    $by_tab = 'tab-test';
+}
 if ($by_post && $by_formular === 'selbsttest') {
     $by_ausgabe = by_selbsttest();
     $by_tab = 'tab-test';
@@ -821,6 +862,12 @@ if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
                             . implode(' ', $by_mangel);
         } elseif (by_config_speichern($by_neu)) {
             $by_meldungen[] = sprintf(by_t('EINST.SICH_UEBERNOMMEN'), $by_n);
+            /* Nr. 36 b: eine Sicherung von 0.9.22 oder frueher kennt die Sprachausgabe nicht -
+             * deren Einstellungen bleiben (by_sicherung_spaeter()), und die Seite sagt es. */
+            $by_sd = json_decode((string) @file_get_contents($_FILES['by_sicherung']['tmp_name']), true);
+            if (is_array($by_sd) && !array_key_exists('tts', $by_sd)) {
+                $by_meldungen[] = by_t('EINST.SICH_OHNE_ANSAGE');
+            }
             /* C10: die Zugangsdaten - mit denselben Regeln geprueft wie im
              * Formular (by_sicherung_lesen). Leere Felder behalten den
              * bisherigen Wert, wie im Formular. */
@@ -1342,6 +1389,24 @@ ob_start();
   <div class="sm-hilfe"><?= by_t('EINST.H_HEIM_RADIUS') ?></div>
 </div>
 
+<h2><?= by_e(by_t('EINST.H_ANSAGE')) ?></h2>
+<div class="sm-hinweis"><?= by_t('EINST.ANSAGE_ERKLAERUNG') ?></div>
+<?= ansage_formular_html(by_tts(), array(
+    'w' => function ($n, $g) { return by_eingabe('einstellungen', $n, $g); },
+    'm' => function ($n) { return by_markierung($n); },
+    'c' => function ($n, $g) { return by_eingabe_an('einstellungen', $n, $g); },
+    'modi' => by_ansage_modi()), by_ansage_k()) ?>
+<h3><?= by_e(by_t('EINST.H_ANSAGE_ANLAESSE')) ?></h3>
+<?php foreach (by_ansage_anlaesse() as $by_a) { ?>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="<?= by_e($by_a[0]) ?>" value="1" <?= by_eingabe_an('einstellungen', $by_a[0], !empty($by_cfg[$by_a[0]])) ? 'checked' : '' ?><?= by_markierung($by_a[0]) ?>>
+    <?= by_e(by_t($by_a[1])) ?>
+  </label>
+</div>
+<?php } ?>
+<div class="sm-hilfe"><?= by_t('EINST.H_ANSAGE_ANLAESSE_HILFE') ?></div>
+
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= by_e(by_t('ALLG.SPEICHERN')) ?></button>
 </div>
@@ -1372,6 +1437,7 @@ ob_start();
 <h2><?= by_t('EINST.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= by_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= by_t('EINST.SICH_WARNUNG') ?></div>
+<div class="sm-hinweis"><?= by_t('EINST.SICH_OHNE_SPRECHTOKEN') ?></div>
 <?php $by_altwerte = by_rueckspiel_altwerte(); if ($by_altwerte) { ?>
 <div class="sm-warnung"><?= sprintf(by_t('EINST.SICH_ALTWERT'), by_e(implode(', ', $by_altwerte))) ?></div>
 <?php } ?>
@@ -1886,6 +1952,17 @@ if (isset($_GET['rohdaten'])) {
     }
 }
 ?>
+
+<h3><?= by_e(by_t('TEST.H_ANSAGE')) ?></h3>
+<p class="sm-hilfe"><?= by_e(by_t('TEST.ANSAGE_TEST_TEXT')) ?></p>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="formular" value="ansage">
+    <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?= by_e(by_t('TEST.K_ANSAGE_TEST')) ?></button>
+  </form>
+</div>
 
 <h3><?= by_e(by_t('TEST.H_SCHALTEN')) ?></h3>
 <div class="sm-warnung"><?= by_t('TEST.SCHALTEN_WARNUNG') ?></div>

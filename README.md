@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.22
+Version 0.9.23
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -39,6 +39,26 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.23
+
+Ansagen über die gemeinsame Sprachausgabe der Plugins dieses Hauses (Nr. 36). Gemessen unter PHP 7.4 und 8.5
+gegen Attrappen (Music Server, Alexa-NG); nicht am Gerät, nicht an einem echten Lautsprecher.
+
+* **Neu: das Plugin sagt einzelne Ereignisse an (ab Werk aus).** Reiter Einstellungen, Abschnitt
+  „Sprachausgabe“: Loxone Music Server, MusicServer4Home, eine eigene Adressvorlage, Alexa-NG oder
+  Google-Lautsprecher (Chromecast 4 Lox NG). Anlässe, jeder einzeln abwählbar: Ladung beendet (mit
+  Ladestand) und keine Daten mehr. Angesagt wird nur ein Wechsel, derselbe Anlass je Fahrzeug höchstens
+  einmal je Stunde; nach einem Neustart des Dienstes spricht die erste Abfrage nie. MQTT, Loxone und die
+  Benachrichtigungen bleiben unverändert.
+* Türen, Schloss, Licht und Klimatisierung werden nicht angesagt: BYD liefert Türen und Schloss nur als
+  gerätespezifische Rohwerte, Licht und Klimatisierung gar nicht.
+* Adresse des Music Servers und Adressvorlage müssen im Heimnetz liegen.
+* Testansage per Knopf im Reiter Test; die Zeile „Sprachausgabe“ zeigt Ausgabeart, letzte Ansage und die
+  eingeschalteten Anlässe.
+* Die Sprechtoken für Alexa-NG und Chromecast 4 Lox NG stehen nie in der Seite, im Protokoll oder in einer
+  Sicherung; eine Sicherungsdatei, die eines trägt, wird abgewiesen. Eine Sicherung von 0.9.22 lässt sich
+  weiter zurückspielen.
 
 ## Neu in 0.9.22
 

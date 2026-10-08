@@ -289,6 +289,10 @@ VORGABEN = {
     "heim_breite": "",
     "heim_laenge": "",
     "heim_radius": 150,
+    # --- Nr. 36 b (seit 0.9.23): Ansageanlaesse - dieselben Werte wie in by_vorgaben().
+    # Der Block tts gehoert der Bruecke (bin/by_ansage.php).
+    "ansage_laden_fertig": 1,
+    "ansage_ausfall": 1,
 }
 
 # Untergrenze des Abruftakts.
@@ -2643,6 +2647,150 @@ ZUSATZNAMEN = {
 # ---------------------------------------------------------------------------
 # Ein Fahrzeug abbilden
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Sprachausgabe (Nr. 36 b, Stufe 2, seit 0.9.23)
+#
+# Der Dienst sagt einzelne Ereignisse an - ueber die gemeinsame Sprachausgabe
+# der Plugins dieses Hauses (webfrontend/html/sprachausgabe.php). Die gibt es
+# nur in PHP; gesprochen wird deshalb ueber die Bruecke bin/by_ansage.php. Der
+# Auftrag geht ueber die STANDARDEINGABE, nie ueber die Kommandozeile (die
+# sieht jeder in der Prozessliste), und er traegt keinen Text: den Satz baut
+# die Bruecke aus der Sprachdatei. Ob und wohin gesprochen wird, entscheidet
+# die Bruecke aus dem Block tts der Konfiguration (ab Werk aus). Der Dienst
+# sieht dort nur nach, ob die Ausgabe aus ist - dann ruft er gar nicht erst.
+# Die Benachrichtigungen ueber by_notify.php bleiben, wie sie sind.
+#
+# Angesagt wird nur ein WECHSEL, nie ein Wert im Takt:
+#   laden_fertig   LAEDT 1 -> 0 (charge_state 1 -> 0 oder 15). Der Satz nennt
+#                  den Ladestand; ob die Ladung am Ziel war, weiss BYD nicht zu
+#                  sagen - die Schnittstelle fuehrt keine Ladegrenze.
+#   ausfall        der dritte gescheiterte Abruf in Folge (dieselbe Grenze wie
+#                  die Bremse), erst nachdem seit dem Start wenigstens einer
+#                  gelungen ist
+# Nicht gebaut: "offen", "Licht", "Klima" - Tueren und Schloss liefert BYD als
+# geraetespezifische Rohwerte (erst am Fahrzeug abzulesen), Licht und
+# Klimatisierung gar nicht.
+# Die erste Beobachtung eines Fahrzeugs nach dem Start setzt nur den
+# Ausgangsstand: ein Neustart spricht nie. Jeder Anlass hat einen eigenen Haken
+# (ansage_<anlass>, genau "1" heisst an) und eine Wiederholsperre je Anlass und
+# Fahrzeug (ANSAGE_SPERRE_S), die einen Neustart des Dienstes ueberlebt.
+# ---------------------------------------------------------------------------
+SKRIPT_ANSAGE = SELF / "by_ansage.php"
+DATEI_ANSAGE_SPERRE = PDATA / "ansage_sperre.json"
+ANSAGE_ANLAESSE = ("laden_fertig", "ausfall")
+ANSAGE_SPERRE_S = 3600     # derselbe Anlass fuer dasselbe Fahrzeug hoechstens einmal je Stunde
+ANSAGE_FRIST_S = 25        # Bruecke: PHP-Start plus hoechstens 10 s Sprechfrist des Moduls
+ANSAGE_AUSFALL_FOLGE = 3
+_ANSAGE_ZEICHEN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:,|/-")
+_ANSAGE_STAND: dict = {}   # je Fahrzeugnummer der zuletzt gesehene Stand - nur im Speicher
+_ANSAGE_DIENST = {"ok_gesehen": False, "fehler_folge": 0}
+
+
+def ansage_ereignisse(nr: str, f: dict) -> list:
+    """Die Anlaesse eines Fahrzeugs aus dem Vergleich mit dem zuletzt gesehenen
+    Stand. Nur ein frisches Abbild (ok=1) kommt hierher. Rueckgabe: Liste von
+    (anlass, daten) - daten ohne Text, nur Name und Ladestand."""
+    alt = _ANSAGE_STAND.get(nr)
+    vorher = alt or {}
+    # Ein unbekannter Zustand (None) laesst den bekannten stehen.
+    neu = {"laedt": f.get("LAEDT") if f.get("LAEDT") is not None else vorher.get("laedt")}
+    _ANSAGE_STAND[nr] = neu
+    if alt is None:
+        return []
+    name = str(f.get("name") or f.get("modell") or "")[:60]
+    aus = []
+    if vorher.get("laedt") == 1 and neu["laedt"] == 0:
+        aus.append(("laden_fertig", {"name": name, "soc": f.get("SOC")}))
+    return aus
+
+
+def ansage_ausfall(ok: int, fehler_folge: int) -> bool:
+    """Ist das der Abruf, mit dem die Daten als ausgefallen gelten?"""
+    d = _ANSAGE_DIENST
+    vorher = d["fehler_folge"]
+    d["fehler_folge"] = fehler_folge
+    if ok:
+        d["ok_gesehen"] = True
+        return False
+    return bool(d["ok_gesehen"]) and vorher < ANSAGE_AUSFALL_FOLGE <= fehler_folge
+
+
+def _ansage_aus(cfg: dict) -> bool:
+    """Ist die Ausgabe aus? Nur der Modus wird angesehen (config() reicht den Block
+    tts unveraendert durch); geprueft wird er in der Bruecke. Fehlt er oder ist er
+    unlesbar, gilt er als aus (Vorgabe)."""
+    t = cfg.get("tts")
+    return not isinstance(t, dict) or t.get("mode", "aus") == "aus"
+
+
+def _ansage_sperre(schluessel: str, jetzt: int) -> bool:
+    """Gesperrt? Sonst wird die Sperre gesetzt (und abgelaufene Eintraege fallen weg)."""
+    s = json_lesen(DATEI_ANSAGE_SPERRE)
+    t = s.get(schluessel)
+    if isinstance(t, (int, float)) and not isinstance(t, bool) and 0 <= jetzt - t < ANSAGE_SPERRE_S:
+        return True
+    s = {k: v for k, v in s.items()
+         if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= jetzt - v < ANSAGE_SPERRE_S}
+    s[schluessel] = jetzt
+    json_schreiben(DATEI_ANSAGE_SPERRE, s)
+    return False
+
+
+def ansage_senden(anlass: str, nr: str, daten: dict, cfg: dict) -> None:
+    """Einen Anlass ueber die Bruecke ansagen. Ins Protokoll kommen Anlass,
+    Fahrzeugnummer und das Ergebnis (Stand, Art, HTTP, Zeichenzahl, Kennung) -
+    nie der Text, nie ein Token."""
+    if anlass not in ANSAGE_ANLAESSE or str(cfg.get("ansage_" + anlass)).strip() != "1":
+        return
+    if _ansage_aus(cfg):
+        return
+    jetzt = int(time.time())
+    if _ansage_sperre(anlass + ":" + str(nr), jetzt):
+        _LOG.info("Ansage %s (Fahrzeug %s) unterdrueckt - hoechstens eine je %d s.",
+                  anlass, nr, ANSAGE_SPERRE_S)
+        return
+    auftrag = {"anlass": anlass, "nr": ganz(nr, 0), "name": str(daten.get("name") or "")}
+    for k in ("soc", "grenze"):
+        v = daten.get(k)
+        # Nur ein Prozentwert 0..100 reist mit; alles andere gilt als unbekannt.
+        auftrag[k] = v if (isinstance(v, (int, float)) and not isinstance(v, bool)
+                           and 0 <= v <= 100) else None
+    try:
+        e = subprocess.run(["php", str(SKRIPT_ANSAGE), PNAME],
+                           input=json.dumps(auftrag, ensure_ascii=False).encode("utf-8"),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=ANSAGE_FRIST_S, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        melde_gebremst("ansage_ruf", "Ansage %s (Fahrzeug %s): die Bruecke by_ansage.php war "
+                                     "nicht aufrufbar (%s)." % (anlass, nr, type(err).__name__), 3600)
+        return
+    zeilen = e.stdout.decode("ascii", "replace").strip().splitlines()
+    zeile = zeilen[-1] if zeilen else ""
+    f = {}
+    if zeile.startswith("ANSAGE;"):
+        for teil in zeile.split(";")[1:]:
+            if "=" in teil:
+                k, v = teil.split("=", 1)
+                f[k] = "".join(c if c in _ANSAGE_ZEICHEN else "?" for c in v)[:120]
+    _LOG.log(logging.INFO if e.returncode in (0, 3) else logging.WARNING,
+             "Ansage %s (Fahrzeug %s): rc=%d stand=%s art=%s http=%s zeichen=%s kennung=%s",
+             anlass, nr, e.returncode, f.get("STAND", "?"), f.get("ART", "?"),
+             f.get("HTTP", "?"), f.get("ZEICHEN", "?"), f.get("KENNUNG", "?"))
+
+
+def ansagen(cfg: dict, fahrzeuge: dict, ok: int, fehler_folge: int) -> None:
+    """Nach jedem Abruf: Anlaesse erkennen und ansagen."""
+    if ansage_ausfall(ok, fehler_folge):
+        ansage_senden("ausfall", "0", {}, cfg)
+    for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
+        f = fahrzeuge[nr]
+        # Ein Fahrzeug ohne frischen Stand liefert keinen Wechsel.
+        if not isinstance(f, dict) or not f.get("ok"):
+            continue
+        for anlass, daten in ansage_ereignisse(nr, f):
+            ansage_senden(anlass, nr, daten, cfg)
+
+
 def fahrzeug_abbilden(stamm: dict, echtzeit: dict, gps: dict) -> dict:
     """Setzt das Abbild eines Fahrzeugs aus den drei Antworten zusammen.
 
@@ -3912,6 +4060,15 @@ async def dienst_lauf(einmal: bool) -> int:
                               horcher=sorted(horcher.themen),
                               horcher_verbunden=1 if horcher.verbunden else 0,
                               horcher_fehler=horcher.fehler)
+
+            # Nr. 36 b: Ansagen - nach Abbild, MQTT und Zustand, in einem Hilfsfaden:
+            # die Bruecke ist ein Prozessaufruf (bis ANSAGE_FRIST_S), und die Schleife
+            # bleibt fuer Befehle, Herzschlag und Vorklimatisierung frei.
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, ansagen, cfg, fahrzeuge if ok else {}, ok, fehler_folge)
+            except Exception as err:  # noqa: BLE001
+                melde_gebremst("ansage", "Ansage: %s" % fehlertext(err), 3600)
 
             # Vorklimatisierung. Sie steht NACH dem Abbild, damit die
             # Oberflaeche den Stand schon zeigt, und VOR der Wartezeit,
