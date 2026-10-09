@@ -96,6 +96,12 @@
  *   'e'         function ($s) -> maskierter Text; ab Werk htmlspecialchars
  *   'erklaert'  function ($id) -> bool: gibt es einen erklaerenden Satz
  *               zu <ART>_G_<GRUND>? Ab Werk: ansage_t() kennt ihn
+ *   'werk'      (seit 1.1.2) die Ausgabeart einer frischen Anlage dieser Linie,
+ *               wie bei ansage_vorgaben($ab_werk); ohne Angabe 'aus'. Nur fuer
+ *               die Saetze im Formularblock: ist sie nicht 'aus', heisst der
+ *               Hinweis ART_HINWEIS_WERK (mit dem Namen der Art), die Wahl
+ *               'aus' O_AUS_SCHLICHT und die Wahl der Werksart O_WERK. Eine
+ *               Umlenkung ueber 'schluessel' (ART_HINWEIS, O_AUS) gewinnt.
  *   'transport' nur fuer ansage_selbsttest(): function ($anfrage) -> Antwort
  *   'jetzt'     nur fuer ansage_selbsttest(): function () -> Zeitstempel
  *
@@ -122,6 +128,21 @@
  * ansage_url_heimnetz() als Huellen um ansage_url_grund(), der Fehlertext bei
  * Netzfehlern (ansage_http_grund_id(), dritter Parameter), eine leere
  * Zonenliste in ansage_zonen_ok() und die Endung .intern.
+ *
+ * 1.1.2 (Wuensche aus den Stufe-2-Bauten, Sprachmodul-5 und -2), nur ergaenzend:
+ *   - Saetze K_TTS_EINTRAG und K_KEIN_FELD (bisher in jeder Linie ueber
+ *     'schluessel' auf einen eigenen Satz umgelenkt; die Umlenkung gewinnt
+ *     weiter, bis die Linie sie beim naechsten Bau fallen laesst).
+ *   - ansage_webport($pfad, $weit) und ansage_webport_aus($json, $weit): mit
+ *     $weit = true auch der Abschnitt 'webserver' und die Schluessel 'port' und
+ *     'PORT' (Form von ww_webport() in Weissware). Ohne $weit wie bisher.
+ *   - Kontext 'werk' (siehe unten): eine Linie, deren Ausgabeart ab Werk nicht
+ *     'aus' ist, bekommt passende Saetze statt "Ab Werk aus".
+ *   - Eine M_-Meldung nennt den Feldnamen nicht mehr doppelt ("Port
+ *     abgewiesen: tts.port: ..." -> "Port abgewiesen: ..."); die Kennung selbst
+ *     bleibt unveraendert.
+ *   - ansage_zeichen() zaehlt auch bei ungueltigem UTF-8 Zeichen statt Bytes
+ *     (mb_strlen, ohne mbstring ein Muster); gueltiger Text wie bisher.
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -140,7 +161,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.1.1');
+define('ANSAGE_FASSUNG', '1.1.2');
 
 /** Hoechstlaenge eines Ansagetexts in Zeichen (Schnittstelle Alexa-NG/Chromecast: 1-1000). */
 define('ANSAGE_TEXT_MAX', 1000);
@@ -563,16 +584,26 @@ function ansage_wert_pruefen($tts, &$grund = '', $modi = null)
 /**
  * Der Webport aus dem Inhalt der general.json: Webserver.Port oder
  * WEBSERVER.Port (beide Schreibweisen kommen vor), 1 bis 65535, sonst 80.
+ *
+ * $weit (seit 1.1.2, wahlfrei): true liest wie ww_webport() in Weissware die
+ * Abschnitte Webserver, WEBSERVER und webserver mit den Schluesseln Port, port
+ * und PORT, in dieser Reihenfolge (Abschnitt aussen). Ohne $weit wie bisher.
+ * Der Wert wird in beiden Formen gleich geprueft (Leerraum am Rand faellt weg).
  */
-function ansage_webport_aus($json)
+function ansage_webport_aus($json, $weit = false)
 {
     $g = is_string($json) ? json_decode($json, true) : null;
+    $weit = ($weit === true);
+    $abschnitte = $weit ? array('Webserver', 'WEBSERVER', 'webserver') : array('Webserver', 'WEBSERVER');
+    $namen = $weit ? array('Port', 'port', 'PORT') : array('Port');
     if (is_array($g)) {
-        foreach (array('Webserver', 'WEBSERVER') as $ab) {
-            if (isset($g[$ab]) && is_array($g[$ab]) && isset($g[$ab]['Port']) && is_scalar($g[$ab]['Port'])
-                && preg_match('/^\d{1,5}\z/', trim((string) $g[$ab]['Port']))) {
-                $p = (int) $g[$ab]['Port'];
-                if ($p >= 1 && $p <= 65535) { return $p; }
+        foreach ($abschnitte as $ab) {
+            if (!isset($g[$ab]) || !is_array($g[$ab])) { continue; }
+            foreach ($namen as $n) {
+                if (isset($g[$ab][$n]) && is_scalar($g[$ab][$n]) && preg_match('/^\d{1,5}\z/', trim((string) $g[$ab][$n]))) {
+                    $p = (int) $g[$ab][$n];
+                    if ($p >= 1 && $p <= 65535) { return $p; }
+                }
             }
         }
     }
@@ -609,8 +640,14 @@ function ansage_sdk_laden($ansage_sdk_datei)
  * es sie gibt, und ihre Ausgabe beim Laden verworfen (eine Meldung darin ginge
  * sonst einem Endpunkt vor die Antwort). Ohne sie: general.json wie bisher,
  * fehlt auch die: 80.
+ *
+ * $weit (seit 1.1.2, wahlfrei): true liest general.json in der weiten Form
+ * (ansage_webport_aus()); die erste Quelle bleibt lbwebserverport(). Ohne
+ * $weit wie bisher. Achtung bei zwei Abschriften in einem Prozess: eine
+ * zuerst geladene 1.1.1 nimmt den zweiten Parameter stillschweigend nicht an;
+ * wer auf $weit angewiesen ist, fragt ANSAGE_FASSUNG.
  */
-function ansage_webport($pfad)
+function ansage_webport($pfad, $weit = false)
 {
     if (!is_string($pfad) || $pfad === '') { return 80; }
     $lib = dirname($pfad, 3) . '/libs/phplib/loxberry_system.php';
@@ -631,7 +668,7 @@ function ansage_webport($pfad)
     }
     if (!is_file($pfad)) { return 80; }
     $roh = @file_get_contents($pfad);
-    return ansage_webport_aus($roh === false ? '' : $roh);
+    return ansage_webport_aus($roh === false ? '' : $roh, $weit === true);
 }
 
 /**
@@ -758,11 +795,26 @@ function ansage_k_port(array $k)
  * Ansagetext
  * ================================================================== */
 
-/** Zahl der Zeichen eines Texts (UTF-8), ohne mbstring. */
+/**
+ * Zahl der Zeichen eines Texts (UTF-8), ohne mbstring.
+ *
+ * Seit 1.1.2 auch bei ungueltigem UTF-8 Zeichen statt Bytes (bis 1.1.1:
+ * strlen, ein "Grüße" mit kaputtem Ende zaehlte 9 statt 7). Dann mb_strlen,
+ * wenn es die Erweiterung gibt (auf einem PHP-7.4-LoxBerry nicht zugesichert),
+ * sonst ein Muster ohne /u: eine vollstaendige Folge zaehlt eins, jedes
+ * Byte, das zu keiner gehoert, ebenfalls eins. Fuer gueltigen Text aendert
+ * sich nichts.
+ */
 function ansage_zeichen($text)
 {
     if (!is_string($text)) { return 0; }
     $n = @preg_match_all('/./us', $text);
+    if (is_int($n)) { return $n; }
+    if (function_exists('mb_strlen')) {
+        $m = @mb_strlen($text, 'UTF-8');
+        if (is_int($m)) { return $m; }
+    }
+    $n = @preg_match_all('/[\x00-\x7F]|[\xC2-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF]{2}|[\xF0-\xF4][\x80-\xBF]{3}|[\x80-\xFF]/s', $text);
     return is_int($n) ? $n : strlen($text);
 }
 
@@ -1575,6 +1627,45 @@ function ansage_mit_letzter(array $z, $l, array $k)
  * Formular
  * ================================================================== */
 
+/**
+ * Die Ausgabeart ab Werk aus dem Kontext ('werk', seit 1.1.2): eine bekannte
+ * Ausgabeart, sonst 'aus' - wie ansage_vorgaben() mit einem unbekannten Wert.
+ */
+function ansage_werk(array $k)
+{
+    $w = isset($k['werk']) ? $k['werk'] : 'aus';
+    return (is_string($w) && in_array($w, ansage_modi(), true)) ? $w : 'aus';
+}
+
+/**
+ * Der Hinweis unter der Auswahl der Ausgabeart (seit 1.1.2 mit Werk-Kontext).
+ * Werk 'aus' oder eine Umlenkung ART_HINWEIS der Linie: ART_HINWEIS wie bis
+ * 1.1.1. Sonst ART_HINWEIS_WERK mit dem Namen der Werksart (O_<ART>).
+ */
+function ansage_art_hinweis(array $k)
+{
+    $w = ansage_werk($k);
+    if ($w === 'aus' || isset($k['schluessel']['ART_HINWEIS'])) { return ansage_t('ART_HINWEIS', $k); }
+    return sprintf(ansage_t('ART_HINWEIS_WERK', $k), ansage_t('O_' . strtoupper($w), $k));
+}
+
+/**
+ * Der Name einer Ausgabeart in der Auswahl (seit 1.1.2 mit Werk-Kontext).
+ * Werk 'aus': O_<ART> wie bis 1.1.1 ("aus (ab Werk)"). Sonst heisst 'aus'
+ * O_AUS_SCHLICHT ("aus") und die Werksart O_WERK ("%s (ab Werk)"). Eine
+ * Umlenkung O_AUS der Linie gewinnt fuer 'aus'.
+ */
+function ansage_wahl_text($modus, array $k)
+{
+    $w = ansage_werk($k);
+    $name = ansage_t('O_' . strtoupper($modus), $k);
+    if ($w === 'aus') { return $name; }
+    if ($modus === 'aus') {
+        return isset($k['schluessel']['O_AUS']) ? $name : ansage_t('O_AUS_SCHLICHT', $k);
+    }
+    return $modus === $w ? sprintf(ansage_t('O_WERK', $k), $name) : $name;
+}
+
 /** Die POST-Namen der Felder; $opt['namen'] ueberschreibt einzelne (Linien mit eigenen Namen). */
 function ansage_feldnamen(array $opt = array())
 {
@@ -1739,10 +1830,10 @@ function ansage_formular_html(array $tts, array $h = array(), array $k = array()
     foreach ($modi as $mo) {
         if (!in_array($mo, ansage_modi(), true)) { continue; }
         $o[] = '        <option value="' . $e($mo) . '"' . ($gewaehlt === $mo ? ' selected' : '') . '>'
-             . $e($t('O_' . strtoupper($mo))) . '</option>';
+             . $e(ansage_wahl_text($mo, $k)) . '</option>';
     }
     $o[] = '    </select>';
-    $o[] = '    <div class="sm-hilfe">' . $e($t('ART_HINWEIS')) . '</div>';
+    $o[] = '    <div class="sm-hilfe">' . $e(ansage_art_hinweis($k)) . '</div>';
     $o[] = '</div>';
     $feld = function ($id, $typ, $label, $zusatz, $hinweis) use ($e, $t, $w, $m, $n, $tts) {
         $wert = $tts[$id];
@@ -1920,6 +2011,10 @@ function ansage_kennung_text($kennung, array $k)
         return sprintf(ansage_t('K_UNTER', $k), $feld, ansage_kennung_text(implode('|', $teile), $k));
     }
     if (strpos($id, 'M_') === 0) {
+        /* Der Satz einer M_-Kennung nennt das Feld schon ("Port abgewiesen: %s"); ein innerer
+         * UNTER|tts.port|... stellte ihm den Namen ein zweites Mal voran (bis 1.1.1:
+         * "Port abgewiesen: tts.port: nicht zwischen 1 und 65535"). Die Kennung bleibt gleich. */
+        if (count($teile) >= 3 && $teile[0] === 'UNTER') { $teile = array_slice($teile, 2); }
         $satz = ansage_t($id, $k);
         return $teile ? sprintf($satz, ansage_kennung_text(implode('|', $teile), $k)) : $satz;
     }
@@ -1957,7 +2052,9 @@ function ansage_sprachschluessel()
                // seit 1.1.0
                'K_TTS_VORLAGE_BENUTZER', 'SONOS_HINWEIS', 'L_SONOS_ZONE', 'SONOS_ZONE_HINWEIS', 'L_SONOS_LAUT',
                'SONOS_LAUT_HINWEIS', 'M_SONOS_ZONE', 'M_SONOS_LAUT', 'M_SONOS_OHNE_ZONE', 'T_SONOS', 'K_TTS_SONOS_ZONE',
-               'K_SONOS_KEINE_ZONE', 'K_SONOS_FEHLT', 'K_SONOS_ZEIT_UNKLAR');
+               'K_SONOS_KEINE_ZONE', 'K_SONOS_FEHLT', 'K_SONOS_ZEIT_UNKLAR',
+               // seit 1.1.2
+               'K_TTS_EINTRAG', 'K_KEIN_FELD', 'ART_HINWEIS_WERK', 'O_AUS_SCHLICHT', 'O_WERK');
     foreach (ansage_modi() as $mo) { $s[] = 'O_' . strtoupper($mo); }
     foreach (array('ALEXA', 'GOOGLE') as $a) {
         foreach (array('_HINWEIS', '_GERAET_HINWEIS', '_LAUT_HINWEIS', '_TOKEN_HINWEIS') as $x) { $s[] = $a . $x; }
@@ -2379,7 +2476,8 @@ function ansage_selbsttest()
         return isset($d[$s]) ? $d[$s] : $s;
     });
     $pruef('kennung mit', ansage_kennung_text('GOOGLE_KEINE_ANTWORT|http://x|10|HTTP_ZEIT', $kt), 'G antwortet nicht (http://x, 10 s): Zeit nach ');
-    $pruef('kennung M', ansage_kennung_text('M_PORT|UNTER|tts.port|AUSSERHALB|1|65535', $kt), 'Port: tts.port - nicht in 1..65535');
+    // Seit 1.1.2 ohne den doppelten Feldnamen (bis 1.1.1: 'Port: tts.port - nicht in 1..65535').
+    $pruef('kennung M', ansage_kennung_text('M_PORT|UNTER|tts.port|AUSSERHALB|1|65535', $kt), 'Port: nicht in 1..65535');
     $pruef('kennung unbekannt', ansage_kennung_text('XYZ|1', $kt), 'XYZ|1');
     $pruef('schluessel eigen', ansage_t('L_ART', array('schluessel' => array('L_ART' => 'SEITE.L_AUDIO'))), 'SEITE.L_AUDIO');
 
@@ -2659,6 +2757,83 @@ function ansage_selbsttest()
     $pruef('vor dem senden sprache adresse taugt', ansage_url_grund(ansage_tts_url($TEXT, array('lang' => 'deu') + $msx)), '');
     $r = ansage_sprechen($TEXT, array('mode' => 'ms4h', 'volume' => 500) + $msx, $k);
     $pruef('vor dem senden lautstaerke', array($r['kennung'], count($log)), array('EINSTELLUNG|UNTER|tts.volume|AUSSERHALB|1|100', 0));
+
+    // ================= seit 1.1.2 =================
+
+    // --- Saetze K_TTS_EINTRAG und K_KEIN_FELD (bisher je Linie umgelenkt) ---
+    $t112 = array('t' => function ($s) {
+        $d = array('ANSAGE.K_TTS_EINTRAG' => 'unbekannter Eintrag "%s"', 'ANSAGE.K_KEIN_FELD' => 'kein Block',
+                   'ANSAGE.K_UNTER' => '%s - %s', 'ANSAGE.K_KEIN_TEXT' => 'kein Text', 'ANSAGE.M_IP' => 'IP: %s',
+                   'ANSAGE.M_ZONEN' => 'Zonen: %s', 'ANSAGE.M_PORT' => 'Port: %s', 'ANSAGE.K_TTS_ZONEN' => 'falsche Zonen',
+                   'ANSAGE.K_AUSSERHALB' => 'nicht in %s..%s', 'LINIE.EINTRAG' => 'Linie: %s',
+                   'ANSAGE.ART_HINWEIS' => 'Ab Werk aus.', 'ANSAGE.ART_HINWEIS_WERK' => 'Ab Werk %s.',
+                   'ANSAGE.O_AUS' => 'aus (ab Werk)', 'ANSAGE.O_AUS_SCHLICHT' => 'aus', 'ANSAGE.O_WERK' => '%s (ab Werk)',
+                   'ANSAGE.O_MUSICSERVER' => 'Music Server', 'ANSAGE.O_ALEXANG' => 'Alexa', 'LINIE.HINWEIS' => 'Linie',
+                   'LINIE.AUS' => 'nichts');
+        return isset($d[$s]) ? $d[$s] : $s;
+    });
+    ansage_wert_pruefen(array('stimme' => 'x'), $g);
+    $pruef('112 tts_eintrag', ansage_kennung_text($g, $t112), 'unbekannter Eintrag "stimme"');
+    ansage_wert_pruefen('x', $g);
+    $pruef('112 kein_feld', ansage_kennung_text($g, $t112), 'kein Block');
+    $pruef('112 tts_eintrag ohne satz', ansage_kennung_text('TTS_EINTRAG|stimme', $k), 'TTS_EINTRAG|stimme');
+    $pruef('112 umlenkung gewinnt', ansage_kennung_text('TTS_EINTRAG|stimme',
+        array('schluessel' => array('K_TTS_EINTRAG' => 'LINIE.EINTRAG')) + $t112), 'Linie: stimme');
+    $sl = ansage_sprachschluessel();
+    $pruef('112 schluessel', array_values(array_intersect(array('K_TTS_EINTRAG', 'K_KEIN_FELD', 'ART_HINWEIS_WERK',
+        'O_AUS_SCHLICHT', 'O_WERK'), $sl)), array('K_TTS_EINTRAG', 'K_KEIN_FELD', 'ART_HINWEIS_WERK', 'O_AUS_SCHLICHT', 'O_WERK'));
+
+    // --- M_-Meldung nennt das Feld einmal ---
+    $pruef('112 M ip', ansage_kennung_text('M_IP|UNTER|tts.ip|KEIN_TEXT', $t112), 'IP: kein Text');
+    $pruef('112 M ohne unter', ansage_kennung_text('M_ZONEN|TTS_ZONEN', $t112), 'Zonen: falsche Zonen');
+    $pruef('112 unter ohne M', ansage_kennung_text('UNTER|tts.port|AUSSERHALB|1|65535', $t112), 'tts.port - nicht in 1..65535');
+    $mg = array(); $bn = array();
+    ansage_formular_lesen(array('tts_port' => '0') + $post, $alt, $mg, $bn, array(), $t112);
+    $pruef('112 M kennung gleich, text einmal', array($mg[0]['kennung'], $mg[0]['text']),
+           array('M_PORT|UNTER|tts.port|AUSSERHALB|1|65535', 'Port: nicht in 1..65535'));
+
+    // --- Webport, weite Form (Weissware) ---
+    foreach (array('{"webserver":{"Port":"8081"}}' => array(80, 8081), '{"Webserver":{"port":8082}}' => array(80, 8082),
+                   '{"WEBSERVER":{"PORT":"8083"}}' => array(80, 8083), '{"Webserver":{"Port":"81","port":"82"}}' => array(81, 81),
+                   '{"Webserver":{"PORT":"0","port":"84"}}' => array(80, 84), '{"webserver":{"port":"x"}}' => array(80, 80),
+                   '{"Webserver":{"Port":"85"}}' => array(85, 85)) as $j => $soll) {
+        $pruef('112 webport ' . $j, array(ansage_webport_aus($j), ansage_webport_aus($j, true)), $soll);
+    }
+    $pruef('112 webport weit nur mit true', ansage_webport_aus('{"webserver":{"port":"8081"}}', 1), 80);
+    $gj = @tempnam(sys_get_temp_dir(), 'ansage112');
+    if (is_string($gj) && @file_put_contents($gj, '{"webserver":{"PORT":"8088"}}') !== false && !function_exists('lbwebserverport')) {
+        $pruef('112 webport datei', array(ansage_webport($gj), ansage_webport($gj, true)), array(80, 8088));
+    } else {
+        $pruef('112 webport datei (nicht messbar)', true, true);
+    }
+    if (is_string($gj)) { @unlink($gj); }
+
+    // --- Werk-Kontext fuer die Saetze "ab Werk aus" ---
+    $pruef('112 werk vorgabe', array(ansage_art_hinweis($t112), ansage_wahl_text('aus', $t112), ansage_wahl_text('musicserver', $t112)),
+           array('Ab Werk aus.', 'aus (ab Werk)', 'Music Server'));
+    $tw = array('werk' => 'musicserver') + $t112;
+    $pruef('112 werk musicserver', array(ansage_art_hinweis($tw), ansage_wahl_text('aus', $tw), ansage_wahl_text('musicserver', $tw),
+           ansage_wahl_text('alexang', $tw)), array('Ab Werk Music Server.', 'aus', 'Music Server (ab Werk)', 'Alexa'));
+    $pruef('112 werk unbekannt', array(ansage_werk(array('werk' => 'boese')), ansage_werk(array('werk' => array('x'))), ansage_werk(array())),
+           array('aus', 'aus', 'aus'));
+    $pruef('112 werk aus', ansage_art_hinweis(array('werk' => 'aus') + $t112), 'Ab Werk aus.');
+    $tu = array('schluessel' => array('ART_HINWEIS' => 'LINIE.HINWEIS', 'O_AUS' => 'LINIE.AUS')) + $tw;
+    $pruef('112 werk umlenkung gewinnt', array(ansage_art_hinweis($tu), ansage_wahl_text('aus', $tu)), array('Linie', 'nichts'));
+    $html = ansage_formular_html($tts, array(), $tw);
+    $pruef('112 html werk', array(strpos($html, '>Ab Werk Music Server.<') !== false, strpos($html, '<option value="aus" selected>aus</option>') !== false,
+           strpos($html, '<option value="musicserver">Music Server (ab Werk)</option>') !== false), array(true, true, true));
+    $html = ansage_formular_html($tts, array(), $t112);
+    $pruef('112 html ohne werk', array(strpos($html, '>Ab Werk aus.<') !== false, strpos($html, '>aus (ab Werk)</option>') !== false,
+           strpos($html, '>Music Server</option>') !== false), array(true, true, true));
+
+    // --- Zeichen statt Bytes auch bei ungueltigem UTF-8 ---
+    $pruef('112 zeichen kaputtes ende', ansage_zeichen("Grüße \xC3"), 7);
+    $pruef('112 zeichen folgebytes', ansage_zeichen("a\x80\x80b"), 4);
+    $pruef('112 zeichen gueltig', array(ansage_zeichen('Größe'), ansage_zeichen(''), ansage_zeichen(7)), array(5, 0, 0));
+    $log = array();
+    $r = ansage_sprechen("Grüße \xC3", $msx, $k);
+    $pruef('112 zeichen im protokoll', array($r['kennung'], $r['zeichen'], strpos(ansage_kurz($r), ' zeichen=7 ') !== false, count($log)),
+           array('TEXT_UTF8', 7, true, 0));
 
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();

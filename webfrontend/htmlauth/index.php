@@ -1722,9 +1722,11 @@ function by_bausteine()
     $nr_alter = isset($nr['ALTER']) ? $nr['ALTER'] : $n;
     $nr_schloss = isset($nr['SCHLOSSVL']) ? $nr['SCHLOSSVL'] : 1;
     $nr_ladezust = isset($nr['LADEZUST']) ? $nr['LADEZUST'] : 1;
-    $pf = '&larr; #';
+    /* X-10 (0.9.25): Schreibweise von Werkzeuge/leitungen_setzen.py - "#N" (erster
+     * Eingang), "I1 = #N, I2 = #M"; bis 0.9.24 in Pfeilform. */
+    $pf = '#';
     $b[] = array(++$n, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N_NICHT',  '',
-                 'I ' . $pf . $nr_ok);
+                 $pf . $nr_ok);
     /* U13 (Durchgang 29.09.2026): die Schwelle "Werte zu alt" ist das
      * Dreifache des eingestellten Abruftakts - dieselbe Grenze, ab der der
      * Endpunkt OK=0 meldet (C6). Bis 0.9.19 stand hier fest 900/700; bei einem
@@ -1733,33 +1735,33 @@ function by_bausteine()
     $takt = max(120, min(3600, (int) by_config(false)['intervall']));
     $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_ALT',
                  array('text' => sprintf(by_t('BAUSTEIN.P_ALT'), 3 * $takt, 3 * $takt - 200)),
-                 'I ' . $pf . $nr_alter);
+                 $pf . $nr_alter);
     $b[] = array(++$n, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N_STOER',  '',
-                 'I1 ' . $pf . ($n - 2) . ', I2 ' . $pf . ($n - 1));
+                 'I1 = ' . $pf . ($n - 2) . ', I2 = ' . $pf . ($n - 1));
     $b[] = array(++$n, 'BAUSTEIN.T_EVZ',     'BAUSTEIN.N_EVZ',    'BAUSTEIN.P_EVZ',
-                 'I ' . $pf . ($n - 1));
+                 $pf . ($n - 1));
     $b[] = array(++$n, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N_MELD1',  'BAUSTEIN.P_MELD',
-                 'I ' . $pf . ($n - 1));
+                 $pf . ($n - 1));
     $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_SOC',    'BAUSTEIN.P_SOC',
-                 'I ' . $pf . $nr_soc);
+                 $pf . $nr_soc);
     $b[] = array(++$n, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N_MELD2',  'BAUSTEIN.P_MELD',
-                 'I ' . $pf . ($n - 1));
+                 $pf . ($n - 1));
     $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_OFFEN',  'BAUSTEIN.P_OFFEN',
-                 'I ' . $pf . $nr_schloss);
+                 $pf . $nr_schloss);
     $b[] = array(++$n, 'BAUSTEIN.T_UND',     'BAUSTEIN.N_UND',    '',
-                 'I1 ' . $pf . ($n - 1) . ', I2 ' . $pf . by_t('BAUSTEIN.ANWESEND'));
+                 'I1 = ' . $pf . ($n - 1) . ', I2 = ' . by_t('BAUSTEIN.ANWESEND'));
     $b[] = array(++$n, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N_MELD3',  'BAUSTEIN.P_MELD',
-                 'I ' . $pf . ($n - 1));
+                 $pf . ($n - 1));
     $b[] = array(++$n, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N_STATUS', 'BAUSTEIN.P_STATUS',
-                 'I1 ' . $pf . $nr_ladezust);
+                 'I1 = ' . $pf . $nr_ladezust);
     $b[] = array(++$n, 'BAUSTEIN.T_WOCHE',   'BAUSTEIN.N_WOCHE',  'BAUSTEIN.P_WOCHE',
                  '&mdash;');
     $b[] = array(++$n, 'BAUSTEIN.T_TASTER',  'BAUSTEIN.N_TASTER', 'BAUSTEIN.P_TASTER',
                  '&mdash;');
     $b[] = array(++$n, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N_ODER2',  '',
-                 'I1 ' . $pf . ($n - 2) . ', I2 ' . $pf . ($n - 1));
+                 'I1 = ' . $pf . ($n - 2) . ', I2 = ' . $pf . ($n - 1));
     $b[] = array(++$n, 'BAUSTEIN.T_VA',      'BAUSTEIN.N_VA_KLIMA', 'BAUSTEIN.P_VA_KLIMA',
-                 'I ' . $pf . ($n - 1));
+                 $pf . ($n - 1));
     $b[] = array(++$n, 'BAUSTEIN.T_VA',      'BAUSTEIN.N_VA_VERR', 'BAUSTEIN.P_VA_VERR',
                  by_t('BAUSTEIN.MANUELL'));
     $b[] = array(++$n, 'BAUSTEIN.T_VA',      'BAUSTEIN.N_VA_ABRUF', 'BAUSTEIN.P_VA_ABRUF',
