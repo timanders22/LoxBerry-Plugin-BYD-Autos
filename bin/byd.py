@@ -253,6 +253,9 @@ VORGABEN = {
     "mqtt_ein": 0,
     "mqtt_topic": "byd",
     "steuerung_ein": 0,
+    # Welle Bild 17 (0.9.26, Hausherr 17.10.2026): ZWEITER Haken fuer die eingreifenden Befehle
+    # (verriegeln, entriegeln, suchen, blinken) - ab Werk AUS. Gleich in by_vorgaben().
+    "gefahr_ein": 0,
     "temp_min": 16,
     "temp_max": 30,
     "verlauf_tage": 8,
@@ -772,15 +775,17 @@ LADEZUSTAND_KABEL = (1, 15)
 # keine Methode. Ein Bedienelement ohne Wirkung ist schlimmer als keines, und
 # ein Loxone-Ausgang, der nur Absagen erntet, ist schlimmer als keiner.
 BEFEHLE = {
-    "verriegeln":      {"methoden": ("lock",),               "pin": 1},
-    "entriegeln":      {"methoden": ("unlock",),             "pin": 1},
+    # "eingreifend": braucht ZUSAETZLICH den zweiten Haken gefahr_ein (Welle Bild 17, 0.9.26) - wie
+    # by_befehle() in by_lib.php.
+    "verriegeln":      {"methoden": ("lock",),               "pin": 1, "eingreifend": 1},
+    "entriegeln":      {"methoden": ("unlock",),             "pin": 1, "eingreifend": 1},
     "klima_start":     {"methoden": ("start_climate",),      "pin": 1},
     "klima_stop":      {"methoden": ("stop_climate",),       "pin": 1},
     "klima_plan":      {"methoden": ("schedule_climate",),   "pin": 1},
     "sitzklima":       {"methoden": ("set_seat_climate",),   "pin": 1},
     "batterieheizung": {"methoden": ("set_battery_heat",),   "pin": 1},
-    "suchen":          {"methoden": ("find_car",),           "pin": 1},
-    "blinken":         {"methoden": ("flash_lights",),       "pin": 1},
+    "suchen":          {"methoden": ("find_car",),           "pin": 1, "eingreifend": 1},
+    "blinken":         {"methoden": ("flash_lights",),       "pin": 1, "eingreifend": 1},
     "fenster_zu":      {"methoden": ("close_windows",),      "pin": 1},
 }
 
@@ -3322,6 +3327,15 @@ async def befehl_ausfuehren(client, fahrzeuge: dict, cfg: dict, z: dict,
                        "'Schreibende Befehle zulassen'.", {})
         hemmnisse.append("die Steuerung ist ausgeschaltet - der echte Befehl wuerde "
                          "abgewiesen")
+    # Welle Bild 17 (0.9.26, Hausherr 17.10.2026): der ZWEITE Haken. Der Endpunkt weist diese Befehle schon
+    # ab; hier faengt es auch den Weg ueber den Reiter Test und jede andere Warteschlangendatei.
+    if BEFEHLE[aktion].get("eingreifend") and not cfg.get("gefahr_ein"):
+        if not probe:
+            return (0, "EINGRIFF_GESPERRT: Dieser Befehl greift in ein Fahrzeug ein, das im "
+                       "oeffentlichen Raum steht. Reiter Einstellungen, zweiter Haken "
+                       "'Eingreifende Befehle zulassen'.", {})
+        hemmnisse.append("eingreifende Befehle sind gesperrt (zweiter Haken) - der echte "
+                         "Befehl wuerde abgewiesen")
     if not fahrzeuge:
         return (0, "Es ist noch kein Fahrzeug bekannt. Erst einen Abruf abwarten.", {})
     if client is None:
@@ -4392,6 +4406,9 @@ def selbsttest() -> int:
     zeilen.append("[INFO] Schreibende Befehle: %s, Zieltemperatur erlaubt von %d bis %d Grad"
                   % ("zugelassen" if c.get("steuerung_ein") else "gesperrt",
                      c["temp_min"], c["temp_max"]))
+    zeilen.append("[INFO] Eingreifende Befehle (Verriegeln/Entriegeln, Suchen, Blinken): %s"
+                  % ("zugelassen (zweiter Haken gesetzt)" if c.get("gefahr_ein")
+                     else "gesperrt (zweiter Haken aus, ab Werk)"))
 
     # Vorgaben gegen die PHP-Seite halten. Zwei Vorgabelisten laufen
     # auseinander, wenn niemand sie gegeneinander haelt - der Kommentar

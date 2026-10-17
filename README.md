@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.25
+Version 0.9.26
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -9,8 +9,9 @@ Türschlösser, die vier Türen, Heckklappe, die vier Fenster und das
 Schiebedach, Sitz- und Batterieheizung, Fahrstufe, Innenraumtemperatur, die
 vier Reifendrücke, zwei Durchschnittsverbräuche des Fahrzeugs sowie den
 Standort. Auf Wunsch lassen sich
-Verriegelung, Klimatisierung, Sitz- und Batterieheizung schalten, das Fahrzeug
-suchen lassen, blinken und die Fenster schließen. Dazu kommen fünf
+Klimatisierung, Sitz- und Batterieheizung schalten und die Fenster schließen;
+Verriegelung, Fahrzeug suchen und Blinken nur mit einem zweiten Haken (ab Werk
+aus). Für Loxone gibt es vier fertige Seiten aus dem Musterprojekt. Dazu kommen fünf
 **gerechnete** Felder, eine Liste der erkannten Ladevorgänge, eine
 Vorklimatisierung am Abfahrtsassistenten und ein **Trockenlauf** für jeden
 schreibenden Befehl.
@@ -39,6 +40,40 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.26
+
+Einbindung in Loxone in Vollausstattung: vier Seiten aus dem gemeinsamen Musterprojekt mit vier Bildern und
+Schritt-für-Schritt-Anleitung, feste Vorlagentitel, ein eigener Befehl „Klima aus“ – und ein **zweiter Haken**
+für die eingreifenden Befehle.
+
+* **Zweiter Haken „Eingreifende Befehle zulassen“** (Reiter Einstellungen, ab Werk **aus**): Verriegeln und
+  Entriegeln, Fahrzeug suchen (Hupe und Licht) und Blinken wirken auf ein Fahrzeug im öffentlichen Raum und hängen
+  nicht mehr allein am Haken „Schreibende Befehle zulassen“. Ohne den zweiten Haken antwortet der Endpunkt mit
+  HTTP 403 und `SET;OK=0;GRUND=EINGRIFF_GESPERRT`, der Dienst weist sie ebenso ab (auch aus dem Reiter Test; der
+  Trockenlauf nennt die Sperre), und die Vorlage der Steuerbefehle enthält sie nicht. **Wer diese Befehle schon
+  nutzt, setzt nach dem Update den zweiten Haken** – sonst wirken sie nicht mehr. Form wie AudiConnect und
+  VolkswagenID; der Reiter Test zeigt den Stand in einer eigenen Zeile.
+* **Reiter „Einbindung in Loxone“, Schritt 8:** Statt der bisherigen Liste mit 59 Zeilen stehen dort die vier
+  Seiten des [LoxBerry-Plugins Musterprojekts](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt), je
+  mit Kasten „So übernehmen Sie diese Seite“, Tabelle, Hinweisen und Bild: „BYD Autos“ (30 Zeilen: läuft es,
+  Störung über `OK` und eine Analogwertvalidierung auf `ALTER`, Ladestand und Reichweite knapp, Ladung beendet),
+  „BYD Autos Laden und Klima“ (35: Ladefreigabe für die eigene Wallbox aus Ladeempfehlung oder günstiger Stunde,
+  Klima mit Zieltemperatur, Schaltuhr Mo–Fr 06:40–07:00 nur bei Anwesenheit, Sitz- und Batterieheizung,
+  Sofortabruf), „BYD Autos Fahrzeug“ (28: Schlösser, Türen, Fenster, Meldung „offen“ nur abgestellt, Fenster
+  schließen auch bei Regen) und „BYD Autos Werte“ (22: Reifendruck mit Warnung, Kilometer heute, Verbrauch).
+* **Wer die alte Liste gebaut hat:** Der Klima-Ausgang hing dort an einem digitalen ODER und bekam `temp=1` – das
+  Plugin wies ab, die Klimatisierung startete nie. Ein stehender LoxBerry meldete nie (OK und ALTER frieren ein);
+  die neue Seite „BYD Autos“ nimmt dafür eine Analogwertvalidierung.
+* **Vorlagen:** Titel fest `BYD_1_<FELD>` bzw. `BYD_1_<BEFEHL>` (wie Audi, Skoda, VW), der Kommentar trägt die
+  übersetzte Bezeichnung – bis 0.9.25 war es umgekehrt. Kennzahl- und 0/1-Felder zeigen ganze Zahlen (`<v.0>`).
+  Steuerbefehle: Klima mit `<v.1>` und **ohne** Ausbefehl, dazu der neue Befehl `BYD_1_KLIMA_AUS`; Sitz- und
+  Batterieheizung mit `<v.0>` und dem Ausbefehl `stufe=0` (bisher leer – das ist die einzige Änderung am
+  Verhalten der Vorlage). Suchtexte und Adressen bleiben; wer Klima aus oder Stufe 0 nutzen will, liest die
+  Vorlage der Steuerbefehle neu ein. Knöpfe für die Vorlagen gibt es jetzt **je Fahrzeug**.
+* **Texte berichtigt:** MQTT und HTTP gelten als gleichwertig (das Musterprojekt nimmt HTTP), Schritt 5 nennt
+  `<v.1>`/`<v.0>` und „Klima aus“, Schritt 7 die Analogwertvalidierung auf `ALTER`.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen; an keinem Fahrzeug gemessen.
 
 ## Neu in 0.9.25
 
@@ -979,7 +1014,18 @@ in der App alles normal aus. Deshalb:
 * In Loxone werden zwei Werte verdrahtet: `OK` und `ALTER`. Der Sonderfall
   `ALTER = -1` heißt „es hat noch nie einen erfolgreichen Abruf gegeben" und
   sieht frischer aus als jeder echte Wert — `OK` ist deshalb immer mit
-  auszuwerten. Die Baustein-Liste im Reiter *Einbindung in Loxone* macht das so.
+  auszuwerten. Steht der LoxBerry selbst, frieren beide ein; das merkt nur eine
+  Analogwertvalidierung auf `ALTER`. Die Seite „BYD Autos“ im Reiter *Einbindung in
+  Loxone* macht beides so.
+
+## Einbindung in Loxone
+
+Der Reiter *Einbindung in Loxone* führt in neun Schritten durch die Einbindung, mit den Vorlagen je Fahrzeug
+zum Einlesen und in Schritt 8 den **Baustein-Listen** der vier Seiten zum Nachbauen. Fertig verbunden stehen
+die Bausteine auf den Seiten „BYD Autos“, „BYD Autos Laden und Klima“, „BYD Autos Fahrzeug“ und „BYD Autos
+Werte“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt) – die
+ganze Projektdatei mit allen Plugin-Seiten und Vorlagen. Eingreifende Befehle (Verriegeln, Suchen, Blinken)
+nutzt das Musterprojekt nicht.
 
 ## Was zusätzlich mitgerechnet wird — und woran es hängt
 

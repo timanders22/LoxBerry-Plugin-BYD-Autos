@@ -345,6 +345,8 @@ if ($by_post && $by_formular === 'einstellungen') {
     }
 
     $by_cfg['steuerung_ein'] = isset($_POST['steuerung_ein']) ? 1 : 0;
+    // Welle Bild 17 (0.9.26, Hausherr 17.10.2026): zweiter Haken fuer die eingreifenden Befehle.
+    $by_cfg['gefahr_ein'] = isset($_POST['gefahr_ein']) ? 1 : 0;
     $by_cfg['gps_ein'] = isset($_POST['gps_ein']) ? 1 : 0;
     $by_cfg['mqtt_bibliothek'] = isset($_POST['mqtt_bibliothek']) ? 1 : 0;
     $by_cfg['abfahrt_ein'] = isset($_POST['abfahrt_ein']) ? 1 : 0;
@@ -1042,6 +1044,15 @@ ob_start();
    nach einer Beanstandung rot umrandete Feld. */
 .sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
     border: 2px solid #c62828 !important; background-color: #fff5f5; }
+/* Welle Bild 17 (0.9.26): vier Seiten aus dem Musterprojekt in Schritt 8 - Bild, Ueberschrift, Schritte und
+   Hinweise je Seite (wie Weissware 0.9.42). */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+.sm-wrap h4.sm-h4 { color: #4f7d17; font-size: 0.98em; font-weight: 700; margin: 22px 0 4px;
+    padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
 </style>
 <div class="sm-wrap">
 
@@ -1256,6 +1267,14 @@ ob_start();
     <input data-role="none" type="checkbox" name="steuerung_ein" value="1" <?= by_eingabe_an('einstellungen', 'steuerung_ein', !empty($by_cfg['steuerung_ein'])) ? 'checked' : '' ?>>
     <?= by_e(by_t('EINST.L_STEUERUNG_EIN')) ?>
   </label>
+</div>
+<?php /* Welle Bild 17 (0.9.26, Hausherr 17.10.2026): der ZWEITE Haken (Form wie AudiConnect gefahr_ein). */ ?>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="gefahr_ein" value="1" <?= by_eingabe_an('einstellungen', 'gefahr_ein', !empty($by_cfg['gefahr_ein'])) ? 'checked' : '' ?>>
+    <?= by_e(by_t('EINST.L_GEFAHR_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= by_t('EINST.H_GEFAHR_EIN') ?></div>
 </div>
 <div class="sm-feld">
   <label for="temp_min"><?= by_e(by_t('EINST.L_TEMP_MIN')) ?></label>
@@ -1582,7 +1601,8 @@ ob_start();
     <th><?= by_e(by_t('LOX.T_EINHEIT')) ?></th><th><?= by_e(by_t('LOX.T_BEDEUTUNG')) ?></th>
     <th><?= by_e(by_t('LOX.T_HERKUNFT')) ?></th></tr>
 <?php foreach (by_felder_zeile() as $by_feld => $by_info) { ?>
-<tr><td><span class="sm-mono">BYD 1 <?= by_e(by_klartext(by_t($by_info['bez']))) ?></span></td>
+<?php /* Welle Bild 17 (0.9.26, E3): Titel fest wie die Vorlage (BYD_1_<FELD>). */ ?>
+<tr><td><span class="sm-mono">BYD_1_<?= by_e($by_feld) ?></span></td>
     <td><span class="sm-mono"><?= by_e(by_check($by_feld)) ?></span></td>
     <td><?= $by_info['einheit'] ?></td><td><?= by_t($by_info['bez']) ?></td>
     <td><?= by_e(by_herkunft_text($by_info['quelle'])) ?></td></tr>
@@ -1604,13 +1624,21 @@ ob_start();
 <?php } ?>
 <h3><?= by_e(by_t('LOX.H_ALLES')) ?></h3>
 <p><?= by_t('LOX.ALLES_TEXT') ?></p>
+<?php
+/* Welle Bild 17 (0.9.26, Entwurf Welle 17 by, B8): je Fahrzeug eine Knopfreihe. Bis 0.9.25 sendeten beide
+   Knoepfe fest nummer=1 - fuer Fahrzeug 2 gab es im Reiter keine Vorlage, obwohl der Download-Zweig die Nummer
+   annimmt. Vor dem ersten Abruf kennt das Plugin kein Fahrzeug: dann eine Reihe fuer Fahrzeug 1 (die Vorlage
+   traegt dann alle Felder). */
+$by_vorlage_nr = $by_fahrzeuge ? array_keys($by_fahrzeuge) : array('1');
+foreach ($by_vorlage_nr as $by_vnr) { ?>
+<p><b><?= by_e(sprintf(by_t('LOX.VORLAGEN_FAHRZEUG'), (int) $by_vnr)) ?></b></p>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="formular" value="vorlage">
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
     <input data-role="none" type="hidden" name="download" value="vi">
-    <input data-role="none" type="hidden" name="nummer" value="1">
+    <input data-role="none" type="hidden" name="nummer" value="<?= (int) $by_vnr ?>">
     <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?= by_e(by_t('LOX.K_VORLAGE')) ?></button>
   </form>
   <form action="index.php" method="post">
@@ -1618,10 +1646,12 @@ ob_start();
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
     <input data-role="none" type="hidden" name="download" value="vo">
-    <input data-role="none" type="hidden" name="nummer" value="1">
+    <input data-role="none" type="hidden" name="nummer" value="<?= (int) $by_vnr ?>">
     <button data-role="none" class="sm-btn sm-b-technik" type="submit"><?= by_e(by_t('LOX.K_VORLAGE_VO')) ?></button>
   </form>
 </div>
+<?php } ?>
+<p class="sm-hilfe"><?= by_e(by_t('LOX.VORLAGE_VO_EINGRIFF')) ?></p>
 <div class="sm-warnung"><?= by_t('LOX.VORLAGE_ZWEIMAL') ?></div>
 </div>
 
@@ -1640,10 +1670,10 @@ ob_start();
 <table class="sm-tbl">
 <tr><th><?= by_e(by_t('LOX.T_BEFEHL')) ?></th><th><?= by_e(by_t('LOX.T_ADRESSE')) ?></th></tr>
 <?php foreach (by_befehle() as $by_aktion => $by_eig) { ?>
-<tr><td><?= by_t($by_eig['bez']) ?></td>
+<tr><td><?= by_t($by_eig['bez']) ?><?= !empty($by_eig['eingreifend']) ? ' <b>(' . by_e(by_t('LOX.EINGRIFF')) . ')</b>' : '' ?></td>
     <td><span class="sm-mono"><?= by_e($by_pfad) ?>?token=<?= by_e($by_token) ?>&amp;aktion=<?= by_e($by_aktion) ?><?= $by_aktion === 'abruf' ? '' : '&amp;fahrzeug=1' ?><?php
-    if ($by_eig['zusatz'] === 'temp') { echo '&amp;temp=&lt;v&gt;'; }
-    elseif ($by_eig['zusatz'] === 'stufe') { echo '&amp;stufe=&lt;v&gt;'; } ?></span></td></tr>
+    if ($by_eig['zusatz'] === 'temp') { echo '&amp;temp=&lt;v.1&gt;'; }
+    elseif ($by_eig['zusatz'] === 'stufe') { echo '&amp;stufe=&lt;v.0&gt;'; } ?></span></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -1676,115 +1706,234 @@ ob_start();
 
 <?php
 /**
- * Die komplette Baustein-Liste. Pflicht im Hausstandard.
+ * Die Baustein-Listen fuer Schritt 8 (Welle Bild 17, 0.9.26; Hausherr 11.10.2026: Vollausstattung, ein
+ * absoluter Laie soll das Maximum leicht uebernehmen koennen; Entwurf Welle 17 by, E1/E13, gemeinsame Form der
+ * fuenf Autos). Vier Seiten aus dem LoxBerry-Plugins Musterprojekt, dort in Loxone Config gebaut und verbunden
+ * (Musterprojekt/baustein_listen.txt, Abschnitte "BYD Autos" 30, "BYD Autos Laden und Klima" 35, "BYD Autos
+ * Fahrzeug" 28 und "BYD Autos Werte" 22 Zeilen, wortgleich). Je Tabellenzeile EIN Sprachschluessel
+ * BAUSTEIN.Z<seite>_<nn> = "Typ | Name | Parameter | Eingaenge" ohne Auszeichnung; jede Zelle und jeder Satz wird
+ * maskiert ausgegeben. Die Namen gelten fuer Fahrzeug 1, so wie die Vorlagen sie anlegen (BYD_1_<FELD>, fest).
+ * Die Verweise (#n) gelten je Seite; die Feldzeilen werden nicht mehr aus by_felder() gerechnet - die Liste ist
+ * massgeblich, und jede Seite nennt nur die Felder, die sie verbindet.
  *
- * Anspruch: Wer die Tabelle von oben nach unten abarbeitet, hat die Funktion
- * nachgebaut, ohne nachzudenken. Loxone Config fuehrt alle Bausteine in der
- * Baustein-Suche (F5).
+ * Bis 0.9.25 stand hier by_bausteine() mit 59 Zeilen: der Klima-Ausgang hing an einem digitalen ODER und
+ * bekam temp=1 (abgewiesen, B1), ein stehender LoxBerry meldete nie (B5), "erst am Fahrzeug ablesen" (B3).
  *
- * ZWEI EIGENSCHAFTEN, DIE HIER TRAGEN:
- *
- * 1. KEIN Baustein hat mehr als ZWEI Eingaenge. And und Or fuehren in Loxone
- *    genau I1 und I2 - die Zahl ist eine Baustein-Eigenschaft, die Config aus
- *    seinem eigenen Modell setzt. Eine Bauanleitung, die einen ODER-Baustein
- *    mit vier Eingaengen zeichnet, ist nicht nachbaubar; drei Bedingungen
- *    ergeben eine Kaskade aus zwei Bausteinen.
- * 2. KEINE Vorwaertsverweise. Jede Zeile bezieht sich nur auf kleinere
- *    Nummern - wer die Tabelle von oben nach unten abarbeitet, hat nie einen
- *    Eingang ohne Quelle.
+ * Rueckgabe: je Seite 'kopf' (Name der Musterseite), 'bild', 'schritte' und 'hinweise' (Saetze), 'zeilen'
+ * (je ein Text mit vier Zellen) - alles reiner Text.
  */
-function by_bausteine()
+function by_bausteinseiten()
 {
-    $b = array();
-    $n = 0;
-    // Je Feld der Statuszeile ein virtueller Eingang. Aus derselben Quelle wie
-    // die Zeile selbst - eine getippte Liste liefe damit auseinander, und die
-    // Verweise darunter (#5, #16 ...) wuerden sich lautlos verschieben.
-    foreach (by_felder_zeile() as $feld => $eig) {
-        $n++;
-        $b[] = array($n, 'BAUSTEIN.T_VE', by_klartext(by_t($eig['bez'])),
-                     'BYD 1 ' . $feld, '&mdash;');
-    }
-    /* Die Nummern werden GERECHNET, nicht getippt.
-     *
-     * Eine Zahl, die auf eine erzeugte Liste zeigt, ist eine Zeitbombe: kommt
-     * ein Feld dazu, verschiebt sich jeder Verweis um eins - lautlos, denn
-     * eine Zahl sieht immer richtig aus. Genau das ist in einem
-     * Schwesterplugin passiert, als ein neuntes Feld dazukam. */
-    $nr = array();
-    $i = 0;
-    foreach (array_keys(by_felder_zeile()) as $feld) {
-        $i++;
-        $nr[$feld] = $i;
-    }
-    $nr_ok = isset($nr['OK']) ? $nr['OK'] : 1;
-    $nr_soc = isset($nr['SOC']) ? $nr['SOC'] : 1;
-    $nr_alter = isset($nr['ALTER']) ? $nr['ALTER'] : $n;
-    $nr_schloss = isset($nr['SCHLOSSVL']) ? $nr['SCHLOSSVL'] : 1;
-    $nr_ladezust = isset($nr['LADEZUST']) ? $nr['LADEZUST'] : 1;
-    /* X-10 (0.9.25): Schreibweise von Werkzeuge/leitungen_setzen.py - "#N" (erster
-     * Eingang), "I1 = #N, I2 = #M"; bis 0.9.24 in Pfeilform. */
-    $pf = '#';
-    $b[] = array(++$n, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N_NICHT',  '',
-                 $pf . $nr_ok);
-    /* U13 (Durchgang 29.09.2026): die Schwelle "Werte zu alt" ist das
-     * Dreifache des eingestellten Abruftakts - dieselbe Grenze, ab der der
-     * Endpunkt OK=0 meldet (C6). Bis 0.9.19 stand hier fest 900/700; bei einem
-     * Takt ueber 900 s meldete der Baustein zwischen zwei Abrufen jedes Mal
-     * "zu alt". Aus bleibt 200 s darunter, wie bisher. */
-    $takt = max(120, min(3600, (int) by_config(false)['intervall']));
-    $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_ALT',
-                 array('text' => sprintf(by_t('BAUSTEIN.P_ALT'), 3 * $takt, 3 * $takt - 200)),
-                 $pf . $nr_alter);
-    $b[] = array(++$n, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N_STOER',  '',
-                 'I1 = ' . $pf . ($n - 2) . ', I2 = ' . $pf . ($n - 1));
-    $b[] = array(++$n, 'BAUSTEIN.T_EVZ',     'BAUSTEIN.N_EVZ',    'BAUSTEIN.P_EVZ',
-                 $pf . ($n - 1));
-    $b[] = array(++$n, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N_MELD1',  'BAUSTEIN.P_MELD',
-                 $pf . ($n - 1));
-    $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_SOC',    'BAUSTEIN.P_SOC',
-                 $pf . $nr_soc);
-    $b[] = array(++$n, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N_MELD2',  'BAUSTEIN.P_MELD',
-                 $pf . ($n - 1));
-    $b[] = array(++$n, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N_OFFEN',  'BAUSTEIN.P_OFFEN',
-                 $pf . $nr_schloss);
-    $b[] = array(++$n, 'BAUSTEIN.T_UND',     'BAUSTEIN.N_UND',    '',
-                 'I1 = ' . $pf . ($n - 1) . ', I2 = ' . by_t('BAUSTEIN.ANWESEND'));
-    $b[] = array(++$n, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N_MELD3',  'BAUSTEIN.P_MELD',
-                 $pf . ($n - 1));
-    $b[] = array(++$n, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N_STATUS', 'BAUSTEIN.P_STATUS',
-                 'I1 = ' . $pf . $nr_ladezust);
-    $b[] = array(++$n, 'BAUSTEIN.T_WOCHE',   'BAUSTEIN.N_WOCHE',  'BAUSTEIN.P_WOCHE',
-                 '&mdash;');
-    $b[] = array(++$n, 'BAUSTEIN.T_TASTER',  'BAUSTEIN.N_TASTER', 'BAUSTEIN.P_TASTER',
-                 '&mdash;');
-    $b[] = array(++$n, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N_ODER2',  '',
-                 'I1 = ' . $pf . ($n - 2) . ', I2 = ' . $pf . ($n - 1));
-    $b[] = array(++$n, 'BAUSTEIN.T_VA',      'BAUSTEIN.N_VA_KLIMA', 'BAUSTEIN.P_VA_KLIMA',
-                 $pf . ($n - 1));
-    $b[] = array(++$n, 'BAUSTEIN.T_VA',      'BAUSTEIN.N_VA_VERR', 'BAUSTEIN.P_VA_VERR',
-                 by_t('BAUSTEIN.MANUELL'));
-    $b[] = array(++$n, 'BAUSTEIN.T_VA',      'BAUSTEIN.N_VA_ABRUF', 'BAUSTEIN.P_VA_ABRUF',
-                 by_t('BAUSTEIN.MANUELL'));
-    return $b;
+    return array(
+        array('kopf' => 'BYD Autos', 'bild' => 'einbindung_loxone.png',
+              'schritte' => array(
+                  sprintf(by_t('BAUSTEIN.S1_SCHRITT1'), by_t('REITER.EINSTELLUNGEN'), by_t('EINST.K_START'), by_t('REITER.TEST'), by_t('TEST.K_STATUS')),
+                  sprintf(by_t('BAUSTEIN.S1_SCHRITT2'), by_t('REITER.LOXONE'), by_t('LOX.K_VORLAGE'), by_t('LOX.K_VORLAGE_VO')),
+                  by_t('BAUSTEIN.S1_SCHRITT3'),
+                  by_t('BAUSTEIN.S1_SCHRITT4'),
+                  by_t('BAUSTEIN.S1_SCHRITT5'),
+                  by_t('BAUSTEIN.S1_SCHRITT6')),
+              'zeilen' => array(
+                  by_t('BAUSTEIN.Z1_01'),
+                  by_t('BAUSTEIN.Z1_02'),
+                  by_t('BAUSTEIN.Z1_03'),
+                  by_t('BAUSTEIN.Z1_04'),
+                  by_t('BAUSTEIN.Z1_05'),
+                  sprintf(by_t('BAUSTEIN.Z1_06')),
+                  by_t('BAUSTEIN.Z1_07'),
+                  by_t('BAUSTEIN.Z1_08'),
+                  by_t('BAUSTEIN.Z1_09'),
+                  by_t('BAUSTEIN.Z1_10'),
+                  by_t('BAUSTEIN.Z1_11'),
+                  by_t('BAUSTEIN.Z1_12'),
+                  by_t('BAUSTEIN.Z1_13'),
+                  by_t('BAUSTEIN.Z1_14'),
+                  by_t('BAUSTEIN.Z1_15'),
+                  by_t('BAUSTEIN.Z1_16'),
+                  by_t('BAUSTEIN.Z1_17'),
+                  by_t('BAUSTEIN.Z1_18'),
+                  by_t('BAUSTEIN.Z1_19'),
+                  sprintf(by_t('BAUSTEIN.Z1_20')),
+                  by_t('BAUSTEIN.Z1_21'),
+                  by_t('BAUSTEIN.Z1_22'),
+                  by_t('BAUSTEIN.Z1_23'),
+                  by_t('BAUSTEIN.Z1_24'),
+                  by_t('BAUSTEIN.Z1_25'),
+                  sprintf(by_t('BAUSTEIN.Z1_26')),
+                  sprintf(by_t('BAUSTEIN.Z1_27')),
+                  by_t('BAUSTEIN.Z1_28'),
+                  by_t('BAUSTEIN.Z1_29'),
+                  by_t('BAUSTEIN.Z1_30')),
+              'hinweise' => array(
+                  by_t('BAUSTEIN.S1_H1'),
+                  by_t('BAUSTEIN.S1_H2'),
+                  by_t('BAUSTEIN.S1_H3'),
+                  by_t('BAUSTEIN.S1_H4'),
+                  by_t('BAUSTEIN.S1_H5'),
+                  by_t('BAUSTEIN.S1_H6'),
+                  by_t('BAUSTEIN.S1_H7'))),
+        array('kopf' => 'BYD Autos Laden und Klima', 'bild' => 'einbindung_loxone_laden_klima.png',
+              'schritte' => array(
+                  sprintf(by_t('BAUSTEIN.S2_SCHRITT1'), by_t('REITER.EINSTELLUNGEN'), by_t('EINST.L_STEUERUNG_EIN'), by_t('EINST.L_LADEEMPF_EIN')),
+                  by_t('BAUSTEIN.S2_SCHRITT2'),
+                  by_t('BAUSTEIN.S2_SCHRITT3'),
+                  by_t('BAUSTEIN.S2_SCHRITT4'),
+                  sprintf(by_t('BAUSTEIN.S2_SCHRITT5'), by_t('REITER.LOG'))),
+              'zeilen' => array(
+                  by_t('BAUSTEIN.Z2_01'),
+                  by_t('BAUSTEIN.Z2_02'),
+                  by_t('BAUSTEIN.Z2_03'),
+                  by_t('BAUSTEIN.Z2_04'),
+                  by_t('BAUSTEIN.Z2_05'),
+                  by_t('BAUSTEIN.Z2_06'),
+                  by_t('BAUSTEIN.Z2_07'),
+                  by_t('BAUSTEIN.Z2_08'),
+                  by_t('BAUSTEIN.Z2_09'),
+                  by_t('BAUSTEIN.Z2_10'),
+                  by_t('BAUSTEIN.Z2_11'),
+                  by_t('BAUSTEIN.Z2_12'),
+                  by_t('BAUSTEIN.Z2_13'),
+                  by_t('BAUSTEIN.Z2_14'),
+                  by_t('BAUSTEIN.Z2_15'),
+                  by_t('BAUSTEIN.Z2_16'),
+                  by_t('BAUSTEIN.Z2_17'),
+                  by_t('BAUSTEIN.Z2_18'),
+                  by_t('BAUSTEIN.Z2_19'),
+                  by_t('BAUSTEIN.Z2_20'),
+                  by_t('BAUSTEIN.Z2_21'),
+                  by_t('BAUSTEIN.Z2_22'),
+                  by_t('BAUSTEIN.Z2_23'),
+                  by_t('BAUSTEIN.Z2_24'),
+                  by_t('BAUSTEIN.Z2_25'),
+                  by_t('BAUSTEIN.Z2_26'),
+                  by_t('BAUSTEIN.Z2_27'),
+                  by_t('BAUSTEIN.Z2_28'),
+                  by_t('BAUSTEIN.Z2_29'),
+                  by_t('BAUSTEIN.Z2_30'),
+                  by_t('BAUSTEIN.Z2_31'),
+                  by_t('BAUSTEIN.Z2_32'),
+                  by_t('BAUSTEIN.Z2_33'),
+                  by_t('BAUSTEIN.Z2_34'),
+                  by_t('BAUSTEIN.Z2_35')),
+              'hinweise' => array(
+                  by_t('BAUSTEIN.S2_H1'),
+                  by_t('BAUSTEIN.S2_H2'),
+                  by_t('BAUSTEIN.S2_H3'),
+                  by_t('BAUSTEIN.S2_H4'),
+                  by_t('BAUSTEIN.S2_H5'),
+                  by_t('BAUSTEIN.S2_H6'),
+                  by_t('BAUSTEIN.S2_H7'))),
+        array('kopf' => 'BYD Autos Fahrzeug', 'bild' => 'einbindung_loxone_fahrzeug.png',
+              'schritte' => array(
+                  by_t('BAUSTEIN.S3_SCHRITT1'),
+                  by_t('BAUSTEIN.S3_SCHRITT2'),
+                  by_t('BAUSTEIN.S3_SCHRITT3'),
+                  by_t('BAUSTEIN.S3_SCHRITT4'),
+                  sprintf(by_t('BAUSTEIN.S3_SCHRITT5'), by_t('REITER.LOG'))),
+              'zeilen' => array(
+                  by_t('BAUSTEIN.Z3_01'),
+                  by_t('BAUSTEIN.Z3_02'),
+                  by_t('BAUSTEIN.Z3_03'),
+                  by_t('BAUSTEIN.Z3_04'),
+                  by_t('BAUSTEIN.Z3_05'),
+                  by_t('BAUSTEIN.Z3_06'),
+                  by_t('BAUSTEIN.Z3_07'),
+                  by_t('BAUSTEIN.Z3_08'),
+                  by_t('BAUSTEIN.Z3_09'),
+                  by_t('BAUSTEIN.Z3_10'),
+                  by_t('BAUSTEIN.Z3_11'),
+                  by_t('BAUSTEIN.Z3_12'),
+                  by_t('BAUSTEIN.Z3_13'),
+                  by_t('BAUSTEIN.Z3_14'),
+                  by_t('BAUSTEIN.Z3_15'),
+                  by_t('BAUSTEIN.Z3_16'),
+                  by_t('BAUSTEIN.Z3_17'),
+                  by_t('BAUSTEIN.Z3_18'),
+                  by_t('BAUSTEIN.Z3_19'),
+                  by_t('BAUSTEIN.Z3_20'),
+                  by_t('BAUSTEIN.Z3_21'),
+                  by_t('BAUSTEIN.Z3_22'),
+                  by_t('BAUSTEIN.Z3_23'),
+                  by_t('BAUSTEIN.Z3_24'),
+                  by_t('BAUSTEIN.Z3_25'),
+                  by_t('BAUSTEIN.Z3_26'),
+                  by_t('BAUSTEIN.Z3_27'),
+                  by_t('BAUSTEIN.Z3_28')),
+              'hinweise' => array(
+                  by_t('BAUSTEIN.S3_H1'),
+                  by_t('BAUSTEIN.S3_H2'),
+                  by_t('BAUSTEIN.S3_H3'),
+                  sprintf(by_t('BAUSTEIN.S3_H4'), by_t('EINST.L_GEFAHR_EIN')))),
+        array('kopf' => 'BYD Autos Werte', 'bild' => 'einbindung_loxone_werte.png',
+              'schritte' => array(
+                  by_t('BAUSTEIN.S4_SCHRITT1'),
+                  by_t('BAUSTEIN.S4_SCHRITT2'),
+                  by_t('BAUSTEIN.S4_SCHRITT3')),
+              'zeilen' => array(
+                  by_t('BAUSTEIN.Z4_01'),
+                  by_t('BAUSTEIN.Z4_02'),
+                  by_t('BAUSTEIN.Z4_03'),
+                  by_t('BAUSTEIN.Z4_04'),
+                  by_t('BAUSTEIN.Z4_05'),
+                  by_t('BAUSTEIN.Z4_06'),
+                  by_t('BAUSTEIN.Z4_07'),
+                  by_t('BAUSTEIN.Z4_08'),
+                  by_t('BAUSTEIN.Z4_09'),
+                  by_t('BAUSTEIN.Z4_10'),
+                  by_t('BAUSTEIN.Z4_11'),
+                  by_t('BAUSTEIN.Z4_12'),
+                  by_t('BAUSTEIN.Z4_13'),
+                  by_t('BAUSTEIN.Z4_14'),
+                  by_t('BAUSTEIN.Z4_15'),
+                  by_t('BAUSTEIN.Z4_16'),
+                  by_t('BAUSTEIN.Z4_17'),
+                  by_t('BAUSTEIN.Z4_18'),
+                  by_t('BAUSTEIN.Z4_19'),
+                  by_t('BAUSTEIN.Z4_20'),
+                  by_t('BAUSTEIN.Z4_21'),
+                  by_t('BAUSTEIN.Z4_22')),
+              'hinweise' => array(
+                  by_t('BAUSTEIN.S4_H1'),
+                  by_t('BAUSTEIN.S4_H2'),
+                  by_t('BAUSTEIN.S4_H3'),
+                  by_t('BAUSTEIN.S4_H4'))),
+    );
 }
 ?>
 
 <div class="sm-step"><b><?= by_e(by_t('LOX.S8_TITEL')) ?></b><br>
 <?= by_t('LOX.S8_TEXT') ?>
+<?php foreach (by_bausteinseiten() as $by_bs) { ?>
+<h4 class="sm-h4"><?= by_e($by_bs['kopf']) ?></h4>
+<div class="sm-hinweis"><b><?= by_e(by_t('BAUSTEIN.SCHRITTE_TITEL')) ?></b>
+<ol class="sm-schritte">
+<?php foreach ($by_bs['schritte'] as $by_bx) { ?>
+<li><?= by_e($by_bx) ?></li>
+<?php } ?>
+</ol></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?= by_e(by_t('LOX.T_BAUSTEIN')) ?></th><th><?= by_e(by_t('LOX.T_NAMENSVORSCHLAG')) ?></th>
     <th><?= by_e(by_t('LOX.T_PARAMETER')) ?></th><th><?= by_e(by_t('LOX.T_EINGAENGE')) ?></th></tr>
-<?php foreach (by_bausteine() as $by_b) { ?>
-<tr><td><?= (int) $by_b[0] ?></td><td><?= by_t($by_b[1]) ?></td>
-    <td><?= strpos($by_b[2], 'BAUSTEIN.') === 0 ? by_t($by_b[2]) : by_e($by_b[2]) ?></td>
-    <td><?= is_array($by_b[3]) ? by_e($by_b[3]['text']) : ($by_b[3] === '' ? '&mdash;' : (strpos($by_b[3], 'BAUSTEIN.') === 0 ? by_t($by_b[3]) : '<span class="sm-mono">' . by_e($by_b[3]) . '</span>')) ?></td>
-    <td><?= $by_b[4] ?></td></tr>
+<?php foreach ($by_bs['zeilen'] as $by_i => $by_bz) {
+    $by_c = array_pad(explode(' | ', $by_bz, 4), 4, ''); ?>
+<tr><td><?= (int) $by_i + 1 ?></td><td><?= by_e($by_c[0]) ?></td><td><?= by_e($by_c[1]) ?></td>
+    <td><?= by_e($by_c[2]) ?></td><td><?= by_e($by_c[3]) ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<?= by_t('LOX.S8_ERLAEUTERUNG') ?>
+<div class="sm-warnung"><b><?= by_e(by_t('BAUSTEIN.HINWEISE_TITEL')) ?></b>
+<ul class="sm-schritte">
+<?php foreach ($by_bs['hinweise'] as $by_bx) { ?>
+<li><?= by_e($by_bx) ?></li>
+<?php } ?>
+</ul></div>
+<figure class="sm-bild">
+<img src="<?= by_e($by_bs['bild']) ?>" alt="<?= by_e(by_t('LOX.BILD_ALT')) ?>" loading="lazy">
+<figcaption><?= by_e(sprintf(by_t('LOX.BILD_UNTERSCHRIFT'), $by_bs['kopf'])) ?></figcaption>
+</figure>
+<div class="sm-hilfe"><?= by_t('LOX.MUSTERPROJEKT') ?></div>
+<?php } ?>
 </div>
 
 <div class="sm-step"><b><?= by_e(by_t('LOX.S9_TITEL')) ?></b><br>
@@ -1971,6 +2120,9 @@ if (isset($_GET['rohdaten'])) {
 <div class="sm-warnung"><?= by_t('TEST.SCHALTEN_WARNUNG') ?></div>
 <?php if (empty($by_cfg['steuerung_ein'])) { ?>
 <div class="sm-hinweis"><?= by_t('TEST.SCHALTEN_GESPERRT') ?></div>
+<?php } ?>
+<?php if (empty($by_cfg['gefahr_ein'])) { /* Welle Bild 17 (0.9.26): zweiter Haken */ ?>
+<div class="sm-hinweis"><?= by_e(by_t('TEST.SCHALTEN_EINGRIFF_GESPERRT')) ?></div>
 <?php } ?>
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="formular" value="test">

@@ -874,6 +874,13 @@ function by_pruefungen()
         !empty($cfg['steuerung_ein']) ? by_t('TEST.A_STEUERUNG_EIN')
                                       : by_t('TEST.A_STEUERUNG_AUS'));
 
+    /* ---- 23a. Eingreifende Befehle (Welle Bild 17, 0.9.26): der zweite Haken ----
+     * Grau, solange er aus ist - ab Werk gesperrt ist kein Fehler. */
+    $zeilen[] = by_pruefzeile(!empty($cfg['gefahr_ein']) ? 1 : -1,
+        by_t('TEST.F_GEFAHR'),
+        !empty($cfg['gefahr_ein']) ? by_t('TEST.A_GEFAHR_EIN')
+                                   : by_t('TEST.A_GEFAHR_AUS'));
+
     /* ---- 24. Die Marke der laufenden Aktualisierung ----
      * Zu jeder Regel gehoert das Werkzeug, das sie findet (CLAUDE.md,
      * Abschnitt 6). Diese Zeile ist es fuer die Marke.

@@ -22,6 +22,9 @@
  *   klima_start &temp=<Grad> [&minuten=<n>]   klima_stop   klima_plan
  *   sitzklima &stufe=<n>     batterieheizung &stufe=<n>
  *   suchen  blinken  fenster_zu
+ * Eingreifende Aktionen brauchen seit 0.9.26 (Welle Bild 17) ZUSAETZLICH den zweiten Haken
+ * 'Eingreifende Befehle zulassen' (gefahr_ein, ab Werk aus), sonst 403 SET;OK=0;GRUND=EINGRIFF_GESPERRT:
+ *   verriegeln / entriegeln   suchen   blinken
  *
  * Gleichwert-Unterdrueckung (X-7, B-Nachzug 01.10.2026, Entscheidung Nr. 19):
  * derselbe Sollwert fuer dasselbe Fahrzeug innerhalb von 60 s geht nicht noch
@@ -350,6 +353,16 @@ if (by_befehl_schaltet($by_aktion) && empty($by_cfg['steuerung_ein'])) {
     by_ende(403, 'SET;OK=0;GRUND=STEUERUNG_AUS',
         'Schreibende Befehle sind gesperrt. Reiter Einstellungen, Haken '
         . '"Schreibende Befehle zulassen".');
+}
+/* Welle Bild 17 (0.9.26, Hausherr 17.10.2026): der ZWEITE Haken. Verriegeln und Entriegeln, Suchen (Hupe und
+ * Licht) und Blinken wirken auf ein Fahrzeug, das im oeffentlichen Raum steht - ein versehentliches Entriegeln
+ * laesst es offen stehen, ohne dass es jemand merkt. Sie haengen deshalb nicht am allgemeinen Steuerungshaken
+ * allein (Form wie AudiConnect, GRUND=EINGRIFF_GESPERRT). Abgewiesen wird VOR jeder Parameterpruefung und vor
+ * der Gleichwert-Unterdrueckung: ein abgewiesener Aufruf merkt nichts und reiht nichts ein. */
+if (by_befehl_eingreifend($by_aktion) && empty($by_cfg['gefahr_ein'])) {
+    by_ende(403, 'SET;OK=0;GRUND=EINGRIFF_GESPERRT',
+        'Dieser Befehl greift in ein Fahrzeug ein, das im oeffentlichen Raum steht. Reiter Einstellungen, '
+        . 'zweiter Haken "Eingreifende Befehle zulassen".');
 }
 
 $by_befehl = array('aktion' => $by_aktion, 'fahrzeug' => $by_fahrzeug);

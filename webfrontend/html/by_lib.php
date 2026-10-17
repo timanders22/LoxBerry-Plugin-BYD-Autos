@@ -244,6 +244,9 @@ function by_vorgaben()
         'mqtt_ein'        => 0,
         'mqtt_topic'      => 'byd',
         'steuerung_ein'   => 0,
+        // Welle Bild 17 (0.9.26, Hausherr 17.10.2026): ZWEITER Haken fuer die eingreifenden Befehle
+        // (Verriegeln/Entriegeln, Suchen, Blinken) - ab Werk AUS. Gleich in VORGABEN, bin/byd.py.
+        'gefahr_ein'      => 0,
         'temp_min'        => 16,
         'temp_max'        => 30,
         'verlauf_tage'    => 8,
@@ -795,7 +798,7 @@ function by_eingabe_felder($form)
                              'ladeempf_thema', 'ladeempf_grenze', 'ladeempf_alter',
                              'preisempf_quelle', 'preisempf_praefix', 'preisempf_stunden',
                              'kapazitaet', 'heim_breite', 'heim_laenge', 'heim_radius'),
-            'haken' => array('gps_ein', 'mqtt_bibliothek', 'steuerung_ein', 'abfahrt_ein',
+            'haken' => array('gps_ein', 'mqtt_bibliothek', 'steuerung_ein', 'gefahr_ein', 'abfahrt_ein',
                              'ladeempf_ein', 'ladeempf_unter', 'preisempf_ein'),
         ),
         'mqtt' => array(
@@ -2184,18 +2187,23 @@ function by_mqtt_retain()
  * ================================================================== */
 function by_befehle()
 {
+    /* Welle Bild 17 (0.9.26, Hausherr 17.10.2026; Entwurf Welle 17 by, O3): 'eingreifend' = braucht ZUSAETZLICH
+     * den zweiten Haken gefahr_ein (ab Werk aus), Form wie AudiConnect (gefahr) und VolkswagenID (eingreifend).
+     * Verriegeln und Entriegeln, Suchen (Hupe und Licht) und Blinken wirken auf ein Fahrzeug, das im oeffentlichen
+     * Raum steht - ein versehentliches Entriegeln laesst es offen stehen, ohne dass es jemand merkt. Bis 0.9.25
+     * hingen sie allein am Steuerungshaken. */
     return array(
-        'abruf'           => array('bez' => 'BY_BEF.ABRUF',      'schaltet' => 0, 'zusatz' => ''),
-        'verriegeln'      => array('bez' => 'BY_BEF.VERRIEGELN', 'schaltet' => 1, 'zusatz' => ''),
-        'entriegeln'      => array('bez' => 'BY_BEF.ENTRIEGELN', 'schaltet' => 1, 'zusatz' => ''),
-        'klima_start'     => array('bez' => 'BY_BEF.KLIMA_START', 'schaltet' => 1, 'zusatz' => 'temp'),
-        'klima_stop'      => array('bez' => 'BY_BEF.KLIMA_STOP', 'schaltet' => 1, 'zusatz' => ''),
-        'klima_plan'      => array('bez' => 'BY_BEF.KLIMA_PLAN', 'schaltet' => 1, 'zusatz' => 'temp'),
-        'sitzklima'       => array('bez' => 'BY_BEF.SITZKLIMA',  'schaltet' => 1, 'zusatz' => 'stufe'),
-        'batterieheizung' => array('bez' => 'BY_BEF.BATTHEIZ',   'schaltet' => 1, 'zusatz' => 'stufe'),
-        'suchen'          => array('bez' => 'BY_BEF.SUCHEN',     'schaltet' => 1, 'zusatz' => ''),
-        'blinken'         => array('bez' => 'BY_BEF.BLINKEN',    'schaltet' => 1, 'zusatz' => ''),
-        'fenster_zu'      => array('bez' => 'BY_BEF.FENSTER_ZU', 'schaltet' => 1, 'zusatz' => ''),
+        'abruf'           => array('bez' => 'BY_BEF.ABRUF',      'schaltet' => 0, 'zusatz' => '',      'eingreifend' => 0),
+        'verriegeln'      => array('bez' => 'BY_BEF.VERRIEGELN', 'schaltet' => 1, 'zusatz' => '',      'eingreifend' => 1),
+        'entriegeln'      => array('bez' => 'BY_BEF.ENTRIEGELN', 'schaltet' => 1, 'zusatz' => '',      'eingreifend' => 1),
+        'klima_start'     => array('bez' => 'BY_BEF.KLIMA_START', 'schaltet' => 1, 'zusatz' => 'temp', 'eingreifend' => 0),
+        'klima_stop'      => array('bez' => 'BY_BEF.KLIMA_STOP', 'schaltet' => 1, 'zusatz' => '',      'eingreifend' => 0),
+        'klima_plan'      => array('bez' => 'BY_BEF.KLIMA_PLAN', 'schaltet' => 1, 'zusatz' => 'temp',  'eingreifend' => 0),
+        'sitzklima'       => array('bez' => 'BY_BEF.SITZKLIMA',  'schaltet' => 1, 'zusatz' => 'stufe', 'eingreifend' => 0),
+        'batterieheizung' => array('bez' => 'BY_BEF.BATTHEIZ',   'schaltet' => 1, 'zusatz' => 'stufe', 'eingreifend' => 0),
+        'suchen'          => array('bez' => 'BY_BEF.SUCHEN',     'schaltet' => 1, 'zusatz' => '',      'eingreifend' => 1),
+        'blinken'         => array('bez' => 'BY_BEF.BLINKEN',    'schaltet' => 1, 'zusatz' => '',      'eingreifend' => 1),
+        'fenster_zu'      => array('bez' => 'BY_BEF.FENSTER_ZU', 'schaltet' => 1, 'zusatz' => '',      'eingreifend' => 0),
     );
 }
 
@@ -2206,6 +2214,17 @@ function by_befehl_schaltet($aktion)
         return true;    // fail closed
     }
     return (bool) $b[$aktion]['schaltet'];
+}
+
+/** Welle Bild 17 (0.9.26): braucht der Befehl den zweiten Haken gefahr_ein? Unbekannt gilt als eingreifend -
+ *  fail closed wie by_befehl_schaltet(). */
+function by_befehl_eingreifend($aktion)
+{
+    $b = by_befehle();
+    if (!isset($b[$aktion])) {
+        return true;    // fail closed
+    }
+    return !empty($b[$aktion]['eingreifend']);
 }
 
 /* ==================================================================
@@ -2375,13 +2394,19 @@ function by_vorlage($nummer = 1)
             continue;
         }
         $einheit = by_klartext($eig['einheit']);
+        /* Welle Bild 17 (0.9.26, Entwurf Welle 17 by, E3; Sprachregel 13.10.2026, Regeln/07): der Titel steht fest
+         * als BYD_<n>_<FELD> - wie AUDI_1_SOC, SKODA_..., VW_1_SOC -, der Kommentar traegt die uebersetzte
+         * Bezeichnung. Bis 0.9.25 war es umgekehrt, und eine englische Oberflaeche legte andere Namen an als die
+         * Baustein-Liste und das Musterprojekt. Suchtext und Adresse bleiben: bestehende Anlagen merken nichts.
+         * E6: Kennzahl- und 0/1-Felder (ohne Einheit, hoechstens 255) zeigen ganze Zahlen (<v.0>). */
+        $ganz = ($einheit === '' && $eig['max'] !== null && $eig['max'] <= 255);
         $cmds[] = array(
-            'title'   => 'BYD ' . (int) $nummer . ' ' . by_klartext(by_t($eig['bez'])),
-            'comment' => 'BYD_' . (int) $nummer . '_' . $feld,
+            'title'   => 'BYD_' . (int) $nummer . '_' . $feld,
+            'comment' => by_klartext(by_t($eig['bez'])),
             'check'   => by_check($feld),
             'min'     => $eig['min'],
             'max'     => $eig['max'],
-            'unit'    => $einheit !== '' ? '<v.1> ' . $einheit : '<v.1>',
+            'unit'    => $einheit !== '' ? '<v.1> ' . $einheit : ($ganz ? '<v.0>' : '<v.1>'),
         );
     }
     $adresse = 'http://' . by_host() . '/plugins/' . $p['plugin']
@@ -2405,76 +2430,76 @@ function by_vorlage($nummer = 1)
 /** Importdatei fuer die virtuellen AUSGAENGE (Steuerbefehle). */
 function by_vorlage_vo($nummer = 1)
 {
+    /* Welle Bild 17 (0.9.26; Entwurf Welle 17 by E3/E6, gemeinsame Form O2/O3):
+     *   - Titel fest BYD_<n>_<BEFEHL>, Kommentar uebersetzt (bis 0.9.25 umgekehrt; Sprachregel 13.10.2026).
+     *   - Klima analog mit <v.1> und OHNE Ausbefehl, dazu der eigene Befehl BYD_<n>_KLIMA_AUS (nur Ein): die
+     *     Formel im Musterprojekt liefert im Ruhezustand -1 (vom Endpunkt per Muster abgewiesen), und ob Config
+     *     beim Wert 0 den Ausbefehl schickt, ist offen.
+     *   - Sitz- und Batterieheizung analog mit <v.0> und dem Ausbefehl stufe=0 (bis 0.9.25 leer - "0 = aus"
+     *     erreichte das Plugin nur, wenn Loxone bei 0 den Einbefehl schickte). Einzige Verhaltensaenderung.
+     *   - Verriegelung, Suchen und Blinken nur mit dem zweiten Haken gefahr_ein (Hausherr 17.10.2026); ohne ihn
+     *     weist der Endpunkt sie ohnehin ab. klima_plan steht wie bisher nicht in der Vorlage. */
     $p = by_paths();
     $token = by_token();
+    $cfg = by_config(false);
+    $eingriff = !empty($cfg['gefahr_ein']);
+    $n = (int) $nummer;
     $basis = '/plugins/' . $p['plugin'] . '/index.php?token=' . $token;
+    $fz = '&fahrzeug=' . $n;
     $cmds = array();
     foreach (by_befehle() as $aktion => $eig) {
-        if ($aktion === 'abruf') {
-            $cmds[] = array(
-                'title'   => 'BYD ' . (int) $nummer . ' Abruf',
-                'comment' => 'BYD_' . (int) $nummer . '_ABRUF',
-                'on'      => $basis . '&aktion=abruf',
-                'off'     => '',
-            );
+        if (!empty($eig['eingreifend']) && !$eingriff) {
             continue;
         }
-        if ($eig['zusatz'] === 'temp') {
-            // Ein Zustand gehoert an EINEN Ausgang mit Ein- und Ausbefehl,
-            // nicht an zwei Ausgaenge. Klima ein/aus ist genau so ein Fall.
-            if ($aktion !== 'klima_start') {
-                continue;
-            }
-            $cmds[] = array(
-                'title'   => 'BYD ' . (int) $nummer . ' Klima',
-                'comment' => 'BYD_' . (int) $nummer . '_KLIMA',
-                'on'      => $basis . '&aktion=klima_start&fahrzeug=' . (int) $nummer
-                           . '&temp=<v>',
-                'off'     => $basis . '&aktion=klima_stop&fahrzeug=' . (int) $nummer,
-                'analog'  => 1,
-            );
+        $kommentar = by_klartext(by_t($eig['bez']));
+        if ($aktion === 'abruf') {
+            $cmds[] = array('title' => 'BYD_' . $n . '_ABRUF', 'comment' => $kommentar,
+                            'on' => $basis . '&aktion=abruf', 'off' => '');
+            continue;
+        }
+        if ($aktion === 'klima_start') {
+            $cmds[] = array('title' => 'BYD_' . $n . '_KLIMA', 'comment' => $kommentar,
+                            'on' => $basis . '&aktion=klima_start' . $fz . '&temp=<v.1>', 'off' => '',
+                            'analog' => 1);
             continue;
         }
         if ($aktion === 'klima_stop') {
-            continue;   // steht als Ausbefehl an "Klima"
+            $cmds[] = array('title' => 'BYD_' . $n . '_KLIMA_AUS', 'comment' => $kommentar,
+                            'on' => $basis . '&aktion=klima_stop' . $fz, 'off' => '');
+            continue;
+        }
+        if ($aktion === 'klima_plan' || $aktion === 'entriegeln') {
+            continue;   // klima_plan nicht in der Vorlage; entriegeln steht als Ausbefehl an "Verriegelung"
         }
         if ($aktion === 'verriegeln') {
-            $cmds[] = array(
-                'title'   => 'BYD ' . (int) $nummer . ' Verriegelung',
-                'comment' => 'BYD_' . (int) $nummer . '_VERRIEGELUNG',
-                'on'      => $basis . '&aktion=verriegeln&fahrzeug=' . (int) $nummer,
-                'off'     => $basis . '&aktion=entriegeln&fahrzeug=' . (int) $nummer,
-            );
+            // Ein Zustand gehoert an EINEN Ausgang mit Ein- und Ausbefehl, nicht an zwei Ausgaenge.
+            $cmds[] = array('title' => 'BYD_' . $n . '_VERRIEGELUNG',
+                            'comment' => $kommentar . ' / ' . by_klartext(by_t('BY_BEF.ENTRIEGELN')),
+                            'on' => $basis . '&aktion=verriegeln' . $fz,
+                            'off' => $basis . '&aktion=entriegeln' . $fz);
             continue;
-        }
-        if ($aktion === 'entriegeln') {
-            continue;   // steht als Ausbefehl an "Verriegelung"
         }
         if ($eig['zusatz'] === 'stufe') {
-            $cmds[] = array(
-                'title'   => 'BYD ' . (int) $nummer . ' ' . by_klartext(by_t($eig['bez'])),
-                'comment' => 'BYD_' . (int) $nummer . '_' . strtoupper($aktion),
-                'on'      => $basis . '&aktion=' . $aktion . '&fahrzeug=' . (int) $nummer
-                           . '&stufe=<v>',
-                'off'     => '',
-                'analog'  => 1,
-            );
+            $cmds[] = array('title' => 'BYD_' . $n . '_' . strtoupper($aktion), 'comment' => $kommentar,
+                            'on' => $basis . '&aktion=' . $aktion . $fz . '&stufe=<v.0>',
+                            'off' => $basis . '&aktion=' . $aktion . $fz . '&stufe=0',
+                            'analog' => 1);
             continue;
         }
-        $cmds[] = array(
-            'title'   => 'BYD ' . (int) $nummer . ' ' . by_klartext(by_t($eig['bez'])),
-            'comment' => 'BYD_' . (int) $nummer . '_' . strtoupper($aktion),
-            'on'      => $basis . '&aktion=' . $aktion . '&fahrzeug=' . (int) $nummer,
-            'off'     => '',
-        );
+        $cmds[] = array('title' => 'BYD_' . $n . '_' . strtoupper($aktion), 'comment' => $kommentar,
+                        'on' => $basis . '&aktion=' . $aktion . $fz, 'off' => '');
+    }
+    $hinweis = by_klartext(by_t('LOX.VORLAGE_VO_HINWEIS'));
+    if ($eingriff) {
+        $hinweis .= ' ' . by_klartext(by_t('LOX.VORLAGE_VO_EINGRIFF'));
     }
     return array(
-        'VQ_BYD_' . (int) $nummer . '_steuern.xml',
+        'VQ_BYD_' . $n . '_steuern.xml',
         by_xml_virtual_out(array(
-            'title'   => 'BYD ' . (int) $nummer . ' steuern',
+            'title'   => 'BYD ' . $n . ' steuern',
             'address' => 'http://' . by_host(),
-            'comment' => 'BYD Autos ' . (int) $nummer . ' Steuerbefehle',
-            'hint'    => by_klartext(by_t('LOX.VORLAGE_VO_HINWEIS')),
+            'comment' => 'BYD Autos ' . $n . ' Steuerbefehle',
+            'hint'    => $hinweis,
         ), $cmds),
     );
 }
@@ -2641,6 +2666,7 @@ function by_sicherung_regeln()
         'aktionstoken'    => 'token',
         'mqtt_ein'        => 'schalter',
         'steuerung_ein'   => 'schalter',
+        'gefahr_ein'      => 'schalter',   // Welle Bild 17 (0.9.26): zweiter Haken
         'gps_ein'         => 'schalter',
         'mqtt_bibliothek' => 'schalter',
         'abfahrt_ein'     => 'schalter',
