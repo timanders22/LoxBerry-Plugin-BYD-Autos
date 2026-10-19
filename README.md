@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.27
+Version 0.9.28
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,17 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.28
+
+**Reifendrücke immer in bar.** Das Fahrzeug kann bar, psi oder kPa melden (`REIFENEH` 1/2/3), das Plugin rechnet um.
+Anlass ist Issue #1: derselbe BYD Seal U meldete am 14.09. Kennung 1 und 2,7 bar, am 19.10. Kennung 3 und Drücke wie
+277 – das ist kPa, stand aber als „277 bar“ in Loxone. `REIFENVL`, `REIFENVR`, `REIFENHL` und `REIFENHR` kommen jetzt über
+MQTT, die HTTP-Zeile, `aktion=json` und in der Oberfläche immer in bar, auf zwei Nachkommastellen: Kennung 1 unverändert,
+2 (psi) × 0,0689476, 3 (kPa) ÷ 100. Fehlt die Kennung oder ist sie unbekannt, wird nicht umgerechnet; ein Wert über 20
+gilt dann als unplausibel und kommt als `-1`, ebenso ein negativer Wert. `REIFENEH` bleibt die Rohkennung.
+Die Loxone-Vorlage erlaubt für die vier Drücke jetzt -1 bis 6 (bisher 0 bis 6); sie im Reiter *Einbindung in Loxone*
+neu erzeugen, wer -1 sehen will. Die Seiten des Musterprojekts bleiben unverändert.
 
 ## Neu in 0.9.27
 

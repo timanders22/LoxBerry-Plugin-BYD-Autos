@@ -542,10 +542,10 @@ FELDER = {
     # ohne Gross-/Kleinschreibung, deshalb traegt beide Schreibweisen
     # dieselbe Zeile.
     #
-    # Die EINHEIT ist NICHT belegt. Die Schnittstelle nennt keine; 2,7 ist
-    # als bar plausibel und als psi unmoeglich, deshalb steht hier "bar".
-    # Wer es an seinem Fahrzeug gegen den Bordcomputer haelt und es
-    # bestaetigt, setzt quelle auf 'bestand' - vorher nicht.
+    # Die EINHEIT steht in tire_press_unit (REIFENEH). Ausgegeben wird
+    # IMMER bar: reifendruck_bar() rechnet in fahrzeug_abbilden() um
+    # (0.9.28, Issue #1 - siehe REIFEN_FAKTOR unten). "bar" hier ist also
+    # die Einheit der AUSGABE, nicht die der Antwort.
     "REIFENVL": {
         "kandidaten": ("left_front_tire_pressure", "leftFrontTirepressure"),
         "einheit": "bar", "quelle": "bestand", "zeile": 1,
@@ -642,10 +642,9 @@ FELDER = {
     },
     # Die Einheitenkennung der Reifendruecke. Sie steht NUR ueber MQTT und
     # aktion=json zur Verfuegung (zeile 0): in der Statuszeile waere sie
-    # eine Zahl mehr, die niemand liest. Gemessen 1 an einem Fahrzeug,
-    # dessen App bar anzeigt (Issue #1, 14.09.2026) - EIN Fahrzeug,
-    # also keine Tabelle. Wer eine andere Kennung meldet, bringt die
-    # Einheit der vier Druckfelder ins Reine.
+    # eine Zahl mehr, die niemand liest. Sie bleibt die ROHKENNUNG; die
+    # vier Druckfelder rechnet reifendruck_bar() nach ihr in bar um
+    # (0.9.28; Belege an REIFEN_FAKTOR).
     "REIFENEH": {
         "kandidaten": ("tire_press_unit", "tirePressUnit"),
         "einheit": "", "quelle": "bestand", "zeile": 0,
@@ -2796,6 +2795,52 @@ def ansagen(cfg: dict, fahrzeuge: dict, ok: int, fehler_folge: int) -> None:
             ansage_senden(anlass, nr, daten, cfg)
 
 
+# ---------------------------------------------------------------------------
+# Reifendruecke IMMER in bar (0.9.28).
+#
+# Die Schnittstelle meldet die Einheit der vier Druecke selbst, als
+# tire_press_unit (Feld REIFENEH). BELEGT an EINEM Fahrzeug, einem BYD Seal U
+# (Issue #1):
+#   14.09.2026  Kennung 1, Druecke 2.7 / 2.8, die App zeigt bar  -> 1 = bar
+#   19.10.2026  Kennung 3, Druecke wie 277 (Kommentar im Issue)   -> 3 = kPa
+# Kennung 2 = psi ist NICHT gemessen; sie ist die dritte Einheit, die eine
+# Fahrzeug-App anbietet, und 40 psi ergeben 2.76 bar - ein Wert im
+# selben Bereich wie die beiden belegten.
+#
+# Fehlt die Kennung oder ist sie unbekannt, wird NICHT umgerechnet - geraten
+# wird nichts. Ein Wert ueber REIFEN_GRENZE_ROH ist dann aber sicher kein bar
+# (277 waeren 277 bar) und geht als -1 hinaus (Hausregel: fehlender
+# Zahlenwert -1); ebenso ein negativer Wert oder einer, der keine Zahl ist.
+# Gerundet auf zwei Nachkommastellen. Die Rohwerte stehen weiter unveraendert
+# unter "roh".
+# ---------------------------------------------------------------------------
+REIFEN_FELDER = ("REIFENVL", "REIFENVR", "REIFENHL", "REIFENHR")
+REIFEN_FAKTOR = {1: 1, 2: 0.0689476, 3: 0.01}   # Kennung -> Faktor nach bar
+REIFEN_GRENZE_ROH = 20
+
+
+def reifendruck_bar(wert, kennung):
+    """Ein Reifendruck in bar, nach der Einheitenkennung der Schnittstelle.
+
+    None bleibt None (das Feld kam nicht vor - am Endpunkt ein Strich, wie
+    bei jedem anderen Feld). -1 heisst: ein Wert kam, ist aber nicht
+    plausibel. Alles andere ist bar, auf zwei Nachkommastellen.
+    """
+    if wert is None:
+        return None
+    w = zahl(wert)
+    if w is None or w < 0:
+        return -1
+    k = zahl(kennung)
+    faktor = REIFEN_FAKTOR.get(k) if isinstance(k, int) else None
+    if faktor is None:
+        if w > REIFEN_GRENZE_ROH:
+            return -1
+        faktor = 1
+    bar = round(w * faktor, 2)
+    return int(bar) if bar == int(bar) else bar
+
+
 def fahrzeug_abbilden(stamm: dict, echtzeit: dict, gps: dict) -> dict:
     """Setzt das Abbild eines Fahrzeugs aus den drei Antworten zusammen.
 
@@ -2821,6 +2866,12 @@ def fahrzeug_abbilden(stamm: dict, echtzeit: dict, gps: dict) -> dict:
         getroffen[name] = treffer
         d[name] = wert if eig["einheit"] == "" and not isinstance(wert, (int, float)) \
             else zahl(wert) if zahl(wert) is not None else wert
+
+    # ---- Reifendruecke immer in bar (0.9.28, siehe reifendruck_bar()) ----
+    # Die EINZIGE Stelle der Umrechnung: MQTT, die HTTP-Zeile, aktion=json
+    # und die Oberflaeche lesen alle dieses Abbild. REIFENEH bleibt roh.
+    for name in REIFEN_FELDER:
+        d[name] = reifendruck_bar(d.get(name), d.get("REIFENEH"))
 
     # ---- abgeleitete Werte ----
     lz = zahl(d.get("LADEZUST"))

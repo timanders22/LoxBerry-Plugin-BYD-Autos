@@ -1861,9 +1861,12 @@ function by_felder()
          *
          * Reifendruecke: die Namen der Gegenstelle stammen aus der
          * Rohausgabe eines BYD Seal U Design (Issue #1),
-         * "leftFrontTirepressure": 2.7. Die EINHEIT ist nicht belegt -
-         * 2,7 ist als bar plausibel und als psi unmoeglich. 'doku' bleibt
-         * stehen, bis jemand es am Bordcomputer gegenhaelt.
+         * "leftFrontTirepressure": 2.7. Seit 0.9.28 stehen sie IMMER in bar:
+         * der Dienst rechnet nach tire_press_unit (REIFENEH: 1 = bar,
+         * 2 = psi, 3 = kPa) um, reifendruck_bar() in bin/byd.py (Issue #1:
+         * 14.09.2026 Kennung 1 bei 2.7, 19.10.2026 Kennung 3 bei 277).
+         * Unplausibel (unbekannte Kennung und mehr als 20) geht -1 hinaus -
+         * deshalb min -1: Loxone zieht daraus MinVal/Signed der Vorlage.
          *
          * VERBRBYD ist der Durchschnittsverbrauch, den das FAHRZEUG selbst
          * ausweist ("totalEnergy": "17.6kW-h/100km"). VERBRAUCH weiter oben
@@ -1871,13 +1874,13 @@ function by_felder()
          * Zahlen, zwei Herkuenfte, zwei Felder.
          * -------------------------------------------------------------- */
         'REIFENVL'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENVL',
-                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => -1, 'max' => 6),
         'REIFENVR'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENVR',
-                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => -1, 'max' => 6),
         'REIFENHL'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENHL',
-                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => -1, 'max' => 6),
         'REIFENHR'  => array('einheit' => 'bar',  'bez' => 'BY_FELD.REIFENHR',
-                             'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 6),
+                             'zeile' => 1, 'quelle' => 'bestand', 'min' => -1, 'max' => 6),
         'VERBRBYD'  => array('einheit' => 'kWh/100km', 'bez' => 'BY_FELD.VERBRBYD',
                              'zeile' => 1, 'quelle' => 'bestand', 'min' => 0, 'max' => 100),
         /* --------------------------------------------------------------
