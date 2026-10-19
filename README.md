@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.26
+Version 0.9.27
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,13 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.27
+
+Textnachzug zum Musterprojekt, Reiter **Einbindung in Loxone**, Seite „BYD Autos Laden und Klima“: Spotpreis aWATTar liefert die
+Werte jetzt über MQTT. Nr. 6 ist deshalb ein Virtueller Eingang `spot_awattar_rank` (bisher Virtueller HTTP-Eingang-Befehl
+`SPOT_RANK` aus der Vorlage „Spotpreis aWATTar“): Virtuellen Eingang mit dem Namen aus der Namenstabelle im Reiter ‚Einbindung in Loxone‘ des Plugins Spotpreis aWATTar (ab 1.2.38) anlegen.
+Kasten, Hinweise und Bild der Seite sind nachgezogen. Das Plugin selbst und seine Vorlagen sind unverändert.
 
 ## Neu in 0.9.26
 
