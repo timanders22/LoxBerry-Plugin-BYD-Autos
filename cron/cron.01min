@@ -11,4 +11,12 @@
 # Bewusst keine feste Zahl von ".." - gemessen legt LoxBerry die Cron-Datei
 # nach <Wurzel>/system/cron/cron.01min/<plugin>, also drei Ebenen unter der
 # Wurzel; ein $SELF/../.. landete damit auf <Wurzel>/system.
-"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>&1
+#
+# Gruppe 42 (0.9.29): zuerst der Waechter der Befehlsbruecke (startet sie nur mit dem Haken
+# "Befehle ueber MQTT annehmen"), dann der Dienstwaechter; dessen Fehlerausgabe nach cron.err
+# (Regeln/03).
+BBSH="REPLACELBPBINDIR/befehlsbruecke.sh"
+[ -f "$BBSH" ] && /bin/bash "$BBSH" waechter >/dev/null 2>&1
+mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
+touch "REPLACELBPLOGDIR/cron.err" 2>/dev/null
+"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"

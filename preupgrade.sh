@@ -383,6 +383,77 @@ elif [ -f "$SICHERUNG" ]; then
     fi
 fi
 
+# ---------- 4b. Laufzeitdaten herausretten (Nachtrag 29.10.2026) ----------
+# Bis hier ging nur verlauf/ ueber ein Update. Bestandsaufnahme aller Dateien, die Dienst, Oberflaeche, Bruecke und
+# Sprachmodul in data/plugins/<ordner>/ schreiben (Bericht Gruppe 42, Nachtrag). Gerettet wird, was nach dem Update
+# gebraucht wird:
+#   merker.json             Fahrzeugnummern (die Adressen in Loxone), Ladevorgang, Verbrauch, Vorklima-Merker
+#   anmeldung.json          die Anmeldesperre (C3) - ohne sie meldete sich der Dienst nach dem Update mit denselben
+#                           abgewiesenen Zugangsdaten wieder an, bis BYD das Konto sperrt
+#   befehlsbremse.json      PIN-Fehlschlaege und Befehle je Stunde (C5) - sonst begaenne die Zaehlung neu
+#   ladung_mitschrift.json  die offene Mitschrift einer laufenden Ladung (Ladekosten)
+#   ladekosten.json         Kosten und Preis der letzten Ladung (retained Thema bis zur naechsten Ladung)
+#   ansage_sperre.json      Wiederholsperre der Ansagen und Signal-Nachrichten (soll einen Neustart ueberstehen)
+# Bewusst NICHT: loxone.json, cache.json, zustand.json, rohdaten.json, felder_zeit (entstehen beim naechsten Abruf),
+# preisempfehlung.json (Anzeige, rechnet der Dienst neu), dienst.pid, soll_laufen (dafuer .lief_vorher),
+# .waechter_* und .verlauf_ts_* (Laufzeit des alten Prozesses; ein frisch installierter Dienst bekommt frische
+# Neustartversuche), befehle/ und antworten/ (ein Befehl von vor dem Update soll danach nicht mehr laufen),
+# aussentemp.json (kommt mit dem naechsten Wert ueber die Bruecke), gleichwert.json (60 s), einmalmeldung.json,
+# endpunkt_probe.json, *_letzte.json (Ergebnis der letzten Ansage fuer den Reiter).
+# Bauart wie Schritt 4: unter .neu packen, Zahl der Eintraege gegen die Liste halten, dann umbenennen; die vorhandene
+# Sicherung faellt erst, wenn die neue steht; ohne Datenordner (zweiter Anlauf) bleibt sie; ohne Marke vor diesem Lauf
+# stammt eine liegende aus einem frueheren Vorgang und geht nach .alt. Der Name liegt NEBEN dem Konfigordner.
+DSICHERUNG="$BASE/config/plugins/$PFOLDER.backup.daten.tar"
+DNEU="$DSICHERUNG.neu"
+rm -f "$DNEU" 2>/dev/null
+BY_DLISTE=""
+for f in merker.json anmeldung.json befehlsbremse.json ladung_mitschrift.json ladekosten.json ansage_sperre.json; do
+    [ -f "$PDATA/$f" ] && [ ! -L "$PDATA/$f" ] && BY_DLISTE="$BY_DLISTE $f"
+done
+if [ -n "$BY_DLISTE" ]; then
+    BY_DSOLL=$(echo $BY_DLISTE | wc -w | tr -d ' ')
+    if command -v tar >/dev/null 2>&1 \
+       && ( umask 077; tar -cf "$DNEU" -C "$PDATA" $BY_DLISTE ) 2>/dev/null \
+       && [ "$(tar -tf "$DNEU" 2>/dev/null | grep -c .)" = "$BY_DSOLL" ] \
+       && mv -f "$DNEU" "$DSICHERUNG" 2>/dev/null; then
+        chmod 600 "$DSICHERUNG" 2>/dev/null
+        echo "<OK> Laufzeitdaten gesichert:$BY_DLISTE - sie werden nach dem Update zurueckgespielt."
+    else
+        rm -f "$DNEU" 2>/dev/null
+        if [ -f "$DSICHERUNG" ]; then
+            echo "<WARNING> Die Laufzeitdaten liessen sich nicht neu sichern; die vorhandene Sicherung bleibt: $DSICHERUNG"
+        else
+            echo "<WARNING> Die Laufzeitdaten (Merker, Anmeldesperre, offene Ladung) liessen sich nicht sichern;"
+            echo "<WARNING> sie gehen bei diesem Update verloren."
+        fi
+    fi
+elif [ -f "$DSICHERUNG" ] && [ "$VORHER_MARKE" = "1" ]; then
+    echo "<INFO> Im Datenordner liegen keine Laufzeitdaten, wohl aber die Sicherung eines frueheren, nicht zu"
+    echo "<INFO> Ende gebrachten Updates - sie bleibt und wird nach dem Update zurueckgespielt: $DSICHERUNG"
+elif [ -f "$DSICHERUNG" ]; then
+    rm -f "${DSICHERUNG:?}.alt" 2>/dev/null
+    if mv -f "$DSICHERUNG" "$DSICHERUNG.alt" 2>/dev/null; then
+        chmod 600 "$DSICHERUNG.alt" 2>/dev/null
+        echo "<WARNING> Gesicherte Laufzeitdaten aus einem frueheren Vorgang werden NICHT eingespielt und liegen"
+        echo "<WARNING> beiseite: $DSICHERUNG.alt (die Deinstallation raeumt sie ab)."
+    else
+        echo "<WARNING> Gesicherte Laufzeitdaten aus einem frueheren Vorgang liessen sich nicht beiseitelegen: $DSICHERUNG"
+    fi
+fi
+
+# Gruppe 42 (0.9.29): die Befehlsbruecke anhalten - der Waechter startet sie nach dem Update wieder,
+# wenn der Haken gesetzt ist. Die Marke .upgrade_laeuft (oben) haelt ihn bis dahin an.
+BBSH="$PBIN/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    if bash "$BBSH" stop >/dev/null 2>&1; then
+        echo "<INFO> Befehlsbruecke angehalten (der Waechter startet sie nach dem Update, wenn der Haken gesetzt ist)."
+    else
+        echo "<INFO> Befehlsbruecke: stop meldete einen Fehler - sie lief vermutlich nicht."
+    fi
+else
+    echo "<INFO> Keine Befehlsbruecke installiert (Fassung vor 0.9.29) - nichts anzuhalten."
+fi
+
 # Alte Python-Zwischendateien wegraeumen. Eine .pyc, die aelter ist als der
 # Quelltext daneben, kann im ungluecklichen Fall statt des neuen Codes geladen
 # werden.

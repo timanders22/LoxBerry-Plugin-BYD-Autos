@@ -18,3 +18,7 @@ python3-venv
 # (ensurepip). Auf Systemen, auf denen ensurepip abgeschaltet ist, fehlt es -
 # und dann laesst sich pybyd nicht installieren.
 python3-pip
+
+# mosquitto-clients (Gruppe 42, 0.9.29): die Befehlsbruecke (bin/befehlsbruecke.sh) liest mit mosquitto_sub
+# und quittiert mit mosquitto_pub.
+mosquitto-clients

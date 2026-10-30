@@ -231,6 +231,39 @@ if [ -f "$VSICHERUNG" ] && [ -s "$VSICHERUNG" ]; then
     [ -n "$VSICHERUNG" ] && rm -f "$VSICHERUNG"
 fi
 
+# ---------- Laufzeitdaten zurueckspielen (Nachtrag 29.10.2026) ----------
+# preupgrade.sh (Schritt 4b) hat Merker, Anmeldesperre, Befehlsbremse, offene Ladung, Ladekosten und Ansagesperre
+# neben den Konfigordner gelegt. Zurueck kommen NUR Namen dieser festen Liste (die Sicherung bestimmt nicht, was
+# geschrieben wird), und nur, was im Datenordner fehlt. Erst wenn alles angekommen ist, geht die Sicherung weg.
+DSICHERUNG="$BASE/config/plugins/$PFOLDER.backup.daten.tar"
+if [ -f "$DSICHERUNG" ] && [ ! -L "$DSICHERUNG" ] && [ -s "$DSICHERUNG" ]; then
+    if ! command -v tar >/dev/null 2>&1; then
+        echo "<INFO> tar fehlt - die gesicherten Laufzeitdaten bleiben liegen unter $DSICHERUNG"
+    else
+        BY_DINHALT=$(tar -tf "$DSICHERUNG" 2>/dev/null)
+        BY_DZURUECK=""
+        BY_DFEHL=0
+        for f in merker.json anmeldung.json befehlsbremse.json ladung_mitschrift.json ladekosten.json ansage_sperre.json; do
+            printf '%s\n' "$BY_DINHALT" | grep -qx "$f" || continue
+            if [ -e "$PDATA/$f" ] || [ -L "$PDATA/$f" ]; then
+                continue
+            fi
+            if tar -xpf "$DSICHERUNG" -C "$PDATA" "$f" 2>/dev/null && [ -f "$PDATA/$f" ] && [ ! -L "$PDATA/$f" ]; then
+                BY_DZURUECK="$BY_DZURUECK $f"
+            else
+                BY_DFEHL=1
+            fi
+        done
+        if [ "$BY_DFEHL" = 0 ]; then
+            [ -n "$BY_DZURUECK" ] && echo "<OK> Laufzeitdaten zurueckgespielt:$BY_DZURUECK"
+            rm -f "$DSICHERUNG"
+        else
+            echo "<INFO> Nicht alle gesicherten Laufzeitdaten liessen sich zurueckspielen; die Sicherung"
+            echo "<INFO> bleibt liegen unter $DSICHERUNG"
+        fi
+    fi
+fi
+
 # ---------- Python suchen ----------
 # pybyd verlangt Python 3.11 oder neuer (Metadaten von pybyd 0.0.73:
 # "Requires-Python >=3.11"). Debian 12 liefert 3.11, Debian 13 liefert 3.13;
@@ -331,6 +364,41 @@ chmod 755 "$PBIN/dienst.sh" 2>/dev/null
 # Systembenutzer die Datei lesen koennen muss; der Dienst laeuft als loxberry.
 chmod 600 "$PCONFIG/byd.json" 2>/dev/null
 chmod 600 "$PCONFIG/zugang.json"
+
+# Gruppe 42 (G3): beim UPDATE (Marke .upgrade_laeuft) bekommt eine zurueckgespielte Konfiguration ohne
+# endpunkt_ein den Wert 1 - der Bestand nutzt den HTTP-Weg und soll nach dem Update nichts verlieren.
+# Eine Neuinstallation bleibt bei der Vorgabe 0 (Gateway V2 und Befehlsbruecke). Konfiguration UND
+# Zweitschrift; Rechte bleiben; ein vorhandener Wert bleibt unangetastet; leere oder kaputte Dateien auch.
+if [ -f "$MARKE" ] && command -v perl >/dev/null 2>&1; then
+    for f in "$PCONFIG/byd.json" "$BASE/config/plugins/$PFOLDER.backup.byd.json"; do
+        [ -s "$f" ] && [ ! -L "$f" ] || continue
+        perl -MJSON::PP -e '
+            my $f = shift; local $/;
+            open my $fh, "<", $f or exit 1; my $r = <$fh>; close $fh;
+            my $d = eval { JSON::PP->new->decode($r) };
+            exit 1 unless ref $d eq "HASH";
+            exit 3 unless %$d;
+            exit 3 if exists $d->{endpunkt_ein};
+            $d->{endpunkt_ein} = 1;
+            my $mode = (stat $f)[2] & 07777;
+            my $t = "$f.g42.$$";
+            umask 077;
+            open my $o, ">", $t or exit 1;
+            (print $o JSON::PP->new->pretty->canonical->encode($d)) or exit 1;
+            close $o or exit 1;
+            chmod $mode, $t;
+            rename $t, $f or exit 1;
+            exit 0;
+        ' "$f"
+        case $? in
+            0) echo "<OK> $(basename "$f"): HTTP-Endpunkt bleibt eingeschaltet (endpunkt_ein = 1, Bestand)." ;;
+            3) ;;
+            *) echo "<INFO> $(basename "$f"): endpunkt_ein liess sich nicht ergaenzen - der Endpunkt ist aus,"
+               echo "<INFO> bis er im Reiter MQTT eingeschaltet wird." ;;
+        esac
+    done
+fi
+chmod 600 "$PCONFIG/byd.json" 2>/dev/null
 
 # ---------- Dienst wieder anlaufen lassen ----------
 # preupgrade.sh legt den Merker "lief_vorher" NEBEN den Konfigordner, wenn der

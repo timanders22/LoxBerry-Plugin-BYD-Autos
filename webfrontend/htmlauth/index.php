@@ -221,7 +221,9 @@ $by_formular = ($by_post && isset($_POST['formular'])) ? (string) $_POST['formul
  * findet, steht seit dieser Fassung dort. */
 /* Nr. 36 b (seit 0.9.23): 'ansage' - der Knopf "Testansage" im Reiter Test. */
 $by_formulare = array('einstellungen', 'mqtt', 'dienst', 'token', 'log', 'test',
-                      'vorlage', 'selbsttest', 'sichern', 'zurueck', 'ladungen', 'ansage');
+                      'vorlage', 'selbsttest', 'sichern', 'zurueck', 'ladungen', 'ansage',
+                      /* Gruppe 42 (0.9.29): Hausform, Bruecke/Endpunkt, Testmeldung an SignalBot */
+                      'g42', 'g42mqtt', 'signaltest');
 if ($by_post && !in_array($by_formular, $by_formulare, true)) {
     $by_fehler[] = by_t('ALLG.FEHLER_FORMULAR');
     $by_post = false;
@@ -271,7 +273,9 @@ if ($by_post && $by_formular === 'vorlage') {
     $by_nr = (isset($_POST['nummer']) && preg_match('/^[0-9]{1,2}$/', (string) $_POST['nummer']))
         ? (int) $_POST['nummer'] : 1;
     $by_art = (string) $_POST['download'];
-    list($by_name, $by_inhalt) = ($by_art === 'vo') ? by_vorlage_vo($by_nr) : by_vorlage($by_nr);
+    // Gruppe 42: download=befehle - die Vorlage der Befehlsbruecke (bb_vorlage(), CRLF).
+    list($by_name, $by_inhalt) = ($by_art === 'befehle') ? by_vorlage_befehle()
+        : (($by_art === 'vo') ? by_vorlage_vo($by_nr) : by_vorlage($by_nr));
     header('Content-Type: application/x-download');
     // Die Anfuehrungszeichen um den Dateinamen sind Pflicht: ohne sie bricht
     // jeder Name, der ein Leerzeichen enthaelt.
@@ -357,7 +361,7 @@ if ($by_post && $by_formular === 'einstellungen') {
     $by_cfg['preisempf_ein'] = isset($_POST['preisempf_ein']) ? 1 : 0;
     $by_pq = (isset($_POST['preisempf_quelle']) && is_string($_POST['preisempf_quelle']))
         ? $_POST['preisempf_quelle'] : '';
-    if (array_key_exists($by_pq, by_preis_quellen())) {
+    if (array_key_exists($by_pq, by_preis_quellen()) || $by_pq === 'haus') {   // Gruppe 42: haus/strompreis
         $by_cfg['preisempf_quelle'] = $by_pq;
     } else {
         $by_fehler[] = by_t('EINST.FEHLER_PREISEMPF_QUELLE');
@@ -465,7 +469,8 @@ if ($by_post && $by_formular === 'einstellungen') {
         $by_beanstandet[] = 'heim_breite';
         $by_beanstandet[] = 'heim_laenge';
     }
-    if (!empty($by_cfg['ladeempf_ein']) && trim((string) $by_cfg['ladeempf_thema']) === '') {
+    if (!empty($by_cfg['ladeempf_ein']) && $by_cfg['ladeempf_quelle'] !== 'haus'
+        && trim((string) $by_cfg['ladeempf_thema']) === '') {
         $by_fehler[] = by_t('EINST.FEHLER_LADEEMPF_OHNE_THEMA');
         $by_beanstandet[] = 'ladeempf_thema';
     }
@@ -547,8 +552,9 @@ if ($by_post && $by_formular === 'einstellungen') {
     }
     $by_tmangel = array();
     $by_tbean = array();
-    $by_cfg['tts'] = ansage_formular_lesen($_POST, by_tts(), $by_tmangel, $by_tbean, by_ansage_opt(),
-                                           by_ansage_k());
+    $by_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
+    $by_cfg['tts'] = ansage_formular_lesen($_POST, by_tts(), $by_tmangel, $by_tbean,
+        array('modi' => by_ansage_modi(), 'ziele' => by_mit_zielen()), by_ansage_k(), $by_thinw);
     foreach ($by_tmangel as $by_tm) {
         $by_fehler[] = by_e($by_tm['text']);
     }
@@ -593,6 +599,7 @@ if ($by_post && $by_formular === 'einstellungen') {
         $by_meldungen[] = sprintf(by_t('EINST.NICHT_GESPEICHERT'), count($by_fehler));
     } elseif (by_config_speichern($by_cfg)) {
         $by_meldungen[] = by_t('EINST.GESPEICHERT');
+        foreach ($by_thinw as $by_th) { $by_meldungen[] = $by_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
     } else {
         $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
     }
@@ -683,6 +690,89 @@ if ($by_post && $by_formular === 'mqtt') {
     if ($by_beanstandet) {
         $by_eingaben_form = 'mqtt';
     }
+}
+
+/* ---------------- Gruppe 42 (0.9.29): Hausform (Reiter Einstellungen) ----------------
+ * Eigenes Formular (wie VW 0.9.33 save_g41): der Pruefweg des grossen Formulars traegt Zugangsdaten und
+ * Sprachausgabe - ein Fehler dort blockierte sonst alles. Beanstandet: nichts gespeichert, Eingaben zurueck (X-2). */
+if ($by_post && $by_formular === 'g42') {
+    $by_g = by_config();
+    foreach (array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein',
+                   'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_ausfall',
+                   'signal_vorklima') as $by_k) {
+        $by_g[$by_k] = isset($_POST[$by_k]) ? 1 : 0;
+    }
+    $by_tx = function ($k) {
+        return (isset($_POST[$k]) && is_string($_POST[$k])) ? trim($_POST[$k]) : '';
+    };
+    $by_ku = $by_tx('vorklima_kalt_unter');
+    $by_hu = $by_tx('vorklima_heiss_ueber');
+    if (!preg_match('/^-?[0-9]{1,2}$/', $by_ku) || !preg_match('/^-?[0-9]{1,2}$/', $by_hu)
+        || (int) $by_ku < -30 || (int) $by_hu > 45 || (int) $by_ku >= (int) $by_hu) {
+        $by_fehler[] = by_t('G42.FEHLER_KALT_HEISS');
+        $by_beanstandet[] = 'vorklima_kalt_unter';
+        $by_beanstandet[] = 'vorklima_heiss_ueber';
+    } else {
+        $by_g['vorklima_kalt_unter'] = (int) $by_ku;
+        $by_g['vorklima_heiss_ueber'] = (int) $by_hu;
+    }
+    $by_aq = $by_tx('ankunft_quelle');
+    if ($by_aq !== '' && (!preg_match('/^(tag|person):[A-Za-z0-9_-]{1,40}(,(tag|person):[A-Za-z0-9_-]{1,40}){0,3}$/', $by_aq)
+            || preg_match('/(^|,)person:(jemand|zaehler)(,|$)/', $by_aq))) {
+        $by_fehler[] = by_t('G42.FEHLER_ANKUNFT');
+        $by_beanstandet[] = 'ankunft_quelle';
+    } else {
+        $by_g['ankunft_quelle'] = $by_aq;
+    }
+    $by_eq = $by_tx('ladeempf_quelle');
+    $by_g['ladeempf_quelle'] = ($by_eq === 'haus') ? 'haus' : 'thema';
+    $by_sp = $by_tx('signal_praefix');
+    if (!preg_match('/^[A-Za-z0-9_-]{1,40}$/', $by_sp)) {
+        $by_fehler[] = by_t('G42.FEHLER_PRAEFIX');
+        $by_beanstandet[] = 'signal_praefix';
+    } else {
+        $by_g['signal_praefix'] = $by_sp;
+    }
+    if ($by_fehler) {
+        $by_meldungen[] = sprintf(by_t('EINST.NICHT_GESPEICHERT'), count($by_fehler));
+        $by_eingaben_form = 'g42';
+    } elseif (by_config_speichern($by_g)) {
+        $by_meldungen[] = by_t('EINST.GESPEICHERT');
+    } else {
+        $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
+    }
+    $by_tab = 'tab-settings';
+}
+
+/* Gruppe 42 (G8-Zusatz): Testmeldung an SignalBot - ab Werk "aus" (sendet nichts). */
+if ($by_post && $by_formular === 'signaltest') {
+    list($by_se, $by_ss) = by_signal_test();
+    if ($by_se === 'angenommen') {
+        $by_meldungen[] = by_e($by_ss);
+    } else {
+        $by_stoerungen[] = by_e($by_ss);
+    }
+    $by_tab = 'tab-settings';
+}
+
+/* Gruppe 42 (G2/G3): Reiter MQTT - Befehle ueber MQTT, zweiter Haken, HTTP-Endpunkt. Danach die Bruecke
+ * starten bzw. anhalten (der Waechter in cron.01min haelt sie danach). */
+if ($by_post && $by_formular === 'g42mqtt') {
+    $by_g = by_config();
+    foreach (array('befehle_mqtt_ein', 'befehle_mqtt_steuern', 'endpunkt_ein') as $by_k) {
+        $by_g[$by_k] = isset($_POST[$by_k]) ? 1 : 0;
+    }
+    if (by_config_speichern($by_g)) {
+        $by_meldungen[] = by_t('EINST.GESPEICHERT');
+        list($by_brc, $by_bwas, $by_baus) = by_bruecke_schalten($by_g);
+        if ($by_brc !== null && (int) $by_brc !== 0) {
+            $by_stoerungen[] = sprintf(by_t('BEFEHL.M_SCHALTEN_FEHL'), by_e($by_bwas), by_e(is_array($by_baus)
+                ? implode(' ', $by_baus) : (string) $by_baus));
+        }
+    } else {
+        $by_fehler[] = sprintf(by_t('EINST.FEHLER_SPEICHERN'), $by_p['config']);
+    }
+    $by_tab = 'tab-mqtt';
 }
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
@@ -779,22 +869,32 @@ if ($by_post && $by_formular === 'test') {
  * von den Anlaessen. Ins Protokoll nur die Kurzform ohne Text und Token. F5 nach dem
  * Knopf spricht nicht erneut: der Block U1 unten leitet um (303). Wie die anderen
  * Aktionsformulare verlangt der Zweig zusaetzlich seinen Marker (ansage_test). */
-if ($by_post && $by_formular === 'ansage' && !isset($_POST['ansage_test'])) {
+if ($by_post && $by_formular === 'ansage' && !isset($_POST['ansage_test']) && !isset($_POST['ansage_test_ziel'])) {
+    // Welle Mehrfach-Ziele (0.9.29): die Knoepfe "Testansage an Ziel n" tragen den Marker ansage_test_ziel.
     $by_fehler[] = by_t('ALLG.FEHLER_FORMULAR');
     $by_post = false;
 }
-if ($by_post && $by_formular === 'ansage') {
-    $by_ak = by_ansage_k();
-    $by_ar = ansage_testansage(by_tts(), $by_ak);
-    by_log('Testansage: ' . ansage_kurz($by_ar), $by_ar['stand'] === 0 ? 'WARN' : 'INFO', 0);
-    if ($by_ar['stand'] === 1) {
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
+ * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+if ($by_post && $by_formular === 'ansage' && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    $by_tk = by_ansage_k();
+    $by_tnur = (isset($_POST['ansage_test_ziel']) && by_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $by_tnur === 0) {
+        $by_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($by_tnur >= 1) {
+        $by_tr = ansage_testansage(by_tts(), $by_tk, $by_tnur);
+    } else {
+        $by_tr = ansage_testansage(by_tts(), $by_tk);
+    }
+    by_log('Testansage' . ($by_tnur >= 1 ? ' an Ziel ' . $by_tnur : '') . ': ' . ansage_kurz($by_tr));
+    if ($by_tr['stand'] === 1) {
         $by_meldungen[] = by_e(by_t('TEST.M_ANSAGE_TEST_OK'));
-    } elseif ($by_ar['stand'] === -1) {
+    } elseif ($by_tr['stand'] === -1) {
         $by_meldungen[] = by_e(sprintf(by_t('TEST.M_ANSAGE_TEST_NICHTS'),
-                                       ansage_kennung_text($by_ar['kennung'], $by_ak)));
+                                       ansage_kennung_text($by_tr['kennung'], $by_tk)));
     } else {
         $by_stoerungen[] = by_e(sprintf(by_t('TEST.M_ANSAGE_TEST_FEHL'),
-                                        ansage_kennung_text($by_ar['kennung'], $by_ak)));
+                                        ansage_kennung_text($by_tr['kennung'], $by_tk)));
     }
     $by_tab = 'tab-test';
 }
@@ -855,7 +955,7 @@ if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
     } elseif ((int) $_FILES['by_sicherung']['size'] > 262144) {
         $by_fehler[] = by_t('EINST.SICH_ZU_GROSS');
     } else {
-        list($by_neu, $by_mangel, $by_n, $by_zneu) = by_sicherung_lesen(
+        list($by_neu, $by_mangel, $by_n, $by_zneu, $by_spaet) = by_sicherung_lesen(
             (string) @file_get_contents($_FILES['by_sicherung']['tmp_name']));
         if ($by_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
@@ -869,6 +969,11 @@ if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
             $by_sd = json_decode((string) @file_get_contents($_FILES['by_sicherung']['tmp_name']), true);
             if (is_array($by_sd) && !array_key_exists('tts', $by_sd)) {
                 $by_meldungen[] = by_t('EINST.SICH_OHNE_ANSAGE');
+            }
+            /* Welle Mehrfach-Ziele (0.9.29): fehlte die Liste der weiteren Ziele in der Sicherung (aeltere Fassung),
+             * gelten die jetzigen weiteren Ziele - die Seite nennt sie (Spaetliste aus by_sicherung_lesen()). */
+            if ($by_spaet) {
+                $by_meldungen[] = sprintf(by_t('EINST.SICH_SPAET'), by_e(implode(', ', $by_spaet)));
             }
             /* C10: die Zugangsdaten - mit denselben Regeln geprueft wie im
              * Formular (by_sicherung_lesen). Leere Felder behalten den
@@ -1088,6 +1193,13 @@ ob_start();
   <div class="sm-kachel"><?= by_e(by_t('ALLG.FAHRZEUGE')) ?>
     <b><?= count($by_fahrzeuge) ?></b>
     <span class="sm-hilfe"><?= $by_libv !== '' ? 'pybyd ' . by_e($by_libv) : by_e(by_t('ALLG.LIB_FEHLT')) ?></span>
+  </div>
+  <?php /* Gruppe 42 (E12): Kopf-Kachel MQTT in Hausform - gross mqtt_ein, klein Autostart und Gateway-Fassung. */ ?>
+  <div class="sm-kachel">MQTT
+    <b class="<?= !empty($by_cfg['mqtt_ein']) ? 'sm-an' : 'sm-aus' ?>"><?= by_e(by_t(!empty($by_cfg['mqtt_ein']) ? 'ALLG.EIN' : 'ALLG.AUS')) ?></b>
+    <span class="sm-hilfe"><?= by_e(sprintf(by_t('ALLG.KACHEL_MQTT_HILFE'),
+        !$by_mqtt['gefunden'] ? by_t('ALLG.NICHT_FESTSTELLBAR') : by_t($by_mqtt['autostart'] ? 'ALLG.EIN' : 'ALLG.AUS'),
+        !empty($by_mqtt['fassung']) ? 'V' . (int) $by_mqtt['fassung'] : by_t('ALLG.NICHT_FESTSTELLBAR'))) ?></span>
   </div>
   <div class="sm-kachel"><?= by_e(by_t('ALLG.SELBSTPRUEFUNG')) ?>
     <b class="@@BY_BILANZ_KLASSE@@">@@BY_BILANZ_KACHEL@@</b>
@@ -1370,7 +1482,8 @@ ob_start();
   <select data-role="none" class="sm-auswahl" id="preisempf_quelle" name="preisempf_quelle"<?= by_markierung('preisempf_quelle') ?>>
 <?php $by_pq_ist = by_eingabe('einstellungen', 'preisempf_quelle',
           is_string($by_cfg['preisempf_quelle']) ? $by_cfg['preisempf_quelle'] : '');
-      foreach (array('awattar' => 'EINST.O_PREISEMPF_AWATTAR', 'tibber' => 'EINST.O_PREISEMPF_TIBBER') as $by_pk => $by_pt) { ?>
+      foreach (array('awattar' => 'EINST.O_PREISEMPF_AWATTAR', 'tibber' => 'EINST.O_PREISEMPF_TIBBER',
+                     'haus' => 'EINST.O_PREISEMPF_HAUS') as $by_pk => $by_pt) { ?>
     <option value="<?= by_e($by_pk) ?>"<?= $by_pq_ist === $by_pk ? ' selected' : '' ?>><?= by_e(by_t($by_pt)) ?></option>
 <?php } ?>
   </select>
@@ -1415,7 +1528,10 @@ ob_start();
     'w' => function ($n, $g) { return by_eingabe('einstellungen', $n, $g); },
     'm' => function ($n) { return by_markierung($n); },
     'c' => function ($n, $g) { return by_eingabe_an('einstellungen', $n, $g); },
-    'modi' => by_ansage_modi()), by_ansage_k()) ?>
+    'modi' => by_ansage_modi(),
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
+'ziele' => by_mit_zielen(),
+'ziele_post' => by_eingaben_aktiv() === 'einstellungen' ? by_ziele_x2_post(by_eingaben_setzen()['werte']) : null), by_ansage_k()); ?>
 <h3><?= by_e(by_t('EINST.H_ANSAGE_ANLAESSE')) ?></h3>
 <?php foreach (by_ansage_anlaesse() as $by_a) { ?>
 <div class="sm-feld">
@@ -1453,6 +1569,63 @@ ob_start();
 </div>
 <p class="sm-hilfe"><?= by_t('EINST.VIN_HINWEIS') ?></p>
 <?php } ?>
+
+<?php /* ================= Gruppe 42 (0.9.29): Hausform ================= */
+$by_gw = function ($k) use ($by_cfg) { return by_eingabe('g42', $k, $by_cfg[$k]); };
+$by_gh = function ($k) use ($by_cfg) { return by_eingabe_an('g42', $k, !empty($by_cfg[$k])) ? 'checked' : ''; }; ?>
+<h2><?= by_e(by_t('G42.H_TITEL')) ?></h2>
+<p class="sm-hilfe"><?= by_t('G42.H_TEXT') ?></p>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="formular" value="g42">
+<?php foreach (array('haus_abfahrt_ein' => 'G42.L_HAUS_ABFAHRT', 'vorklima_anwesend_ein' => 'G42.L_ANWESEND',
+                     'vorklima_wetter_ein' => 'G42.L_WETTER') as $by_k => $by_l) { ?>
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="<?= $by_k ?>" value="1" <?= $by_gh($by_k) ?>> <?= by_e(by_t($by_l)) ?></label></div>
+<?php } ?>
+<div class="sm-hilfe"><?= by_t('G42.H_VORKLIMA') ?></div>
+<div class="sm-feld"><label for="vorklima_kalt_unter"><?= by_e(by_t('G42.L_KALT')) ?></label>
+  <input data-role="none" type="text" id="vorklima_kalt_unter" name="vorklima_kalt_unter" value="<?= by_e($by_gw('vorklima_kalt_unter')) ?>"<?= by_markierung('vorklima_kalt_unter') ?>></div>
+<div class="sm-feld"><label for="vorklima_heiss_ueber"><?= by_e(by_t('G42.L_HEISS')) ?></label>
+  <input data-role="none" type="text" id="vorklima_heiss_ueber" name="vorklima_heiss_ueber" value="<?= by_e($by_gw('vorklima_heiss_ueber')) ?>"<?= by_markierung('vorklima_heiss_ueber') ?>></div>
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="ankunft_ein" value="1" <?= $by_gh('ankunft_ein') ?>> <?= by_e(by_t('G42.L_ANKUNFT')) ?></label></div>
+<div class="sm-feld"><label for="ankunft_quelle"><?= by_e(by_t('G42.L_ANKUNFT_QUELLE')) ?></label>
+  <input data-role="none" type="text" id="ankunft_quelle" name="ankunft_quelle" value="<?= by_e($by_gw('ankunft_quelle')) ?>"<?= by_markierung('ankunft_quelle') ?> placeholder="tag:auto,person:anna">
+  <div class="sm-hilfe"><?= by_t('G42.H_ANKUNFT') ?></div></div>
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="haus_strompreis_ein" value="1" <?= $by_gh('haus_strompreis_ein') ?>> <?= by_e(by_t('G42.L_STROMPREIS')) ?></label>
+  <div class="sm-hilfe"><?= by_t('G42.H_STROMPREIS') ?></div></div>
+<div class="sm-feld"><label for="ladeempf_quelle"><?= by_e(by_t('G42.L_EMPF_QUELLE')) ?></label>
+  <select data-role="none" class="sm-auswahl" id="ladeempf_quelle" name="ladeempf_quelle">
+<?php foreach (array('thema' => 'G42.O_THEMA', 'haus' => 'G42.O_HAUS') as $by_ok => $by_ot) { ?>
+    <option value="<?= $by_ok ?>"<?= $by_gw('ladeempf_quelle') === $by_ok ? ' selected' : '' ?>><?= by_e(by_t($by_ot)) ?></option>
+<?php } ?>
+  </select></div>
+<h3><?= by_e(by_t('G42.H_SIGNAL')) ?></h3>
+<p class="sm-hilfe"><?= by_t('G42.H_SIGNAL_TEXT') ?></p>
+<?php foreach (array('signal_ein' => 'G42.L_SIGNAL', 'signal_laden_fertig' => 'G42.L_SIG_FERTIG',
+                     'signal_ausfall' => 'G42.L_SIG_AUSFALL', 'signal_vorklima' => 'G42.L_SIG_VORKLIMA') as $by_k => $by_l) { ?>
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="<?= $by_k ?>" value="1" <?= $by_gh($by_k) ?>> <?= by_e(by_t($by_l)) ?></label></div>
+<?php } ?>
+<div class="sm-feld"><label for="signal_praefix"><?= by_e(by_t('G42.L_SIGNAL_PRAEFIX')) ?></label>
+  <input data-role="none" type="text" id="signal_praefix" name="signal_praefix" value="<?= by_e($by_gw('signal_praefix')) ?>"<?= by_markierung('signal_praefix') ?> placeholder="signalbot"></div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= by_e(by_t('ALLG.SPEICHERN')) ?></button>
+</div>
+<input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+</form>
+<h3><?= by_e(by_t('SIGNAL.H_TEST')) ?></h3>
+<p class="sm-hilfe"><?= by_t('SIGNAL.H_TEST_TEXT') ?></p>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="formular" value="signaltest">
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= by_e(by_t('SIGNAL.K_TEST')) ?></button>
+</div>
+<input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+</form>
 
 <h2><?= by_t('EINST.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= by_t('EINST.SICH_ERKLAERUNG') ?></div>
@@ -1557,11 +1730,67 @@ ob_start();
 </table>
 <p class="sm-hilfe"><?= by_t('MQTT.RETAIN_ERKLAERUNG') ?></p>
 <p class="sm-hilfe"><?= by_t('MQTT.PLATZHALTER') ?></p>
+<?php /* ================= Gruppe 42 (0.9.29): Gateway V2, Befehlsbruecke, HTTP-Endpunkt ================= */ ?>
+<h2><?= by_e(by_t('G42.H_V2')) ?></h2>
+<?php if ((int) $by_mqtt['fassung'] === 1) { ?>
+<p class="sm-hilfe"><?= by_t('G42.V2_NUR_V1') ?></p>
+<?php } else { $by_v2 = by_v2_haken($by_cfg); ?>
+<p class="sm-hilfe"><?= by_t('G42.V2_TEXT') ?></p>
+<?php if (!$by_v2) { ?><div class="sm-warnung"><?= by_e(by_t('PRUEF.V2_LEER')) ?></div><?php } else { ?>
+<div class="sm-breit"><table class="sm-tbl">
+<tr><th><?= by_e(by_t('MQTT.T_THEMA')) ?></th><th><?= by_e(by_t('G42.T_NAME')) ?></th><th>Noncached</th><th><?= by_e(by_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
+<?php foreach ($by_v2 as $by_h) { ?>
+<tr><td><span class="sm-mono"><?= by_e($by_h['thema']) ?></span></td><td><span class="sm-mono"><?= by_e($by_h['name']) ?></span></td>
+    <td><?= by_e(by_t($by_h['noncached'] ? 'ALLG.JA' : 'ALLG.NEIN')) ?></td><td><?= $by_h['bez'] !== '' ? by_t($by_h['bez']) : '' ?></td></tr>
+<?php } ?>
+</table></div>
+<?php } } ?>
+
+<h2><?= by_e(by_t('BEFEHL.H_TITEL')) ?></h2>
+<div class="sm-warnung"><?= by_t('BEFEHL.UDP_HINWEIS') ?></div>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<input data-role="none" type="hidden" name="formular" value="g42mqtt">
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1" <?= !empty($by_cfg['befehle_mqtt_ein']) ? 'checked' : '' ?>>
+  <?= by_e(by_t('BEFEHL.L_ANNEHMEN')) ?></label><div class="sm-hilfe"><?= by_t('BEFEHL.H_ANNEHMEN') ?></div></div>
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="befehle_mqtt_steuern" value="1" <?= !empty($by_cfg['befehle_mqtt_steuern']) ? 'checked' : '' ?>>
+  <?= by_e(by_t('BEFEHL.L_STEUERN')) ?></label><div class="sm-hilfe"><?= by_t('BEFEHL.H_STEUERN') ?></div></div>
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="endpunkt_ein" value="1" <?= !empty($by_cfg['endpunkt_ein']) ? 'checked' : '' ?>>
+  <?= by_e(by_t('BEFEHL.L_ENDPUNKT')) ?></label><div class="sm-hilfe"><?= by_t('BEFEHL.H_ENDPUNKT') ?></div></div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= by_e(by_t('ALLG.SPEICHERN')) ?></button>
+</div>
+<input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+</form>
+<?php list($by_bl, $by_blf) = by_bruecke_liste(); if ($by_bl === null) { ?>
+<div class="sm-warnung"><?= by_e($by_blf) ?></div>
+<?php } else { ?>
+<div class="sm-breit"><table class="sm-tbl">
+<tr><th><?= by_e(by_t('MQTT.T_THEMA')) ?></th><th><?= by_e(by_t('BEFEHL.T_ART')) ?></th><th><?= by_e(by_t('BEFEHL.T_TITEL')) ?></th></tr>
+<?php foreach ((isset($by_bl['befehle']) && is_array($by_bl['befehle']) ? $by_bl['befehle'] : array()) as $by_be) { ?>
+<tr><td><span class="sm-mono"><?= by_e(isset($by_be['thema']) ? $by_be['thema'] : '') ?></span></td>
+    <td><?= by_e(isset($by_be['art']) ? $by_be['art'] : '') ?></td><td><?= by_e(isset($by_be['titel']) ? $by_be['titel'] : '') ?></td></tr>
+<?php } ?>
+</table></div>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<input data-role="none" type="hidden" name="formular" value="vorlage">
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="download" value="befehle"><?= by_e(by_t('BEFEHL.K_VORLAGE')) ?></button>
+</div>
+<input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
+</form>
+<?php } ?>
 <div class="sm-hinweis"><?= by_t('MQTT.UMBENENNUNG') ?></div>
 </div>
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
 <div class="sm-seite<?= $by_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
+<?php /* Gruppe 42 (G3): die HTTP-Vorlagen sind der bisherige Weg. */ ?>
+<div class="sm-hinweis"><?= by_t('G42.LOX_BISHER') ?><?= empty($by_cfg['endpunkt_ein']) ? ' ' . by_t('G42.LOX_AUS') : '' ?></div>
 
 <!-- EINE gesammelte Legende fuer den ganzen Reiter (REGELN_2,
      "Farblegende der Knoepfe"). Bis 0.9.5 standen hier zwei, jede ueber
@@ -2004,7 +2233,8 @@ foreach ($by_mit_kwh as $by_x) { $by_summe += $by_x['kwh']; }
 <tr><th><?= by_e(by_t('ALLG.FAHRZEUG')) ?></th><th><?= by_e(by_t('LADUNG.T_START')) ?></th>
     <th><?= by_e(by_t('LADUNG.T_ENDE')) ?></th><th><?= by_e(by_t('LADUNG.T_DAUER')) ?></th>
     <th><?= by_e(by_t('LADUNG.T_SOC')) ?></th><th><?= by_e(by_t('LADUNG.T_KWH')) ?></th>
-    <th><?= by_e(by_t('LADUNG.T_KM')) ?></th></tr>
+    <th><?= by_e(by_t('LADUNG.T_KM')) ?></th>
+    <th><?= by_e(by_t('LADUNG.T_KOSTEN')) ?></th><th><?= by_e(by_t('LADUNG.T_PREIS')) ?></th></tr>
 <?php foreach ($by_ladungen as $by_l) { ?>
 <tr><td><?= by_e($by_l['fahrzeug']) ?></td>
     <td><?= by_e(date('d.m.Y H:i', $by_l['start'])) ?></td>
@@ -2014,7 +2244,9 @@ foreach ($by_mit_kwh as $by_x) { $by_summe += $by_x['kwh']; }
         : by_e(rtrim(rtrim(number_format($by_l['soc_start'], 1, ',', ''), '0'), ',')) . ' &rarr; '
         . by_e(rtrim(rtrim(number_format($by_l['soc_ende'], 1, ',', ''), '0'), ',')) . ' %' ?></td>
     <td><?= $by_l['kwh'] === null ? '&ndash;' : by_e(number_format($by_l['kwh'], 2, ',', '')) ?></td>
-    <td><?= $by_l['km'] === null ? '&ndash;' : by_e(number_format($by_l['km'], 0, ',', '.')) ?></td></tr>
+    <td><?= $by_l['km'] === null ? '&ndash;' : by_e(number_format($by_l['km'], 0, ',', '.')) ?></td>
+    <td><?= $by_l['kosten'] === null ? '&ndash;' : by_e(number_format($by_l['kosten'], 2, ',', '')) . ' &euro;' ?></td>
+    <td><?= $by_l['preis'] === null ? '&ndash;' : by_e(number_format($by_l['preis'], 1, ',', '')) . ' ct' ?></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -2113,6 +2345,9 @@ if (isset($_GET['rohdaten'])) {
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?= by_e(by_t('TEST.K_ANSAGE_TEST')) ?></button>
+<?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
+   ohne weitere Ziele nichts. */
+if (by_mit_zielen()) { echo ansage_testknoepfe_html(by_tts(), by_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
   </form>
 </div>
 
@@ -2179,6 +2414,13 @@ if (isset($_GET['rohdaten'])) {
 
 <!-- ================= Reiter: Logdateien ================= -->
 <div class="sm-seite<?= $by_tab === 'tab-log' ? ' sm-active' : '' ?>" id="tab-log">
+<?php /* Gruppe 42: Protokoll der Befehlsbruecke und Fehlerausgabe des Waechters (je die letzten 40 Zeilen). */
+foreach (array('befehle_start.log' => 'G42.LOG_BRUECKE', 'cron.err' => 'G42.LOG_CRONERR') as $by_lf => $by_lt) {
+    $by_lp = $by_p['logdir'] . '/' . $by_lf;
+    if (is_file($by_lp) && filesize($by_lp) > 0) { ?>
+<h3><?= by_e(by_t($by_lt)) ?></h3>
+<pre class="sm-mono"><?= by_e(implode("\n", by_log_ende($by_lp, 40))) ?></pre>
+<?php } } ?>
 <h2><?= by_e(by_t('LOG.H_TITEL')) ?></h2>
 <?php
 if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {

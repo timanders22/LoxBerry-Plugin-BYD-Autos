@@ -18,6 +18,9 @@
  *
  * Antwort: EINE Zeile ohne Text und ohne Token, z. B.
  *   ANSAGE;STAND=1;ART=musicserver;KENNUNG=-;HTTP=200;ZEICHEN=39
+ * Mit weiteren Ausgabezielen (seit 0.9.29, Stamm 1.2.1, Welle Mehrfach-Ziele) sprechen alle gleichzeitig, jedes
+ * hoechstens 'frist' = 20 s (by_ansage_k()); die Zeile traegt dann zusaetzlich ;ZIELE=x/y - der Dienst liest nur
+ * die Felder, die er kennt (B8).
  * Rueckgabewert wie ansage_cli(): 0 gesendet, 1 gescheitert, 3 nichts gesendet
  * ohne Fehler (Ausgabe aus), 2 Aufruf falsch. 1 auch, wenn die Bibliothek fehlt.
  *

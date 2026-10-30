@@ -17,7 +17,8 @@
 #
 # Ohne Marke ist es eine NEUINSTALLATION. Liegengebliebene Zweitschriften
 # einer frueheren Installation - config/plugins/<ordner>.backup.byd.json,
-# .backup.zugang.json und .backup.verlauf.tar - gehen nach <name>.alt (0600),
+# .backup.zugang.json, .backup.verlauf.tar und (seit dem Nachtrag 29.10.2026)
+# .backup.daten.tar - gehen nach <name>.alt (0600),
 # der Startmerker .lief_vorher wird entfernt, gemeldet mit genau einer
 # <WARNING>. Bis 0.9.19 spielte postinstall.sh sie ungefragt zurueck: Token,
 # BYD-Zugang samt Steuer-PIN und Ladehistorie des frueheren Kontos, und der
@@ -44,7 +45,8 @@ BEISEITE=""
 FEST=""
 for ZIEL in "$BASE/config/plugins/$PFOLDER.backup.byd.json" \
             "$BASE/config/plugins/$PFOLDER.backup.zugang.json" \
-            "$BASE/config/plugins/$PFOLDER.backup.verlauf.tar"; do
+            "$BASE/config/plugins/$PFOLDER.backup.verlauf.tar" \
+            "$BASE/config/plugins/$PFOLDER.backup.daten.tar"; do
     if [ -e "$ZIEL" ] || [ -L "$ZIEL" ]; then
         rm -f "${ZIEL:?}.alt" 2>/dev/null
         if mv -f "$ZIEL" "$ZIEL.alt" 2>/dev/null; then

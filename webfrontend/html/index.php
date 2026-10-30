@@ -38,6 +38,12 @@
  * Und einer, der nichts tut:
  *   ?selftest=1&token=<TOKEN>
  *
+ * Gruppe 42 (0.9.29, Hausform): der Endpunkt haengt am Haken endpunkt_ein (Reiter MQTT). Neue
+ * Anlagen haben ihn AUS (Werte ueber das MQTT-Gateway V2, Befehle ueber die Befehlsbruecke);
+ * beim Update bleibt er an (postinstall.sh). Aus: jeder Aufruf nach der Tokenpruefung antwortet
+ * 403 FEHLER;OK=0;GRUND=ENDPUNKT_AUS - nur ?selftest=1 bleibt offen. Die schaltenden Befehle
+ * prueft by_befehl_annehmen() in by_lib.php - dieselbe Funktion wie fuer die Bruecke.
+ *
  * Der Endpunkt spricht NIE selbst mit der BYD-Schnittstelle. Lesende Aktionen
  * beantwortet er aus dem Zwischenspeicher, ausloesende legt er in einer
  * Warteschlange ab, die der Dienst abarbeitet. Deshalb antwortet er dem
@@ -104,23 +110,8 @@ function by_ende($code, $zeile, $zusatz = '')
     exit;
 }
 
-/**
- * Einen fremden Text so saeubern, dass er in EIN Feld der Statuszeile passt.
- *
- * Die Zeile besteht aus Paaren NAME=WERT, getrennt durch ";". Ein eingesetzter
- * Text, der selbst ein Semikolon oder einen Zeilenumbruch traegt, schiebt
- * zusaetzliche Paare hinein - Loxone liest dann nicht "kein Wert", sondern
- * einen FALSCHEN. Das "=" bleibt stehen: es macht kein neues Paar auf, solange
- * kein Semikolon davor steht, und in Fehlermeldungen fremder Bibliotheken
- * steht es haeufig.
- *
- * ERGAENZT 03.09.2026: bis 0.9.5 saeuberte genau EINE der beiden
- * Einsetzstellen. Die andere - die Absturzmeldung - nahm getMessage() roh.
- */
-function by_sicher($text)
-{
-    return str_replace(array("\r", "\n", ';'), ' ', (string) $text);
-}
+/* Gruppe 42 (0.9.29): by_sicher() steht jetzt in by_lib.php - die Antwortzeilen der schaltenden Befehle
+ * baut by_befehl_annehmen() fuer Endpunkt und Befehlsbruecke (ein Ort, wortgleich verlegt). */
 
 /* ---------------- Konfiguration lesen, NICHT anlegen ----------------
  *
@@ -182,6 +173,13 @@ if ($by_soll === '') {
 }
 if (!hash_equals($by_soll, $by_ist)) {
     by_ende(403, 'BYD;OK=0;GRUND=TOKEN');
+}
+/* Gruppe 42 (G3): endpunkt_ein = 0 sperrt den Endpunkt (lesend und schaltend) - nach dem Token, damit
+ * ein falsches Token weiter TOKEN heisst. Die Befehlsbruecke haengt nicht daran. */
+if (empty($by_cfg['endpunkt_ein'])) {
+    by_ende(403, 'FEHLER;OK=0;GRUND=ENDPUNKT_AUS',
+        'Der HTTP-Endpunkt ist ausgeschaltet (Reiter MQTT, Haken "HTTP-Endpunkt fuer Loxone"). '
+        . 'Werte kommen ueber das MQTT-Gateway V2, Befehle ueber die Befehlsbruecke.');
 }
 
 /* ---------------- Aktion (Weissliste) ---------------- */
@@ -345,103 +343,11 @@ if ($by_aktion === 'position') {
 
 /* ================= Ausloesende Aktionen ================= */
 
-/* Ein Aufruf, der etwas ausloest, verlangt ein Token - das ist oben schon
- * geprueft. Zusaetzlich verlangt jeder SCHALTENDE Befehl den Haken im Reiter
- * Einstellungen. "abruf" schaltet nichts am Fahrzeug und braucht ihn nicht,
- * ist aber trotzdem tokenpflichtig: er loest einen Netzabruf aus. */
-if (by_befehl_schaltet($by_aktion) && empty($by_cfg['steuerung_ein'])) {
-    by_ende(403, 'SET;OK=0;GRUND=STEUERUNG_AUS',
-        'Schreibende Befehle sind gesperrt. Reiter Einstellungen, Haken '
-        . '"Schreibende Befehle zulassen".');
-}
-/* Welle Bild 17 (0.9.26, Hausherr 17.10.2026): der ZWEITE Haken. Verriegeln und Entriegeln, Suchen (Hupe und
- * Licht) und Blinken wirken auf ein Fahrzeug, das im oeffentlichen Raum steht - ein versehentliches Entriegeln
- * laesst es offen stehen, ohne dass es jemand merkt. Sie haengen deshalb nicht am allgemeinen Steuerungshaken
- * allein (Form wie AudiConnect, GRUND=EINGRIFF_GESPERRT). Abgewiesen wird VOR jeder Parameterpruefung und vor
- * der Gleichwert-Unterdrueckung: ein abgewiesener Aufruf merkt nichts und reiht nichts ein. */
-if (by_befehl_eingreifend($by_aktion) && empty($by_cfg['gefahr_ein'])) {
-    by_ende(403, 'SET;OK=0;GRUND=EINGRIFF_GESPERRT',
-        'Dieser Befehl greift in ein Fahrzeug ein, das im oeffentlichen Raum steht. Reiter Einstellungen, '
-        . 'zweiter Haken "Eingreifende Befehle zulassen".');
-}
-
-$by_befehl = array('aktion' => $by_aktion, 'fahrzeug' => $by_fahrzeug);
-$by_eig = by_befehle()[$by_aktion];
-
-if ($by_eig['zusatz'] === 'temp') {
-    if ($by_temp === '') {
-        by_ende(400, 'SET;OK=0;GRUND=TEMP_FEHLT',
-            'Der Parameter temp fehlt (Zieltemperatur in Grad Celsius).');
-    }
-    $by_befehl['temp'] = str_replace(',', '.', $by_temp);
-    if ($by_minuten !== '') {
-        $by_befehl['minuten'] = (int) $by_minuten;
-    }
-} elseif ($by_eig['zusatz'] === 'stufe') {
-    if ($by_stufe === '') {
-        by_ende(400, 'SET;OK=0;GRUND=STUFE_FEHLT',
-            'Der Parameter stufe fehlt. 0 schaltet aus, ein hoeherer Wert ein - welche '
-            . 'Stufen dieses Fahrzeug kennt, sagt der Reiter Test.');
-    }
-    $by_befehl['stufe'] = (int) $by_stufe;
-}
-
-/* X-7 (B-Nachzug 01.10.2026): Gleichwert-Unterdrueckung fuer Sollwerte,
- * siehe Kopf und by_lib.php. Erst hier, hinter Token, Haken und allen
- * Parameterpruefungen: ein abgewiesener Aufruf merkt nichts. */
-$by_gw = by_gleichwert_gruppe($by_befehl);
-$by_gw_schl = '';
-$by_gw_marke = '';
-if ($by_gw !== null) {
-    $by_gw_schl = by_gleichwert_fz($by_f, $by_fahrzeug) . '|' . $by_gw[0];
-    list($by_gw_urteil, $by_gw_seit, $by_gw_marke) = by_gleichwert_pruefen($by_gw_schl, $by_gw[1]);
-    if ($by_gw_urteil === 'MERKER') {
-        by_log('Endpunkt: der Merker der Gleichwert-Unterdrueckung (' . by_gleichwert_datei()
-             . ') laesst sich nicht oeffnen, sperren oder schreiben - Sollwert-Befehle werden '
-             . 'mit 503 abgewiesen, bis das behoben ist.', 'ERROR');
-        by_ende(503, sprintf('SET;OK=0;AKTION=%s;GRUND=BREMSE_MERKER', $by_aktion),
-            'Die Merkerdatei der Gleichwert-Unterdrueckung laesst sich nicht oeffnen oder '
-            . 'schreiben - Sollwert-Befehle werden abgewiesen, bis das behoben ist. Pruefen: '
-            . 'Platz und Eigentuemer (loxberry) des Datenordners des Plugins.');
-    }
-    if ($by_gw_urteil === 'UNVERAENDERT') {
-        by_ende(200, sprintf('SET;OK=1;AKTION=%s;UNVERAENDERT=1;SEIT_S=%d;MELDUNG=%s', $by_aktion,
-            (int) $by_gw_seit, by_sicher('Derselbe Befehl ging vor ' . (int) $by_gw_seit
-                . ' s hinaus - es wurde nichts gesendet. Gleiche Sollwerte innerhalb von '
-                . BY_GLEICHWERT_S . ' s gehen nur einmal an BYD.')));
-    }
-}
-
-/* Der eigentliche Vorgang laeuft in einem Netz: stirbt etwas darin - eine
- * fehlende Erweiterung, ein TypeError, was auch immer -, bekommt der
- * Miniserver sonst null Byte und HTTP 500. Kein Protokolleintrag, keine
- * Meldung, nichts zum Suchen. Throwable faengt seit PHP 7 auch Error. */
-try {
-    list($by_erg, $by_meldung) = by_befehl_absetzen($by_befehl);
-} catch (Throwable $by_t) {
-    if ($by_gw_marke !== '') {
-        by_gleichwert_vergessen($by_gw_schl, $by_gw_marke);
-    }
-    by_log('Endpunkt: der Befehl ' . $by_aktion . ' ist abgestuerzt: '
-         . $by_t->getMessage(), 'ERROR');
-    by_ende(500, sprintf('SET;OK=0;AKTION=%s;ERR=%s (%s:%d)', $by_aktion,
-        by_sicher($by_t->getMessage()), basename($by_t->getFile()),
-        $by_t->getLine()));
-}
-
-/* Rueckgabe 2 heisst "eingereiht, Ergebnis unbekannt" - das ist kein Fehler
- * und kein Erfolg. HTTP 202 sagt genau das; ein 200 wuerde einen Erfolg
- * behaupten, den niemand geprueft hat, ein 500 einen Fehler, den es nicht
- * gibt. */
-if ($by_gw_marke !== '' && (int) $by_erg === 0) {
-    // Abgelehnt: nicht gemerkt, der naechste gleiche Befehl geht hinaus.
-    by_gleichwert_vergessen($by_gw_schl, $by_gw_marke);
-}
-$by_code = 200;
-if ($by_erg === 0) {
-    $by_code = 400;
-} elseif ($by_erg === 2) {
-    $by_code = 202;
-}
-by_ende($by_code, sprintf('SET;OK=%d;AKTION=%s;MELDUNG=%s', $by_erg, $by_aktion,
-    by_sicher($by_meldung)));
+/* Gruppe 42 (0.9.29, G2): die Pruefungen, die bis 0.9.28 hier inline standen (Steuerungshaken,
+ * zweiter Haken gefahr_ein, Zusatzwerte, X-7-Gleichwert-Unterdrueckung, Einreihen), stehen jetzt in
+ * by_befehl_annehmen() - in DERSELBEN Reihenfolge und mit denselben Antwortzeilen. Die Befehlsbruecke
+ * ruft dieselbe Funktion mit der Quelle 'mqtt'. Rueckgabe 2 heisst "eingereiht, Ergebnis unbekannt"
+ * (HTTP 202), 0 abgelehnt (400), 1 erledigt oder unveraendert (200). */
+$by_erg = by_befehl_annehmen($by_aktion, array('temp' => $by_temp, 'stufe' => $by_stufe,
+    'minuten' => $by_minuten), $by_fahrzeug, 'http');
+by_ende((int) $by_erg['http'], $by_erg['zeilen'][0], (string) $by_erg['zeilen'][1]);

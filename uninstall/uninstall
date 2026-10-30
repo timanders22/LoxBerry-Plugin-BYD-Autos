@@ -114,6 +114,19 @@ if [ "$(basename "$PDATA")" != "$PFOLDER" ] || [ "$(basename "$PBIN")" != "$PFOL
 fi
 
 # ---------------------------------------------------------------
+# 0. Befehlsbruecke anhalten (Gruppe 42, 0.9.29) - vor dem Leeren
+# ---------------------------------------------------------------
+if [ -f "$PBIN/befehlsbruecke.sh" ]; then
+    if bash "$PBIN/befehlsbruecke.sh" stop >/dev/null 2>&1; then
+        echo "<OK> Befehlsbruecke angehalten."
+    else
+        echo "<INFO> Befehlsbruecke: stop meldete einen Fehler - sie lief vermutlich nicht."
+    fi
+else
+    echo "<INFO> Keine Befehlsbruecke gefunden - nichts anzuhalten."
+fi
+
+# ---------------------------------------------------------------
 # 1. Dienst anhalten
 # ---------------------------------------------------------------
 # Geprueft wird ARGUMENTWEISE: /proc/<pid>/cmdline trennt die Argumente mit
@@ -283,7 +296,7 @@ fi
 # liegengebliebene Zweitschrift ueberlebt die Deinstallation und braechte
 # einer spaeteren NEUinstallation die Daten des Vorgaengers zurueck. Eine
 # saubere Neuinstallation waere dann keine.
-for f in verlauf.tar verlauf.tar.alt verlauf.tar.neu; do
+for f in verlauf.tar verlauf.tar.alt verlauf.tar.neu daten.tar daten.tar.alt daten.tar.neu; do
     if [ -f "$PCONFIG/$PFOLDER.backup.$f" ]; then
         rm -f "$PCONFIG/$PFOLDER.backup.$f" && BY_ENTFERNT="$BY_ENTFERNT $PFOLDER.backup.$f"
     fi
@@ -294,7 +307,7 @@ done
 # waere die schlechteste Zeile dieser Datei.
 REST=0
 for f in byd.json zugang.json verlauf.tar byd.json.alt zugang.json.alt verlauf.tar.alt \
-         byd.json.neu zugang.json.neu verlauf.tar.neu; do
+         byd.json.neu zugang.json.neu verlauf.tar.neu daten.tar daten.tar.alt daten.tar.neu; do
     [ -e "$PCONFIG/$PFOLDER.backup.$f" ] && REST=$((REST + 1))
 done
 [ -e "$PCONFIG/$PFOLDER.lief_vorher" ] && REST=$((REST + 1))

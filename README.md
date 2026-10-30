@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.28
+Version 0.9.29
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,51 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.29
+
+Hausform (Gruppe 42) - alles Neue ist ab Werk aus; wer die HTTP-Vorlagen nutzt, aendert nichts.
+
+- **MQTT-Gateway V2:** der Reiter MQTT zeigt die Datenpunkte, die im Gateway anzuhaken sind (Thema, Gateway-Name,
+  Noncached), der Reiter Test prueft sie gegen die Subscriptions des Gateways. Neues Lebenszeichen
+  `byd/zaehler` (0...999 je Durchgang, nie behalten) - die Ausfallerkennung in Loxone haengt daran.
+  `byd/ok` und `byd/ts` bleiben. Neue Fahrzeugthemen `VORKLIMA`, `LADEKOSTEN`, `LADEPREIS` (nur MQTT/JSON).
+  Kopfkachel MQTT mit Autostart und Gateway-Fassung.
+- **Befehle aus Loxone ueber MQTT** (Befehlsbruecke 1.0.2): `publish byd/befehl/<name> <wert>` an den Ausgang
+  "LoxBerry MQTT-Gateway", Quittung unter `.../quittung` ("uebergeben" = in der Warteschlange des Dienstes).
+  Haken "Befehle ueber MQTT annehmen" (ab Werk und beim Update aus); Verriegeln, Entriegeln, Suchen und Blinken
+  nur mit dem eigenen zweiten Haken UND "Eingreifende Befehle zulassen". PIN- und Stundenbremse gelten fuer alle
+  Wege gemeinsam. Vorlage im Reiter MQTT.
+- **HTTP-Endpunkt** haengt am Haken "HTTP-Endpunkt" (Reiter MQTT): beim Update bleibt er an, eine
+  Neuinstallation hat ihn aus (403 `ENDPUNKT_AUS`; `?selftest=1` bleibt offen). Antworten sonst byte-gleich.
+- **Vorklimatisierung** nach den Regeln des Hauses: Minuten bis zur Abfahrt wahlweise aus `haus/abfahrt`,
+  ausgeloest nur bei 1 bis Vorlauf Minuten (bis 0.9.28 bis zu 5 min zu frueh und noch bei 0), hoechstens zwei
+  "Klima ein" je Abfahrt, erledigt erst nach Annahme durch BYD (bis 0.9.28 nie wiederholt), Merker uebersteht
+  einen Neustart; wahlweise nur bei Anwesenheit und nur bei Kaelte/Hitze (Aussentemperatur aus Loxone).
+- **Behaltene MQTT-Werte** fremder Themen gelten nicht mehr als frisch (bis 0.9.28 frisch zum Empfangszeitpunkt).
+- **Update ohne Verlust:** neben der Ladehistorie ueberstehen jetzt auch Fahrzeugnummern und Merker, die
+  Anmeldesperre, die PIN-Bremse, eine laufende Ladung (Ladekosten), die Kosten der letzten Ladung und die
+  Wiederholsperre der Ansagen ein Update (`config/plugins/bydautos.backup.daten.tar`, danach entfernt).
+- **LoxBerry-Healthcheck** (`bin/healthcheck`): laeuft der Dienst, sind Herzschlag und letzter gelungener Abruf
+  frisch, stehen MQTT-Gateway, Broker-Verbindung, Datenpunkte V2 und Befehlsbruecke; ohne Zugangsdaten
+  "nicht eingerichtet" (Hinweis, kein Fehler). Keine Zugangsdaten, VIN oder Kennzeichen in der Ausgabe.
+- **MQTT: Messwert ohne Aussage = -1** (wie die anderen Plugins; Innenraumtemperatur -999, Breite/Laenge weiter
+  ohne Wert). Bis 0.9.28 ging er gar nicht hinaus. Die HTTP-Statuszeile ist unveraendert (Strich).
+  Schaltsignale sind ausgenommen: die Ladeempfehlung `LADEEMPF` geht ohne Aussage als 0 hinaus (nie -1 - das
+  hiesse in Loxone "laden").
+- **Ladekosten je Ladung zu Hause** aus `haus/strompreis` (Spalten im Reiter Ladungen; -1, wenn der Preis fuer mehr
+  als 10 % fehlt - nie geschaetzt), Ladeempfehlung und Laden-1 wahlweise aus `haus/strompreis`, Abruf bei
+  Ankunft, Meldungen an SignalBot mit Testknopf. Sprachausgabe 1.2.1 (Sonos4Lox und SonoX waehlbar).
+* **Mehrere Lautsprecher gleichzeitig (Sprachmodul 1.2.1):** Unter der Ausgabeart (jetzt „Ziel 1“) nimmt die Tabelle
+  *Weitere Ausgabeziele (gleichzeitig)* bis zu fünf weitere Ziele auf – etwa Google-Lautsprecher (Chromecast 4 Lox NG)
+  in einem Raum und Amazon Echo (Alexa-NG) in einem anderen neben dem Loxone Music Server. Die Ansage geht an alle
+  eingeschalteten Ziele zugleich (eine Ansage dauert so lange wie das langsamste Ziel, höchstens 20 s);
+  scheitert eines, sprechen die anderen. Protokoll und Reiter Test nennen jedes Ziel, im Reiter Test gibt es je Ziel
+  eine Testansage. Die bestehende Einstellung ist unverändert Ziel 1; ohne weitere Ziele verhält sich alles wie in
+  0.9.28. Antwort an Loxone, MQTT-Themen und Brückenbefehl `ansage` bleiben, wie sie sind.
+* **Vor einem Zurückgehen** auf 0.9.28 oder älter die weiteren Ziele entfernen: ältere Fassungen kennen die Liste nicht
+  und fielen beim Laden auf die Werkseinstellung der Sprachausgabe zurück.
+- Herstellerseitig nur mit Attrappen geprueft (kein BYD-Konto im Haus) - BETA.
 
 ## Neu in 0.9.28
 

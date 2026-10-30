@@ -918,6 +918,27 @@ function by_pruefungen()
      * (selftest=1, spricht nicht); der Music Server nie. */
     $zeilen[] = by_ansage_zeile(isset($GLOBALS['by_tab']) && $GLOBALS['by_tab'] === 'tab-test');
 
+    /* ---- Gruppe 42 (0.9.29): Hausform ---- */
+    $by_g42_grau = function ($st) { return $st === 2 ? -1 : (int) $st; };
+    list($by_v2s, $by_v2t) = by_v2_haken_lage($cfg);
+    $zeilen[] = by_pruefzeile($by_g42_grau($by_v2s), by_t('PRUEF.V2_FRAGE'), by_e($by_v2t));
+    list($by_bs, $by_bt) = by_bruecke_lage();
+    $zeilen[] = by_pruefzeile($by_bs === null ? -1 : ($by_bs ? 1 : 0), by_t('BEFEHL.F_BRUECKE'), by_e($by_bt));
+    if (!empty($cfg['befehle_mqtt_ein'])) {
+        list($by_prc, $by_pz) = by_bruecke_pruefen();
+        $zeilen[] = by_pruefzeile($by_prc === 0 ? 1 : 0, by_t('BEFEHL.F_PRUEFEN'),
+            $by_prc === 0 ? by_e(by_t('BEFEHL.T_PRUEFEN_OK')) : by_e(implode(' ', array_slice($by_pz, -3))));
+    }
+    $zeilen[] = by_pruefzeile(-1, by_t('G42.F_ENDPUNKT_EIN'),
+        by_e(by_t(!empty($cfg['endpunkt_ein']) ? 'G42.A_ENDPUNKT_EIN' : 'G42.A_ENDPUNKT_AUS')));
+    foreach (by_haus_pruefzeilen($cfg) as $by_hz) {
+        $zeilen[] = by_pruefzeile($by_hz[1] ? 1 : 2, by_e($by_hz[0]), by_e($by_hz[2]));
+    }
+    $by_vk = by_vorklima_pruefzeile($cfg);
+    if ($by_vk !== null) {
+        $zeilen[] = by_pruefzeile($by_g42_grau($by_vk[0]), by_t('HAUS.VK_FRAGE'), by_e($by_vk[1]));
+    }
+
     return $zeilen;
 }
 

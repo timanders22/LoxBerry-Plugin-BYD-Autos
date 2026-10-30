@@ -1,0 +1,79 @@
+#!/usr/bin/env php
+<?php
+/**
+ * BYD Autos - Anschluss an den LoxBerry-Healthcheck (seit 0.9.29, Gruppe 42, Nachtrag 29.10.2026)
+ *
+ * sbin/healthcheck.pl ruft eine ausfuehrbare Datei bin/healthcheck des Plugins auf - einmal mit "title", einmal
+ * mit "check" (Regeln/03 :73; direkt, die Shebang-Zeile entscheidet - Regeln/02 :691). Antworten sind JSON:
+ *   title -> {"desc":"BYD Autos"}
+ *   check -> {"desc", "status", "result", "url", "logfile"}; Status 0 unbekannt, 3 Fehler, 4 Warnung,
+ *            5 in Ordnung, 6 Hinweis. healthcheck.pl stellt das Ergebnis zusaetzlich retained nach MQTT
+ *            (<rechnername>/healthcheck/BYD Autos).
+ * Form von Renault NG 2.1.20: das Urteil steht in by_gesund_urteil() der Bibliothek, die Fakten sammelt
+ * by_gesund_fakten() - NUR LESEND: kein Netz, kein Broker, keine Anmeldung beim Hersteller, kein Protokoll,
+ * keine Datei. Geurteilt wird ueber das ALTER, nie ueber einen einzelnen Abruf (Regeln/04 :809):
+ *   - Zugangsdaten leer -> 6 "nicht eingerichtet" (eine Neuinstallation ist kein Fehler);
+ *   - Dienst bewusst angehalten (kein Sollmerker, kein Prozess) -> 6;
+ *   - Dienst soll laufen, es laeuft keiner -> 3 ("laeuft" = ein Prozess, dessen /proc/<pid>/cmdline das Skript
+ *     des Plugins ist; die PID-Datei allein genuegt nicht);
+ *   - Lebenszeichen aelter als max(10 min, 3 x Takt) -> 3;
+ *   - letzter gelungener Abruf aelter als max(15 min, 3 x Takt) -> 4, als max(1 h, 6 x Takt) -> 3; nach einem
+ *     Neustart zaehlt die Zeit seit dem Start;
+ *   - MQTT an, aber kein Gateway mit UDP-Eingang oder kein Autostart -> 4; der Dienst meldet keine Verbindung
+ *     zum Broker (Haus-Themen) -> 4; Gateway V2: Haken fehlen -> 4; Befehle ueber MQTT an, Bruecke steht -> 4.
+ * Der Text nennt keine Zugangsdaten, VIN, Kennzeichen oder Fahrzeugnamen.
+ * Bis 0.9.28 gab es die Datei nicht, und healthcheck.pl uebersprang das Plugin.
+ * Aufruf wie LoxBerry: direkt, als loxberry, Eingabe aus /dev/null. Der Installer setzt bin/ 755.
+ * Kompatibel mit PHP 7.4 und PHP 8.x.
+ */
+
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+ini_set('display_errors', '0');
+
+function by_hc_antwort(array $a)
+{
+    $j = json_encode($a, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    echo ($j !== false ? $j : '{"desc":"BYD Autos","status":0,"result":"unlesbar"}') . "\n";
+    exit(0);
+}
+
+$by_hc_was = isset($argv[1]) ? strtolower((string) $argv[1]) : 'check';
+if ($by_hc_was === 'title') {
+    by_hc_antwort(array('desc' => 'BYD Autos'));
+}
+
+/* Die Bibliothek: liegt diese Datei unter .../bin/plugins/<ordner>, ist sie installiert, sonst im Archiv. */
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $by_hc_lib = dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/' . basename(__DIR__) . '/by_lib.php';
+} else {
+    $by_hc_lib = dirname(__DIR__) . '/webfrontend/html/by_lib.php';
+}
+if (!is_file($by_hc_lib)) {
+    by_hc_antwort(array('desc' => 'BYD Autos', 'status' => 3,
+        'result' => 'by_lib.php nicht gefunden - das Plugin ist unvollstaendig installiert.'));
+}
+require_once $by_hc_lib;
+
+$by_hc_p = by_paths();
+if ($by_hc_p['home'] === '') {
+    /* Ohne LoxBerry-Wurzel wird nichts gelesen und nichts behauptet: 0 = unbekannt. */
+    by_hc_antwort(array('desc' => 'BYD Autos', 'status' => 0,
+        'result' => 'Kein LoxBerry-Wurzelverzeichnis gefunden (ausgepacktes Archiv oder Pruefordner) - nichts geprueft.'));
+}
+// Die Sprache des LoxBerry, wenn der Aufrufer keine setzt (nur gelesen) - fuer die Zeile "Gateway V2".
+if (!getenv('LBLANG')) {
+    $by_hc_gen = json_decode((string) @file_get_contents($by_hc_p['home'] . '/config/system/general.json'), true);
+    if (isset($by_hc_gen['Base']['Lang']) && is_string($by_hc_gen['Base']['Lang'])) {
+        putenv('LBLANG=' . $by_hc_gen['Base']['Lang']);
+    }
+}
+
+list($by_hc_status, $by_hc_text) = by_gesund_urteil(by_gesund_fakten(by_config(false)));
+
+by_hc_antwort(array(
+    'desc' => 'BYD Autos',
+    'status' => (int) $by_hc_status,
+    'result' => (string) $by_hc_text,
+    'url' => '/admin/plugins/' . $by_hc_p['plugin'] . '/index.php',
+    'logfile' => $by_hc_p['logdir'] . '/byd.log',
+));
