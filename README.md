@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.29
+Version 0.9.30
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,10 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.30
+
+Bilder der Einbindung erneuert: Die Seitenbilder zeigen jetzt die Musterprojekt-Seiten in der Hausform (MQTT-Gateway V2 und Befehlsbrücke statt der früheren HTTP-Vorlagen). Sonst keine Änderung gegen 0.9.29.
 
 ## Neu in 0.9.29
 
