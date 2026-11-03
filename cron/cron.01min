@@ -18,5 +18,10 @@
 BBSH="REPLACELBPBINDIR/befehlsbruecke.sh"
 [ -f "$BBSH" ] && /bin/bash "$BBSH" waechter >/dev/null 2>&1
 mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
-touch "REPLACELBPLOGDIR/cron.err" 2>/dev/null
-"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"
+ERR="REPLACELBPLOGDIR/cron.err"
+touch "$ERR" 2>/dev/null
+# 0.9.31 (Nachzug 01.11.2026, Bauart Renault NG 2.1.23): ist die Fehlerdatei nicht schreibbar, braeche die
+# Umlenkung den Befehl ab, BEVOR er startet - bis 0.9.30 kein Lauf und keine Spur. Dann geht die Fehlerausgabe
+# nach /dev/null, und der Lauf findet statt.
+[ -f "$ERR" ] && [ -w "$ERR" ] || ERR=/dev/null
+"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"$ERR"

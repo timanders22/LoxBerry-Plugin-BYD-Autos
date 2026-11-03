@@ -307,7 +307,18 @@ function by_vorgaben()
         'signal_laden_fertig'   => 1,
         'signal_ausfall'        => 1,
         'signal_vorklima'       => 1,
-        'tts'          => ansage_vorgaben('aus'),
+        // Sammelthemen und Kabel-Warnung (0.9.31, Regeln/07): dieselben Werte wie VORGABEN im Dienst.
+        'haus_fahrzeug_ein'      => 1,
+        'kabel_soc'              => 30,
+        'kabel_uhr'              => '20:00',
+        'kabel_abfahrt_min'      => 60,
+        'signal_kabel'           => 1,
+        'vorklima_min_soc'       => 20,
+        'vorklima_nur_kabel'     => 0,
+        'ansage_kabel_vergessen' => 1,
+        'tts'          => ansage_werk_block(),     // Stamm 1.3.2: ab Werk an, nur fuer einen nie gespeicherten Block
+        'ansage_regeln' => ansage_regeln_vorgaben(),
+        'ansage_token_herkunft' => array(),
     );
 }
 
@@ -827,16 +838,22 @@ function by_eingabe_felder($form)
         ),
         'mqtt' => array(
             'text'  => array('mqtt_topic'),
-            'haken' => array('mqtt_ein'),
+            'haken' => array('mqtt_ein', 'haus_fahrzeug_ein'),
+        ),
+        'g42' => array(
+            'text'  => array('vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix',
+                             'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'vorklima_min_soc'),
+            'haken' => array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein',
+                             'signal_ein', 'signal_laden_fertig', 'signal_ausfall', 'signal_vorklima', 'signal_kabel', 'vorklima_nur_kabel'),
         ),
     );
     /* Nr. 36 b (seit 0.9.23): die Sprachausgabe und die Anlass-Haken reisen mit - nie die Sprechtoken
      * (ansage_x2_felder() nennt sie nicht; markiert werden koennen sie). */
     $by_th = array('tts_alexa_token_loeschen', 'tts_google_token_loeschen');
     $felder['einstellungen']['text'] = array_merge($felder['einstellungen']['text'],
-        array_values(array_diff(ansage_x2_felder(by_ansage_opt()), $by_th)));
+        array_values(array_diff(ansage_x2_felder(by_ansage_opt()), $by_th)), array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min'));
     $felder['einstellungen']['haken'] = array_merge($felder['einstellungen']['haken'], $by_th,
-        array('ansage_laden_fertig', 'ansage_ausfall'));
+        array('ansage_laden_fertig', 'ansage_ausfall', 'ansage_kabel_vergessen', 'ansage_ruhe_ein'));
     /* Welle Mehrfach-Ziele (0.9.29): die Tabelle der weiteren Ziele (Felder name[N], N = 2..6) - nur, wenn die
      * Abschrift sie kann; by_eingaben_sammeln() liest sie ueber by_post_feld(). */
     if (by_mit_zielen()) {
@@ -2196,6 +2213,17 @@ function by_abodatei_nachfuehren($praefix)
 }
 
 /**
+ * Ein Argument fuer die Schale anfuehren, Byte fuer Byte: fuer Themen, Werte und Texte, nicht fuer Pfade.
+ * Bis 0.9.30 stand hier escapeshellarg(). Es verwirft unter PHP 7.4 jedes Byte, das im LC_CTYPE kein gueltiges Zeichen ist; Apache startet mit LANG=C, eine
+ * Befehlsbruecke ohne LANG: aus "Kueche" mit Umlaut wurde "Kche", ohne Fehler (am Geraet gemessen 01.11.2026). setlocale() fehlt, wo keine UTF-8-Locale
+ * erzeugt ist, und aendert basename() und PCRE. Einfache Anfuehrungszeichen sind fuer sh und dash byte-erhaltend; ein Nullbyte kann kein Argument tragen.
+ */
+function by_shell_arg($s)
+{
+    return "'" . str_replace("'", "'\\''", str_replace("\0", '', (string) $s)) . "'";
+}
+
+/**
  * M9: die behaltenen eigenen Themen unter $praefix am Broker abraeumen -
  * mit der Logik von byd.py --mqtt-leeren (loeschen, nachlesen, UDP nur als
  * Rueckfall). Rueckgabe array(rc, Text ohne die Marken des Installers).
@@ -2214,7 +2242,7 @@ function by_mqtt_abraeumen($praefix)
     $ausgabe = array();
     $rc = 2;
     @exec(escapeshellarg($py) . ' ' . escapeshellarg($skript) . ' --mqtt-leeren '
-        . escapeshellarg('--praefix=' . (string) $praefix) . ' 2>&1', $ausgabe, $rc);
+        . by_shell_arg('--praefix=' . (string) $praefix) . ' 2>&1', $ausgabe, $rc);
     $zeilen = array();
     foreach ($ausgabe as $z) {
         $z = trim(preg_replace('/^<(OK|INFO|WARNING|FAIL)>\s*/', '', (string) $z));
@@ -2716,6 +2744,10 @@ function by_grenzen()
         // Gruppe 42 (0.9.29)
         'vorklima_kalt_unter'  => array(-30, 45),
         'vorklima_heiss_ueber' => array(-30, 45),
+        // 0.9.31
+        'kabel_soc'         => array(1, 100),
+        'kabel_abfahrt_min' => array(0, 720),
+        'vorklima_min_soc'  => array(0, 100),
     );
 }
 
@@ -2786,6 +2818,12 @@ function by_sicherung_regeln()
         'signal_laden_fertig'   => 'schalter',
         'signal_ausfall'        => 'schalter',
         'signal_vorklima'       => 'schalter',
+        // 0.9.31
+        'haus_fahrzeug_ein'      => 'schalter',
+        'signal_kabel'           => 'schalter',
+        'vorklima_nur_kabel'     => 'schalter',
+        'ansage_kabel_vergessen' => 'schalter',
+        'kabel_uhr'              => 'uhrzeit',
     );
 }
 
@@ -2811,6 +2849,12 @@ function by_sicherung_regel($art, $w)
                 return array(true, $w, '');
             }
             return array(false, null, 'EINST.SICH_R_THEMA');
+        case 'uhrzeit':
+            // 0.9.31: HH:MM wie by_sammel_wert().
+            if (is_string($w) && preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w)) {
+                return array(true, $w, '');
+            }
+            return array(false, null, 'EINST.SICH_R_QUELLE');
         case 'empfquelle':
             if ($w === 'thema' || $w === 'haus') {
                 return array(true, $w, '');
@@ -2985,13 +3029,14 @@ function by_ansage_anlaesse()
     return array(
         'laden_fertig' => array('ansage_laden_fertig', 'EINST.L_ANSAGE_LADEN_FERTIG', 'BY_ANSAGE.S_LADEN_FERTIG'),
         'ausfall'      => array('ansage_ausfall', 'EINST.L_ANSAGE_AUSFALL', 'BY_ANSAGE.S_AUSFALL'),
+        'kabel_vergessen' => array('ansage_kabel_vergessen', 'EINST.L_ANSAGE_KABEL', 'BY_ANSAGE.S_KABEL'),
     );
 }
 
 /** Die Schluessel, die mit 0.9.23 dazukamen - eine aeltere Sicherung kennt sie nicht. */
 function by_ansage_neue_schluessel()
 {
-    $s = array('tts');
+    $s = array('tts', 'ansage_regeln', 'ansage_token_herkunft');
     foreach (by_ansage_anlaesse() as $a) {
         $s[] = $a[0];
     }
@@ -3017,10 +3062,189 @@ function by_tts($heilen = true)
 }
 
 /** Der Kontext des Moduls: Webport, Kopfzeile, Ordner fuer <art>_letzte.json, Texte. */
+/** Der Block tts aus einer schon gelesenen Konfiguration (Stamm 1.3.2): Ein gespeicherter bleibt, auch 'aus'; ein nie gespeicherter kommt aus den Vorgaben, also ab Werk an. */
+function by_tts_von($cfg)
+{
+    list($t) = ansage_vervollstaendigen(isset($cfg['tts']) && is_array($cfg['tts']) ? $cfg['tts'] : ansage_werk_block(), 'aus');
+    return $t;
+}
+
+/* ---------------- Sprachansagen: Regeln aus dem Stamm (0.9.31, Welle S2, Stamm sprachausgabe.php 1.3.2) ----------------
+ *
+ * Nachtruhe, Sperre und Schalter "Ansagen aus" stehen im Stamm. Ab Werk EIN: ansage_werk_block() in den Vorgaben, also nur fuer einen
+ * nie gespeicherten Block; ein gespeicherter bleibt, auch 'aus'. Ein Minutenlauf und ein Dienst sprechen nie selbst: Sie legen den Anlass
+ * in <Daten>/ansage_warte.json, ein abgekoppelter Sender (php -r, eigene Sperre) spricht und wartet auf die Lautsprecher.
+ */
+
+/** So alt darf ein wartender Anlass werden (nach einem Update oder Hang wird nichts Aufgestautes angesagt). */
+if (!defined('BY_ANSAGE_HOECHSTALTER')) { define('BY_ANSAGE_HOECHSTALTER', 600); }
+
+/** Die Regeln: gespeichert und gueltig, sonst aus einer alten Einstellung dieser Linie, sonst die Vorgabe (mit Nachtruhe). */
+function by_ansage_regeln($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    $g = '';
+    if (isset($cfg['ansage_regeln'])) {
+        $r = ansage_regeln_wert($cfg['ansage_regeln'], $g);
+        return $r === null ? ansage_regeln_vorgaben() : $r;
+    }
+    $r = ansage_regeln_vorgaben();
+    $p = ansage_regeln_wert($r, $g);
+    return $p === null ? ansage_regeln_vorgaben() : $p;
+}
+
+/** Die Warteliste unter einer Dateisperre aendern: $fn(Liste) -> array(neue Liste, Ergebnis). */
+function by_ansage_warte($fn)
+{
+    $d = by_paths()['datadir'];
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $f = $d . '/ansage_warte.json';
+    $h = @fopen($f, 'c+');
+    if ($h === false) { return null; }
+    if (!flock($h, LOCK_EX)) { fclose($h); return null; }
+    $alt = json_decode((string) stream_get_contents($h), true);
+    list($neu, $erg) = call_user_func($fn, is_array($alt) ? $alt : array());
+    rewind($h);
+    ftruncate($h, 0);
+    fwrite($h, (string) json_encode($neu));
+    fflush($h);
+    flock($h, LOCK_UN);
+    fclose($h);
+    @chmod($f, 0600);
+    return $erg;
+}
+
+/**
+ * Anlaesse hinlegen und den Sender starten; wartet auf nichts. $l: Eintraege fuer ansage_regel_sprechen() (schluessel, text, dringend,
+ * sperre_min, nur_nach). Die Schale schliesst vor dem exec jede Deskriptor-Nummer ueber 2, sonst erbte der Sender die Sperren des Rufers.
+ */
+function by_ansage_legen(array $l, $jetzt = null)
+{
+    if (!$l) { return 'nichts'; }
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    by_ansage_warte(function ($alt) use ($l, $jetzt) {
+        foreach ($l as $e) { $alt[] = $e + array('zeit' => $jetzt); }
+        return array(array_slice($alt, -50), null);
+    });
+    $php = (defined('PHP_BINARY') && PHP_BINARY !== '' && is_executable(PHP_BINARY) && stripos(basename(PHP_BINARY), 'php') === 0 && stripos(basename(PHP_BINARY), 'fpm') === false) ? PHP_BINARY : 'php';
+    $befehl = 'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; '
+            . 'exec ' . escapeshellarg($php) . ' -r ' . escapeshellarg('chdir(dirname($argv[1])); $_SERVER["SCRIPT_FILENAME"] = $_SERVER["PHP_SELF"] = $argv[1]; require $argv[1]; by_ansage_senden();') . ' -- ' . escapeshellarg(__FILE__);
+    $aus = array();
+    $rc = 1;
+    @exec('bash -c ' . escapeshellarg($befehl) . ' </dev/null >/dev/null 2>&1 &', $aus, $rc);
+    return $rc === 0 ? 'gestartet' : 'kein_start';
+}
+
+/** Das Sprechtoken aus Alexa-NG und Chromecast4lox uebernehmen (Stamm 1.3.1). Schreibt NUR bei einer Aenderung, nennt nie das Token. */
+function by_ansage_token_pflegen($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    list($neu, $her2, $g) = ansage_token_abgleich(by_tts_von($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), by_ansage_k());
+    if (!$g) { return false; }
+    $cfg = by_config(false);
+    $cfg['tts'] = $neu;
+    $cfg['ansage_token_herkunft'] = $her2;
+    if (!by_config_speichern($cfg)) { return false; }
+    by_log('Ansage: Sprechtoken uebernommen (' . implode(', ', $g) . ').');
+    return true;
+}
+
+/** Der Block fuer Testansage und Pruefzeile: uebernommene Token aufgeloest. Nur im Speicher. */
+function by_ansage_vor_ort($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    return ansage_token_fuer_lauf(by_tts_von($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), by_ansage_k());
+}
+
+/** Der Block fuer die Pruefzeile: nur die eingerichteten Ziele; ist keines eingerichtet, sagt die Zeile "aus" statt eines Kreuzes. */
+function by_ansage_pruefblock($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    $t = by_tts_von($cfg);
+    if ($t['mode'] === 'aus') { return $t; }
+    list($b) = ansage_ziele_bereit(by_ansage_vor_ort($cfg), by_ansage_k());
+    if ($b === null) { $t['mode'] = 'aus'; return $t; }
+    return $b;
+}
+
+/** Die Lage im Reiter Test: Ziele, Nachtruhe, Schalter. Nur im geoeffneten Reiter (der Schalter fragt den Broker). */
+function by_ansage_lage_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    $k = by_ansage_k();
+    $o = array();
+    foreach (ansage_regel_lage(by_tts_von($cfg), by_ansage_regeln($cfg), $k, true) as $z) {
+        $o[] = '<div class="sm-hilfe">' . htmlspecialchars((string) $z[1], ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+    return implode("\n", $o) . "\n";
+}
+
+/** Die Felder der Regeln fuer die Einmalmeldung (X-2). */
+function by_ansage_regel_felder(array $anlaesse = array())
+{
+    return ansage_regeln_x2_felder($anlaesse);
+}
+
+/**
+ * Im Vorgang sprechen, wo der Rufer das Ergebnis braucht (Antwort an Loxone, Befehl): Regeln aus dem Stamm mit "dringend, ohne Sperre" - es zaehlt nur der Schalter.
+ * Schalter gesetzt: stand -1, Kennung SCHALTER. Nichts bereit oder Original-Audioserver: wie bisher ansage_sprechen(), damit die Antwort sagt, was fehlt.
+ */
+function by_ansage_direkt($text, array $e = array(), $tts = null)
+{
+    $conf = by_config(false);
+    $k = by_ansage_k();
+    $t = $tts === null ? by_tts_von($conf) : $tts;
+    $a = ansage_regel_sprechen(array($e + array('schluessel' => 'direkt', 'text' => (string) $text, 'dringend' => true, 'sperre_min' => 0)), $t, by_ansage_regeln($conf), $k);
+    if ($a['r'] !== null) { return $a['r']; }
+    if ($a['regel'] === 'SCHALTER') {
+        return array('stand' => -1, 'kennung' => 'SCHALTER', 'art' => isset($t['mode']) ? (string) $t['mode'] : '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    }
+    return ansage_sprechen((string) $text, $t, $k);
+}
+
+/**
+ * Der Sender: eigene Sperre, nimmt die Warteliste und spricht nach den Regeln. "aus" und "kein Ziel eingerichtet" hinterlassen keine Zeile;
+ * ein gescheitertes Ziel genau eine je Aenderung (ab Werk EIN darf kein Protokoll vollaufen). Text und Token stehen nie im Protokoll.
+ */
+function by_ansage_senden($jetzt = null)
+{
+    $d = by_paths()['datadir'];
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $fh = @fopen($d . '/ansage_senden.lock', 'c');
+    if ($fh === false || !flock($fh, LOCK_EX | LOCK_NB)) { return 'laeuft'; }
+    $erg = 'nichts';
+    $l = by_ansage_warte(function ($alt) { return array(array(), $alt); });
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $frisch = array();
+    foreach (is_array($l) ? $l : array() as $e) {
+        if (is_array($e) && isset($e['zeit']) && $jetzt - (int) $e['zeit'] <= BY_ANSAGE_HOECHSTALTER) { $frisch[] = $e; }
+    }
+    if ($frisch) {
+        $conf = by_config(false);
+        by_ansage_token_pflegen($conf);
+        $conf = by_config(false);
+        $a = ansage_regel_sprechen($frisch, by_tts_von($conf), by_ansage_regeln($conf), by_ansage_k());
+        $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
+        if ($a['r'] !== null) {
+            $merk = $d . '/ansage_lage.txt';
+            $lage = $a['r']['stand'] === 1 ? 'gesprochen' : ansage_kurz($a['r']);
+            if ($a['r']['stand'] === 1 || (string) @file_get_contents($merk) !== $lage) { by_log('Ansage: ' . ansage_regel_kurz($a)); }
+            @file_put_contents($merk, $lage);
+        } elseif ($a['regel'] !== 'AUS' && $a['regel'] !== 'KEIN_ZIEL') {
+            by_log('Ansage entfaellt: ' . ansage_regel_kurz($a));
+        }
+    }
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $erg;
+}
+
+/** Der Kontext des Moduls. */
 function by_ansage_k()
 {
     $p = by_paths();
     return array(
+        'werk' => ansage_werk_modus(),
         'port'   => ansage_webport(($p['home'] !== '' ? $p['home'] : dirname(dirname(__DIR__)))
                                    . '/config/system/general.json'),
         'kopf'   => array('User-Agent: LoxBerry BYD Autos'),
@@ -3049,6 +3273,9 @@ function by_ansage_satz($anlass, $nr, $name, $soc = null, $grenze = null)
     if ($anlass === 'ausfall') {
         return by_t('BY_ANSAGE.S_AUSFALL');
     }
+    if ($anlass === 'kabel_vergessen') {
+        return sprintf(by_t('BY_ANSAGE.S_KABEL'), $wer, (int) $soc);
+    }
     $s = sprintf(by_t('BY_ANSAGE.S_LADEN_FERTIG'), $wer);
     return $soc === null ? $s : $s . ' ' . sprintf(by_t('BY_ANSAGE.S_LADESTAND'), (int) $soc);
 }
@@ -3070,6 +3297,7 @@ function by_sicherung_bauen()
     if (isset($c['tts']) && is_array($c['tts'])) {
         $c['tts'] = ansage_sicherung_bereinigen($c['tts']);
     }
+    unset($c['ansage_token_herkunft']);     // Stamm 1.3.2: der Vermerk geht nie in eine Sicherung
     return array_merge(array(
         '_hinweis' => by_t('EINST.SICH_KOPF_HINWEIS'),
         '_stand'   => date('Y-m-d H:i'),
@@ -3181,6 +3409,15 @@ function by_sicherung_lesen($roh, &$namen = null)
             foreach ($by_spaete as $by_sn) { $spaet[] = $by_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
             list($by_tv) = ansage_vervollstaendigen($by_tneu['tts'] + $by_tj, 'aus');
             $neu['tts'] = ansage_sicherung_tokens_behalten($by_tv, $by_tj);
+            $anzahl++;
+            continue;
+        }
+        if ($k === 'ansage_token_herkunft') { continue; }     // S2: nie aus einer Datei
+        if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
+            $s2_g = '';
+            $s2_r = ansage_regeln_wert($w, $s2_g);
+            if ($s2_r === null) { $mangel[] = by_t('EINST.SICH_REGELN'); $namen[] = 'ansage_regeln'; continue; }
+            $neu['ansage_regeln'] = $s2_r;
             $anzahl++;
             continue;
         }
@@ -3305,12 +3542,53 @@ function by_sicherung_lesen($roh, &$namen = null)
  * ================================================================== */
 
 /** Die Schluessel, die mit 0.9.29 dazukamen - eine aeltere Sicherung kennt sie nicht; die Anlage behaelt ihren Wert. */
+/* ---------------- Sammelthemen haus/fahrzeug (Regeln/07, Vorbild MGiSmart 1.1.31) ---------------- */
+
+/** Die Werte des Formulars pruefen: normierter Wert oder null. kabel_soc 1..100, kabel_abfahrt_min 0..720, vorklima_min_soc 0..100, kabel_uhr HH:MM. Rein. */
+function by_sammel_wert($k, $v)
+{
+    $v = trim((string) $v);
+    if ($k === 'kabel_uhr') {
+        return preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', $v) ? $v : null;
+    }
+    $g = array('kabel_soc' => array(1, 100), 'kabel_abfahrt_min' => array(0, 720), 'vorklima_min_soc' => array(0, 100));
+    if (!isset($g[$k]) || !preg_match('/^[0-9]{1,3}$/', $v) || (int) $v < $g[$k][0] || (int) $v > $g[$k][1]) {
+        return null;
+    }
+    return (int) $v;
+}
+
+/** Die Zeile im Reiter Test: array(Stand 1|0|-1, Text). Liest nur die Merker des Dienstes, nennt keinen Wert. 0: fremder Zaehler unter einem eigenen Stamm. */
+function by_sammel_lage($cfg)
+{
+    if (empty($cfg['haus_fahrzeug_ein'])) {
+        return array(-1, by_t('EINST.A_HAUS_FAHRZEUG_AUS'));
+    }
+    $fr = array();
+    foreach (array_keys(by_json_lesen(by_paths()['datadir'] . '/haus_fahrzeug_fremd.json')) as $s) {
+        if (is_string($s) && strpos($s, 'haus/fahrzeug/') === 0) { $fr[] = substr($s, strlen('haus/fahrzeug/')); }
+    }
+    if ($fr) {
+        return array(0, sprintf(by_t('EINST.A_HAUS_FAHRZEUG_FREMD'), implode(', ', $fr)));
+    }
+    $m = by_json_lesen(by_paths()['datadir'] . '/haus_fahrzeug.json');
+    $namen = array();
+    if (isset($m['fahrzeuge']) && is_array($m['fahrzeuge'])) {
+        foreach ($m['fahrzeuge'] as $e) {
+            if (is_array($e) && isset($e['stamm']) && is_string($e['stamm'])) { $namen[] = substr($e['stamm'], strlen('haus/fahrzeug/')); }
+        }
+    }
+    return $namen ? array(1, sprintf(by_t('EINST.A_HAUS_FAHRZEUG'), implode(', ', $namen))) : array(-1, by_t('EINST.A_HAUS_FAHRZEUG_NOCH'));
+}
+
 function by_neue_schluessel_0929()
 {
     return array('befehle_mqtt_ein', 'befehle_mqtt_steuern', 'endpunkt_ein', 'haus_abfahrt_ein',
                  'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'vorklima_kalt_unter', 'vorklima_heiss_ueber',
                  'ankunft_ein', 'ankunft_quelle', 'haus_strompreis_ein', 'ladeempf_quelle', 'signal_ein',
-                 'signal_praefix', 'signal_laden_fertig', 'signal_ausfall', 'signal_vorklima');
+                 'signal_praefix', 'signal_laden_fertig', 'signal_ausfall', 'signal_vorklima',
+                 /* 0.9.31 */ 'haus_fahrzeug_ein', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'signal_kabel',
+                 'vorklima_min_soc', 'vorklima_nur_kabel');
 }
 
 /** Sind Zugangsdaten eingetragen? (Benutzer und Passwort.) */

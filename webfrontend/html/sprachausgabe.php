@@ -43,11 +43,12 @@
  * die Testansage, die Sicherungsfelder (X-3) und einen Kommandozeilenweg
  * fuer Dienste in anderen Sprachen (ansage_cli()).
  *
- * NICHT hier: wann gesprochen wird (Anlass, Ruhezeit, Freigabe-Haken,
- * Bremse), der Ansagetext selbst, das Protokoll, die Einmalmeldung, das
- * Speichern der Konfiguration. Das bleibt in der Linie. Diese Datei
+ * NICHT hier: der Anlass selbst, der Ansagetext, das Protokoll, die Einmalmeldung, das
+ * Speichern der Konfiguration. Das bleibt in der Linie. Wann gesprochen wird (Nachtruhe, Sperre,
+ * Schalter "Ansagen aus", dringend), steht seit 1.3.0 hier (ansage_regel_sprechen()); eine Linie, die
+ * ansage_sprechen() direkt ruft, regelt es weiter selbst. Diese Datei
  * schreibt in kein Protokoll und legt keine Ordner an; sie schreibt hoechstens
- * die Datei <art>_letzte.json in einen VORHANDENEN Ordner, den die Linie nennt.
+ * <art>_letzte.json und (seit 1.3.0) ansage_regeln.json in einen VORHANDENEN Ordner, den die Linie nennt.
  *
  * ------------------------------------------------------------------
  * Hausregeln, die hier eingebaut sind
@@ -223,6 +224,31 @@
  *   - Ohne $k['frist'] ist jeder Weg byte- und verhaltensgleich mit 1.2.0.
  *   - Wer sich auf die Frist mit einem Ziel verlaesst, prueft
  *     version_compare(ANSAGE_FASSUNG, '1.2.1', '>=').
+ *
+ * 1.3.0 (01.11.2026; Musterprojekt/PLAN_SPRACHANSAGEN_2026-11-01.md, Entscheidungen des Hausherrn), nur ergaenzend:
+ *   - ansage_regel_sprechen(): spricht nach den Regeln des Hauses - Nachtruhe (ab Werk 22-7 Uhr, Dringendes spricht
+ *     trotzdem, nichts wird nachgeholt), dieselbe Ansage hoechstens einmal in 30 Minuten, Haus-Schalter "Ansagen aus"
+ *     (retained Thema haus/ansage/ruhe, 1 = alle schweigen, keine Aussage = sprechen). Mehrere Anlaesse zugleich werden ein Satz.
+ *   - Ab Werk EIN: ansage_werk_block() fuer eine Linie, deren Block tts nie gespeichert wurde. Ein gespeicherter Block bleibt
+ *     (auch 'aus', auch nach einem Update), ein ungueltiger gilt als aus (ansage_block_oder_aus()). Nicht eingerichtete
+ *     Ziele werden uebergangen, ohne Fehler (ansage_ziele_bereit()); ein leeres Sprechtoken nimmt das Modul im Speicher
+ *     aus dem Zielplugin auf diesem LoxBerry (ansage_tts_vor_ort()), nie in die Konfiguration der Linie.
+ *   - ansage_regeln_html(), ansage_regeln_formular(), ansage_regel_lage(): Formularblock und Zeilen im Reiter Test.
+ *   - ansage_formular_lesen(): $opt['token_vor_ort'] (kein Mangel ohne Token), $opt['aus_gewinnt'] ('aus' ohne die Ziele abzuwaehlen).
+ *   - Die Regeln stehen NICHT im Block tts: eine zuerst geladene aeltere Abschrift wiese ihn sonst ab. Eine Linie, die
+ *     1.2.1 traegt und nichts davon ruft, laeuft byte- und verhaltensgleich weiter.
+ *   - Wer die Regeln nutzt, prueft function_exists('ansage_regel_sprechen').
+ *
+ * 1.3.1 (01.11.2026, Entscheidung des Hausherrn: "Speicher das Token ab"), nur ergaenzend:
+ *   - ansage_token_abgleich(): das Sprechtoken des Zielplugins wird in die Konfiguration der Linie uebernommen und nachgezogen; ein von
+ *     Hand eingetragenes bleibt. Die Linie fuehrt dazu einen Vermerk ausserhalb des Blocks tts und speichert nur bei einer Aenderung.
+ *   - Spricht das Zielplugin nicht fuer andere, wird nichts uebernommen und ein uebernommenes nicht benutzt (ansage_token_fuer_lauf()).
+ *   - ansage_tts_vor_ort() ergaenzt dann nichts mehr; ansage_ziel_eingerichtet() nennt SPRECHEN_AUS vor KEIN_TOKEN.
+ *
+ * 1.3.2 (01.11.2026, Ausfall am Geraet: Minutenlauf von MGiSmart 1.1.31 mit "Cannot use object of type stdClass as array"):
+ *   - ansage_webport() laedt das SDK nicht mehr: Der Port steht in general.json, dieselbe Datei liest das SDK. Hat die Linie es selbst geladen, geht der
+ *     Aufruf durch ansage_sdk_ruf(), das alle Globalen des SDK wiederherstellt. Das Modul veraendert also keine Globale der Linie.
+ *     Bis 1.3.1 ueberschrieb lbwebserverport() ein globales $cfg der Linie, und LBSystem war danach auch fuer die Linie geladen.
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -241,7 +267,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.2.1');
+define('ANSAGE_FASSUNG', '1.3.2');
 
 /** Hoechstlaenge eines Ansagetexts in Zeichen (Schnittstelle Alexa-NG/Chromecast: 1-1000). */
 define('ANSAGE_TEXT_MAX', 1000);
@@ -760,12 +786,8 @@ function ansage_sdk_laden($ansage_sdk_datei)
 }
 
 /**
- * Der Webport des LoxBerry; $pfad ist config/system/general.json. Erste
- * Quelle (seit 1.1.0) ist lbwebserverport() aus libs/phplib/loxberry_system.php
- * - so liest der LoxBerry selbst seinen Port. Die Datei wird nur geladen, wenn
- * es sie gibt, und ihre Ausgabe beim Laden verworfen (eine Meldung darin ginge
- * sonst einem Endpunkt vor die Antwort). Ohne sie: general.json wie bisher,
- * fehlt auch die: 80.
+ * Der Webport des LoxBerry; $pfad ist config/system/general.json. Hat die Linie das SDK schon geladen, ist lbwebserverport() die erste Quelle (durch
+ * ansage_sdk_ruf(), seit 1.3.2); das Modul selbst laedt es nicht mehr. Sonst general.json, fehlt auch die: 80.
  *
  * $weit (seit 1.1.2, wahlfrei): true liest general.json in der weiten Form
  * (ansage_webport_aus()); die erste Quelle bleibt lbwebserverport(). Ohne
@@ -776,14 +798,10 @@ function ansage_sdk_laden($ansage_sdk_datei)
 function ansage_webport($pfad, $weit = false)
 {
     if (!is_string($pfad) || $pfad === '') { return 80; }
-    $lib = dirname($pfad, 3) . '/libs/phplib/loxberry_system.php';
-    if (!function_exists('lbwebserverport') && is_file($lib)) {
-        ansage_sdk_laden($lib);
-    }
     if (function_exists('lbwebserverport')) {
         ob_start();
         try {
-            $p = lbwebserverport();
+            $p = ansage_sdk_ruf('lbwebserverport');
         } catch (Throwable $e) {
             $p = null;
         }
@@ -2198,7 +2216,7 @@ function ansage_formular_lesen(array $post, array $alt, array &$mangel, array &$
         }
         $neu[$art . '_token'] = $tok;
         $gew = ($art === 'alexa') ? 'alexang' : 'cc4lox';
-        if ($neu['mode'] === $gew && $tok === '' && !in_array($n[$art . '_token'], $bean, true)) {
+        if (empty($opt['token_vor_ort']) && $neu['mode'] === $gew && $tok === '' && !in_array($n[$art . '_token'], $bean, true)) {
             $melden('M_' . $art_k . '_OHNE_TOKEN', $art . '_token');
         }
     }
@@ -2576,7 +2594,15 @@ function ansage_sprachschluessel()
                'K_TTS_ZIEL_DOPPELT', 'K_ZIELE_TEIL', 'K_ZIEL_UNBEKANNT', 'T_ZIEL', 'T_ZIELE_LETZTE',
                // 1.2.0, Nachbesserung 27.10.: zulaessige Sprachkuerzel nennen, Sprache des Geraets
                'SPRACHE_HINWEIS', 'P_ZIEL_SPRACHE', 'P_ZIEL_SPRACHE_SONOX', 'P_ZIEL_SPRACHE_GERAET', 'ZIEL_SPRACHE_HINWEIS',
-               'K_ZIEL_SPRACHE_GERAET');
+               'K_ZIEL_SPRACHE_GERAET',
+               // seit 1.3.0: wann gesprochen wird
+               'R_HINWEIS', 'L_R_ANLAESSE', 'R_ANLAESSE_HINWEIS', 'L_R_NACHTRUHE', 'R_NACHT_HINWEIS', 'L_R_VON', 'L_R_BIS',
+               'L_R_SPERRE', 'R_SPERRE_HINWEIS', 'R_SCHALTER_HINWEIS', 'TOKEN_VOR_ORT_HINWEIS',
+               'M_R_BLOCK', 'M_R_NACHTRUHE', 'M_R_VON', 'M_R_BIS', 'M_R_SPERRE', 'M_R_GLEICH',
+               'T_R_BEREIT', 'T_R_OFFEN', 'T_R_KEIN_ZIEL', 'T_R_NACHT', 'T_R_TAG', 'T_R_OHNE_RUHE',
+               'T_R_SCHALTER_AUS', 'T_R_SCHALTER_FREI', 'T_R_SCHALTER_NIE',
+               'T_R_G_KEINE_ADRESSE', 'T_R_G_KEIN_ORT', 'T_R_G_KEIN_TOKEN', 'T_R_G_PLUGIN_FEHLT', 'T_R_G_SPRECHEN_AUS',
+               'T_R_G_KEIN_GERAET', 'T_R_G_EINSTELLUNG');
     foreach (ansage_modi() as $mo) { $s[] = 'O_' . strtoupper($mo); }
     foreach (array('ALEXA', 'GOOGLE') as $a) {
         foreach (array('_HINWEIS', '_GERAET_HINWEIS', '_LAUT_HINWEIS', '_TOKEN_HINWEIS') as $x) { $s[] = $a . $x; }
@@ -3988,6 +4014,383 @@ function ansage_selbsttest()
     $pruef('121 frist hilfe', array(ansage_frist(30, array()), ansage_frist(30, array('frist' => 15)), ansage_frist(10, array('frist' => 15)),
                                     ansage_frist(30, array('frist' => '7'))), array(30, 15, 10, 7));
 
+    // --- 1.3.0: wann gesprochen wird ---
+    $p130 = function ($z) { return mktime((int) substr($z, 0, 2), (int) substr($z, 3, 2), 0, 6, 15, 2026); };
+    $r130 = ansage_regeln_vorgaben();
+    $pruef('130 vorgaben', $r130, array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30));
+    foreach (array('21:59' => false, '22:00' => true, '23:30' => true, '00:00' => true, '06:59' => true, '07:00' => false, '12:00' => false) as $z130 => $s130) {
+        $pruef('130 nacht ' . $z130, ansage_nachtruhe($r130, $p130($z130)), $s130);
+    }
+    $pruef('130 nacht aus', ansage_nachtruhe(array('nachtruhe' => 0) + $r130, $p130('23:00')), false);
+    $pruef('130 nacht am tag', array(ansage_nachtruhe(array('von' => '09:00', 'bis' => '17:00') + $r130, $p130('08:59')),
+                                     ansage_nachtruhe(array('von' => '09:00', 'bis' => '17:00') + $r130, $p130('09:00')),
+                                     ansage_nachtruhe(array('von' => '09:00', 'bis' => '17:00') + $r130, $p130('17:00'))), array(false, true, false));
+    $g130 = '';
+    $pruef('130 wert leer gibt vorgabe', ansage_regeln_wert(array(), $g130), $r130);
+    $pruef('130 wert zahlwoerter', ansage_regeln_wert(array('nachtruhe' => '0', 'sperre_min' => '45'), $g130)['sperre_min'], 45);
+    foreach (array(array('von' => '24:00'), array('bis' => '7:00'), array('sperre_min' => 4), array('sperre_min' => 241), array('sperre_min' => 'x'),
+                   array('nachtruhe' => 2), array('fremd' => 1), array('von' => '07:00'), array('von' => array('22:00'))) as $i130 => $w130) {
+        $pruef('130 wert abgewiesen ' . $i130, ansage_regeln_wert($w130, $g130), null);
+    }
+    $pruef('130 wert kein feld', ansage_regeln_wert('x', $g130), null);
+
+    $t130 = $p130('12:00');
+    $e130 = array('schluessel' => 'a:1', 'text' => 'T');
+    $st130 = array('z' => array('a:1' => $t130 - 60));
+    $pruef('130 grund frei', ansage_regel_grund($e130, $r130, array(), $t130), '');
+    $pruef('130 grund sperre', ansage_regel_grund($e130, $r130, $st130, $t130), 'SPERRE');
+    $pruef('130 sperre grenze', array(ansage_regel_grund($e130, $r130, array('z' => array('a:1' => $t130 - 1799)), $t130),
+                                      ansage_regel_grund($e130, $r130, array('z' => array('a:1' => $t130 - 1800)), $t130)), array('SPERRE', ''));
+    $pruef('130 sperre uhr zurueck', ansage_regel_grund($e130, $r130, array('z' => array('a:1' => $t130 + 60)), $t130), '');
+    $pruef('130 sperre null', ansage_regel_grund($e130 + array('sperre_min' => 0), $r130, $st130, $t130), '');
+    $pruef('130 sperre je schluessel', ansage_regel_grund(array('schluessel' => 'a:2', 'text' => 'T'), $r130, $st130, $t130), '');
+    $pruef('130 grund nacht', ansage_regel_grund($e130, $r130, array(), $p130('23:00')), 'NACHTRUHE');
+    $pruef('130 dringend nachts', ansage_regel_grund($e130 + array('dringend' => true), $r130, array(), $p130('23:00')), '');
+    $pruef('130 dringend sperre', ansage_regel_grund($e130 + array('dringend' => true), $r130, array('z' => array('a:1' => $p130('22:59'))), $p130('23:00')), 'SPERRE');
+    $pruef('130 nur nach', array(ansage_regel_grund($e130 + array('nur_nach' => 'g:1'), $r130, array(), $t130),
+                                 ansage_regel_grund($e130 + array('nur_nach' => 'g:1'), $r130, array('g' => array('g:1' => 1)), $t130)), array('NUR_NACH', ''));
+
+    // Nachbar: was das Zielplugin ueber sich sagt
+    $n130 = ansage_nachbar_aus('alexang', json_encode(array('sprechtoken' => $TOK, 'standardgeraet' => 'Flur')));
+    $pruef('130 nachbar alexa', $n130, array('token' => $TOK, 'standard' => true, 'ein' => true));
+    $pruef('130 nachbar alexa leer', ansage_nachbar_aus('alexang', json_encode(array('sprechtoken' => '', 'standardgeraet' => ''))),
+           array('token' => '', 'standard' => false, 'ein' => true));
+    $pruef('130 nachbar kaputt', ansage_nachbar_aus('alexang', '{x'), array('token' => '', 'standard' => null, 'ein' => null));
+    $n130 = ansage_nachbar_aus('cc4lox', "; Kopf\n[CONFIG]\nsprechen_ein=1\r\nsprechen_geraet=\"Bad\"\nsprechtoken=" . $TOK . "\n");
+    $pruef('130 nachbar cc', $n130, array('token' => $TOK, 'standard' => true, 'ein' => true));
+    $pruef('130 nachbar cc aus', ansage_nachbar_aus('cc4lox', "sprechen_ein=0\nsprechen_geraet=\nsprechtoken=\n"),
+           array('token' => '', 'standard' => false, 'ein' => false));
+    $pruef('130 nachbar fremde art', ansage_nachbar_aus('sonox', 'x=1'), array('token' => '', 'standard' => null, 'ein' => null));
+
+    // Ab Werk, ohne dass ein Ziel eingerichtet ist
+    $w130 = ansage_werk_block();
+    $g130 = '';
+    $pruef('130 werk gueltig', ansage_wert_pruefen($w130, $g130) !== null, true);
+    $pruef('130 werk ziele', array($w130['mode'], $w130['ziele'][0]['art'], $w130['ziele'][1]['art'], $w130['ip'], $w130['alexa_token']),
+           array('musicserver', 'cc4lox', 'alexang', '', ''));
+    $pruef('130 vorgaben unberuehrt', array_key_exists('ziele', ansage_vorgaben('musicserver')), false);
+    $nb130 = array('alexang' => array('token' => '', 'standard' => null, 'ein' => null), 'cc4lox' => array('token' => '', 'standard' => null, 'ein' => null));
+    $mem130 = array();
+    $sf130 = function ($fn) use (&$mem130) { list($neu, $erg) = $fn($mem130); if ($neu !== null) { $mem130 = $neu; } return array($erg); };
+    $sch130 = '';
+    $jz130 = $t130;
+    $log = array();
+    $antworten = array();
+    $kr130 = $k + array('nachbar' => function ($m) use (&$nb130) { return $nb130[$m]; }, 'stand_fn' => $sf130,
+                        'schalter' => function () use (&$sch130) { return $sch130; }, 'jetzt' => function () use (&$jz130) { return $jz130; });
+    $ein130 = array(array('schluessel' => 'a:1', 'text' => 'Satz eins.'));
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kr130);
+    $pruef('130 werk ohne ziel: still', array($a130['regel'], $a130['r'], count($log), count($a130['offen'])), array('KEIN_ZIEL', null, 0, 3));
+    $pruef('130 werk ohne ziel: stand leer', $mem130, array());
+
+    // Ziel eingerichtet: Alexa-NG vor Ort, Token nur im Speicher
+    $nb130['alexang'] = array('token' => $TOK, 'standard' => true, 'ein' => true);
+    $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"));
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kr130);
+    $pruef('130 ein ziel vor ort', array($a130['regel'], $a130['r']['stand'], count($log), isset($a130['r']['ziele'])), array('', 1, 1, false));
+    $pruef('130 token nur im post', strpos(json_encode($a130), $TOK), false);
+    $pruef('130 token ging hinaus', strpos((string) json_encode($log[0]), $TOK) !== false, true);
+    $pruef('130 werkblock ungeaendert', $w130['alexa_token'], '');
+    $pruef('130 stand gemerkt', array($mem130['z']['a:1'], $mem130['g']['a:1']), array($t130, 1));
+
+    // Sperre: dieselbe Ansage nach 10 min nicht, nach 30 min wieder
+    $log = array();
+    $jz130 = $t130 + 600;
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kr130);
+    $pruef('130 sperre haelt', array($a130['regel'], $a130['einzeln'], count($log)), array('ANLASS', array('a:1' => 'SPERRE'), 0));
+    $jz130 = $t130 + 1800;
+    $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"));
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kr130);
+    $pruef('130 sperre vorbei', array($a130['regel'], count($log)), array('', 1));
+
+    // Nachtruhe entfaellt ohne Nachholen; dringend spricht und geht dringend hinaus
+    $log = array();
+    $mem130 = array();
+    $jz130 = $p130('23:00');
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kr130);
+    $pruef('130 nacht still', array($a130['regel'], $a130['einzeln'], count($log), $mem130), array('ANLASS', array('a:1' => 'NACHTRUHE'), 0, array()));
+    $jz130 = $p130('07:00');
+    $antworten = array();
+    $a130 = ansage_regel_sprechen(array(), $w130, $r130, $kr130);
+    $pruef('130 nichts nachgeholt', array($a130['regel'], count($log)), array('KEIN_TEXT', 0));
+    $jz130 = $p130('23:00');
+    $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"));
+    $a130 = ansage_regel_sprechen(array(array('schluessel' => 'd:1', 'text' => 'Dringend.', 'dringend' => true)), $w130, $r130, $kr130);
+    $pruef('130 dringend nachts spricht', array($a130['regel'], count($log), strpos((string) json_encode($log[0]), 'dringend') !== false), array('', 1, true));
+
+    // Schalter "Ansagen aus": gilt auch fuer Dringendes, setzt keine Sperre; frei und keine Aussage sprechen
+    $log = array();
+    $mem130 = array();
+    $sch130 = '1';
+    $jz130 = $t130;
+    $a130 = ansage_regel_sprechen(array(array('schluessel' => 'd:1', 'text' => 'Dringend.', 'dringend' => true)), $w130, $r130, $kr130);
+    $pruef('130 schalter', array($a130['regel'], $a130['einzeln'], count($log), $mem130), array('SCHALTER', array('d:1' => 'SCHALTER'), 0, array()));
+    foreach (array('0', '', '-', 'x') as $v130) {
+        $sch130 = $v130;
+        $log = array();
+        $mem130 = array();
+        $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"));
+        $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kr130);
+        $pruef('130 schalter wert ' . $v130 . ' spricht', array($a130['regel'], count($log)), array('', 1));
+    }
+    $sch130 = '';
+    // Der Schalter wird nur gefragt, wenn etwas zu sagen waere
+    $fragen130 = 0;
+    $kq130 = array('schalter' => function () use (&$fragen130) { $fragen130++; return '1'; }) + $kr130;
+    $mem130 = array();
+    $jz130 = $p130('23:00');
+    ansage_regel_sprechen($ein130, $w130, $r130, $kq130);
+    $pruef('130 schalter nachts nicht gefragt', $fragen130, 0);
+    $jz130 = $t130;
+
+    // Mehrere zugleich: ein Satz, keiner geht verloren
+    $log = array();
+    $mem130 = array();
+    $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"));
+    $a130 = ansage_regel_sprechen(array(array('schluessel' => 'a:1', 'text' => 'Satz eins.'), array('schluessel' => 'b:1', 'text' => 'Satz zwei.')), $w130, $r130, $kr130);
+    $pruef('130 zwei in einem', array(count($log), $a130['einzeln'], array_keys($mem130['z'])), array(1, array('a:1' => '', 'b:1' => ''), array('a:1', 'b:1')));
+    $pruef('130 zwei beide im text', array(strpos((string) json_encode($log[0]), 'eins') !== false, strpos((string) json_encode($log[0]), 'zwei') !== false), array(true, true));
+    $log = array();
+    $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"));
+    $a130 = ansage_regel_sprechen(array(array('schluessel' => 'a:1', 'text' => 'Satz eins.'), array('schluessel' => 'c:1', 'text' => 'Satz drei.')), $w130, $r130, $kr130);
+    $pruef('130 nur der freie', array($a130['einzeln'], strpos((string) json_encode($log[0]), 'Satz eins') === false), array(array('a:1' => 'SPERRE', 'c:1' => ''), true));
+
+    // "wieder da" nur nach "gestoert"
+    $log = array();
+    $mem130 = array();
+    $a130 = ansage_regel_sprechen(array(array('schluessel' => 'w:1', 'text' => 'Wieder da.', 'nur_nach' => 's:1')), $w130, $r130, $kr130);
+    $pruef('130 wieder ohne stoerung', array($a130['einzeln'], count($log)), array(array('w:1' => 'NUR_NACH'), 0));
+    $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"), array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"));
+    ansage_regel_sprechen(array(array('schluessel' => 's:1', 'text' => 'Gestoert.')), $w130, $r130, $kr130);
+    $a130 = ansage_regel_sprechen(array(array('schluessel' => 'w:1', 'text' => 'Wieder da.', 'nur_nach' => 's:1')), $w130, $r130, $kr130);
+    $pruef('130 wieder nach stoerung', array($a130['einzeln'], isset($mem130['g']['s:1'])), array(array('w:1' => ''), false));
+
+    // Stand nicht schreibbar: nichts sprechen
+    $log = array();
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, array('stand_fn' => function ($fn) { return null; }) + $kr130);
+    $pruef('130 stand kaputt', array($a130['regel'], count($log)), array('STAND', 0));
+    $sf2130 = 0;
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, array('stand_fn' => function ($fn) use (&$sf2130, &$mem130) {
+        if (++$sf2130 > 1) { return null; }
+        list(, $erg) = $fn($mem130);
+        return array($erg);
+    }) + $kr130);
+    $pruef('130 stand beim merken kaputt', array($a130['regel'], $a130['r'], count($log)), array('STAND', null, 0));
+    $pruef('130 schalter nur 0 oder 1', array(ansage_schalter_lesen(array('schalter' => function () { return '-'; })),
+                                              ansage_schalter_lesen(array('schalter' => function () { return '1'; }))), array('', '1'));
+    $kl130 = $kr130;
+    unset($kl130['stand_fn']);
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kl130 + array('ordner' => ''));
+    $pruef('130 ohne ordner', array($a130['regel'], count($log)), array('STAND', 0));
+
+    // Bewusst AUS bleibt AUS; ein Ziel faellt aus: die anderen sprechen
+    $mem130 = array();
+    $a130 = ansage_regel_sprechen($ein130, array('mode' => 'aus') + $w130, $r130, $kr130);
+    $pruef('130 aus bleibt aus', array($a130['regel'], count($log), $mem130), array('AUS', 0, array()));
+    $a130 = ansage_regel_sprechen($ein130, array('mode' => 'audioserver') + $w130, $r130, $kr130);
+    $pruef('130 audioserver spricht nicht', $a130['regel'], 'AUS');
+    $pruef('130 block oder aus: aus', ansage_block_oder_aus(array('mode' => 'aus'))['mode'], 'aus');
+    $pruef('130 block oder aus: kaputt', ansage_block_oder_aus(array('mode' => 'boese'))['mode'], 'aus');
+    $pruef('130 block oder aus: fremd', ansage_block_oder_aus(array('mode' => 'alexang', 'fremd' => 1))['mode'], 'aus');
+    $pruef('130 block oder aus: bleibt', ansage_block_oder_aus(array('mode' => 'cc4lox'))['mode'], 'cc4lox');
+
+    // Eingerichtet oder nicht
+    $bk130 = array('home' => '', 'nachbar' => function ($m) use (&$nb130) { return $nb130[$m]; });
+    $v130 = ansage_vorgaben('aus');
+    $nb130['alexang'] = array('token' => '', 'standard' => null, 'ein' => null);
+    $nb130['cc4lox'] = array('token' => '', 'standard' => null, 'ein' => null);
+    $pruef('130 ms ohne adresse', ansage_ziel_eingerichtet(array('mode' => 'musicserver') + $v130, $bk130), 'KEINE_ADRESSE');
+    $pruef('130 ms mit adresse', ansage_ziel_eingerichtet(array('mode' => 'musicserver', 'ip' => '192.168.1.20') + $v130, $bk130), '');
+    $pruef('130 ohne token', ansage_ziel_eingerichtet(array('mode' => 'alexang') + $v130, $bk130), 'KEIN_TOKEN');
+    $pruef('130 mit token unbekannt', ansage_ziel_eingerichtet(array('mode' => 'alexang', 'alexa_token' => $TOK) + $v130, $bk130), '');
+    $nb130['cc4lox'] = array('token' => $TOK, 'standard' => true, 'ein' => false);
+    $pruef('130 sprechen aus', ansage_ziel_eingerichtet(array('mode' => 'cc4lox', 'google_token' => $TOK) + $v130, $bk130), 'SPRECHEN_AUS');
+    $nb130['cc4lox'] = array('token' => $TOK, 'standard' => false, 'ein' => true);
+    $pruef('130 kein geraet', ansage_ziel_eingerichtet(array('mode' => 'cc4lox', 'google_token' => $TOK) + $v130, $bk130), 'KEIN_GERAET');
+    $pruef('130 eigenes geraet', ansage_ziel_eingerichtet(array('mode' => 'cc4lox', 'google_token' => $TOK, 'google_geraet' => 'Bad') + $v130, $bk130), '');
+    $pruef('130 sonos ohne zone', ansage_ziel_eingerichtet(array('mode' => 'sonos4lox') + $v130, $bk130), 'KEIN_ORT');
+    $pruef('130 sonox ohne raum', ansage_ziel_eingerichtet(array('mode' => 'sonox') + $v130, $bk130), 'KEIN_ORT');
+
+    // Nur die eingerichteten Ziele; das erste wird Ziel 1
+    $nb130['cc4lox'] = array('token' => $TOK2, 'standard' => true, 'ein' => true);
+    $nb130['alexang'] = array('token' => $TOK, 'standard' => true, 'ein' => true);
+    list($b130, $be130, $of130) = ansage_ziele_bereit(ansage_tts_vor_ort($w130, $bk130), $bk130);
+    $pruef('130 bereit zwei', array($b130['mode'], count($b130['ziele']), $b130['ziele'][0]['art'], count($be130), $of130[0]['grund'], $b130['alexa_token']),
+           array('cc4lox', 1, 'alexang', 2, 'KEINE_ADRESSE', $TOK));
+    list($b130) = ansage_ziele_bereit(ansage_tts_vor_ort(array('ip' => '192.168.1.20', 'volume' => 33) + $w130, $bk130), $bk130);
+    $pruef('130 bereit drei, ziel 1 bleibt', array($b130['mode'], count($b130['ziele']), $b130['volume']), array('musicserver', 2, 33));
+    $nb130['cc4lox'] = array('token' => $TOK2, 'standard' => false, 'ein' => false);
+    $nb130['alexang'] = array('token' => $TOK, 'standard' => false, 'ein' => true);
+    list($b130, , $of130) = ansage_ziele_bereit(ansage_tts_vor_ort(array('ip' => '192.168.1.20') + $w130, $bk130), $bk130);
+    $pruef('130 bereit einzelweg', array($b130['mode'], isset($b130['ziele']), $of130[0]['art'], $of130[0]['grund']),
+           array('musicserver', false, 'cc4lox', 'SPRECHEN_AUS'));
+    $pruef('130 ziel aus block laut', ansage_ziel_aus_block(array('mode' => 'alexang', 'alexa_geraet' => 'Flur', 'alexa_laut' => 40) + $v130),
+           array('art' => 'alexang', 'wo' => 'Flur', 'laut' => 40, 'sprache' => '', 'ein' => 1));
+    $pruef('130 ziel aus block ms', ansage_ziel_aus_block(array('mode' => 'musicserver', 'zones' => '3', 'volume' => 20, 'lang' => 'en') + $v130),
+           array('art' => 'musicserver', 'wo' => '3', 'laut' => 20, 'sprache' => 'en', 'ein' => 1));
+
+    // Ein Ziel scheitert: "teils" ist kein Fehler fuer die anderen, die Sperre steht
+    $nb130['cc4lox'] = array('token' => $TOK2, 'standard' => true, 'ein' => true);
+    $nb130['alexang'] = array('token' => $TOK, 'standard' => true, 'ein' => true);
+    $log = array();
+    $mem130 = array();
+    $antworten = array();
+    $a130 = ansage_regel_sprechen($ein130, $w130, $r130, array('transport_viele' => null) + $kr130);
+    $pruef('130 alle ziele tot: stand 0', $a130['r']['stand'], 0);
+    $pruef('130 alle ziele tot: sperre steht', isset($mem130['z']['a:1']), true);
+
+    // Formular: leer ist kein Mangel mit token_vor_ort; "aus" gewinnt nur mit dem Schalter
+    $mg130 = array();
+    $be130 = array();
+    $fp130 = array('tts_mode' => 'alexang', 'tts_port' => '7091', 'tts_zones' => '1', 'tts_volume' => '8', 'tts_lang' => 'de');
+    ansage_formular_lesen($fp130, array(), $mg130, $be130);
+    $pruef('130 formular ohne token: mangel wie bisher', in_array('tts_alexa_token', $be130, true), true);
+    $mg130 = array();
+    $be130 = array();
+    ansage_formular_lesen($fp130, array(), $mg130, $be130, array('token_vor_ort' => true));
+    $pruef('130 formular token vor ort', $mg130, array());
+    $fz130 = array('tts_mode' => 'aus', 'tts_port' => '7091', 'tts_zones' => '1', 'tts_volume' => '8', 'tts_lang' => 'de',
+                   'tts_ziel_art' => array(2 => 'alexang'), 'tts_ziel_wo' => array(2 => ''), 'tts_ziel_ein' => array(2 => '1'));
+    $mg130 = array();
+    $be130 = array();
+    $z130 = ansage_formular_lesen($fz130, array(), $mg130, $be130, array('ziele' => true, 'token_vor_ort' => true));
+    $pruef('130 aus mit zielen wie bisher', count($mg130) === 1 && $mg130[0]['kennung'] === 'M_ZIEL1_AUS', true);
+    $mg130 = array();
+    $be130 = array();
+    $z130 = ansage_formular_lesen($fz130, array(), $mg130, $be130, array('ziele' => true, 'token_vor_ort' => true, 'aus_gewinnt' => true));
+    $pruef('130 aus gewinnt', array($mg130, $z130['mode'], count($z130['ziele'])), array(array(), 'aus', 1));
+    $mg130 = array();
+    $be130 = array();
+    list($r2130, $h130) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_von' => '21:30', 'ansage_ruhe_bis' => '06:00', 'ansage_sperre_min' => '60', 'ansage_anlass_a' => '1'),
+                                                 $r130, array('a' => 'A', 'b' => 'B'), $mg130, $be130);
+    $pruef('130 formular regeln', array($r2130, $h130, $mg130), array(array('nachtruhe' => 1, 'von' => '21:30', 'bis' => '06:00', 'sperre_min' => 60), array('a' => 1, 'b' => 0), array()));
+    $mg130 = array();
+    $be130 = array();
+    list($r2130) = ansage_regeln_formular(array('ansage_ruhe_von' => '25:00', 'ansage_sperre_min' => '1'), $r130, array(), $mg130, $be130);
+    $pruef('130 formular mangel', array($be130, $r2130['von'], $r2130['sperre_min'], $r2130['nachtruhe']), array(array('ansage_ruhe_von', 'ansage_sperre_min'), '22:00', 30, 0));
+    $mg130 = array();
+    $be130 = array();
+    ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_von' => '08:00', 'ansage_ruhe_bis' => '08:00'), $r130, array(), $mg130, $be130);
+    $pruef('130 formular gleich', $mg130[0]['kennung'], 'M_R_GLEICH');
+    $mg130 = array();
+    $be130 = array();
+    list($r2130) = ansage_regeln_formular(array('ansage_ruhe_von' => '00:00', 'ansage_ruhe_bis' => '06:00'), $r130, array(), $mg130, $be130);
+    $pruef('130 formular mitternacht', array($mg130, $r2130['von']), array(array(), '00:00'));
+    $h130 = ansage_regeln_html($r130, array('a' => 0), array('a' => 'A', 'b' => 'B'), array(), array());
+    $pruef('130 html haken', array(strpos($h130, 'name="ansage_anlass_a" value="1" checked'), strpos($h130, 'name="ansage_anlass_b" value="1" checked') !== false), array(false, true));
+
+    // MQTT-Teile (die Sitzung selbst misst Werkzeug probe_schalter.py gegen einen Attrappen-Broker und am Geraet)
+    $pruef('130 mqtt paket', ansage_mqtt_paket("\x20\x02\x00\x00Rest"), array(2, "\x00\x00", 'Rest'));
+    $pruef('130 mqtt paket halb', ansage_mqtt_paket("\x20\x02\x00"), null);
+    $pruef('130 mqtt paket leer', ansage_mqtt_paket(''), null);
+    $pruef('130 mqtt laenge 200', ansage_mqtt_paket("\x30\xC8\x01" . str_repeat('x', 200))[1], str_repeat('x', 200));
+    $pruef('130 mqtt bauen', ansage_mqtt_bauen(0xE0, ''), "\xE0\x00");
+    $pruef('130 mqtt bauen 200', substr(ansage_mqtt_bauen(0x10, str_repeat('x', 200)), 0, 3), "\x10\xC8\x01");
+    $pruef('130 mqtt publish', ansage_mqtt_publish("\x00\x03a/b1"), array('a/b', '1'));
+    $pruef('130 mqtt publish kurz', ansage_mqtt_publish("\x00\x09a"), null);
+    $pruef('130 schalter ohne wurzel', ansage_schalter_lesen(array('home' => '')), '');
+
+    // --- 1.3.1: das Sprechtoken dauerhaft uebernehmen ---
+    $nb131 = array('alexang' => array('token' => $TOK, 'standard' => true, 'ein' => true), 'cc4lox' => array('token' => $TOK2, 'standard' => true, 'ein' => true));
+    $k131 = array('home' => '', 'nachbar' => function ($m) use (&$nb131) { return $nb131[$m]; });
+    list($t131, $h131, $g131) = ansage_token_abgleich(ansage_werk_block(), array(), $k131);
+    $pruef('131 uebernommen', array($t131['alexa_token'], $t131['google_token'], $h131, $g131),
+           array($TOK, $TOK2, array('google_token' => 'nachbar', 'alexa_token' => 'nachbar'), array('cc4lox', 'alexang')));
+    list($t2131, $h2131, $g2131) = ansage_token_abgleich($t131, $h131, $k131);
+    $pruef('131 zweiter lauf aendert nichts', array($t2131 === $t131, $g2131), array(true, array()));
+    $nb131['alexang']['token'] = 'NeuesToken0123456789ab';
+    list($t2131, , $g2131) = ansage_token_abgleich($t131, $h131, $k131);
+    $pruef('131 nachgezogen', array($t2131['alexa_token'], $t2131['google_token'], $g2131), array('NeuesToken0123456789ab', $TOK2, array('alexang')));
+    list($t2131, $h2131, $g2131) = ansage_token_abgleich(array('alexa_token' => 'VonHand0123456789') + ansage_werk_block(), array(), $k131);
+    $pruef('131 von hand bleibt', array($t2131['alexa_token'], isset($h2131['alexa_token']), in_array('alexang', $g2131, true)), array('VonHand0123456789', false, false));
+    $nb131['alexang']['token'] = $TOK;
+    $nb131['cc4lox'] = array('token' => 'AnderesToken0123456', 'standard' => true, 'ein' => false);
+    list($t2131, $h2131, $g2131) = ansage_token_abgleich(ansage_werk_block(), array(), $k131);
+    $pruef('131 sperre: nichts neu', array($t2131['google_token'], isset($h2131['google_token']), $g2131), array('', false, array('alexang')));
+    list($t2131, $h2131, $g2131) = ansage_token_abgleich($t131, $h131, $k131);
+    $pruef('131 sperre: gespeichertes bleibt liegen', array($t2131['google_token'], $g2131), array($TOK2, array()));
+    $b131 = ansage_token_fuer_lauf($t131, $h131, $k131);
+    $pruef('131 sperre: nicht benutzt', array($b131['google_token'], $b131['alexa_token']), array('', $TOK));
+    $b131 = ansage_token_fuer_lauf(array('google_token' => 'VonHand0123456789') + $t131, array(), $k131);
+    $pruef('131 sperre: von hand bleibt im block', $b131['google_token'], 'VonHand0123456789');
+    $pruef('131 sperre: ziel nicht eingerichtet', ansage_ziel_eingerichtet(array('mode' => 'cc4lox', 'google_token' => $TOK2) + ansage_vorgaben(), $k131), 'SPRECHEN_AUS');
+    $pruef('131 vor ort: sperre fuellt nicht', ansage_tts_vor_ort(ansage_werk_block(), $k131)['google_token'], '');
+    $nb131['cc4lox'] = array('token' => '', 'standard' => true, 'ein' => true);
+    list($t2131, $h2131, $g2131) = ansage_token_abgleich($t131, $h131, $k131);
+    $pruef('131 dort geloescht: uebernommenes weg', array($t2131['google_token'], isset($h2131['google_token']), $g2131), array('', false, array('cc4lox')));
+    list($t2131, , $g2131) = ansage_token_abgleich(array('google_token' => 'VonHand0123456789') + $t131, array(), $k131);
+    $pruef('131 dort geloescht: von hand bleibt', array($t2131['google_token'], in_array('cc4lox', $g2131, true)), array('VonHand0123456789', false));
+    $nb131['cc4lox'] = array('token' => '', 'standard' => null, 'ein' => null);
+    list($t2131, , $g2131) = ansage_token_abgleich($t131, $h131, $k131);
+    $pruef('131 unlesbar: bleibt', array($t2131['google_token'], $g2131), array($TOK2, array()));
+    $pruef('131 aus: nichts', ansage_token_abgleich(array('mode' => 'aus') + ansage_werk_block(), array(), $k131)[2], array());
+    $z131 = ansage_vorgaben('musicserver');
+    $z131['ziele'] = array(array('art' => 'cc4lox', 'wo' => '', 'laut' => -1, 'sprache' => '', 'ein' => 0));
+    $pruef('131 ziel aus: nichts', ansage_token_abgleich($z131, array(), $k131)[2], array());
+    $pruef('131 herkunft kein feld', ansage_token_abgleich(array('mode' => 'aus'), 'x', $k131)[1], array());
+    $pruef('131 formular', array(ansage_token_herkunft_formular(array('tts_alexa_token' => 'x'), array('alexa_token' => 'nachbar', 'google_token' => 'nachbar')),
+                                 ansage_token_herkunft_formular(array('tts_google_token_loeschen' => '1'), array('google_token' => 'nachbar')),
+                                 ansage_token_herkunft_formular(array('tts_alexa_token' => ' '), array('alexa_token' => 'nachbar'))),
+           array(array('google_token' => 'nachbar'), array(), array('alexa_token' => 'nachbar')));
+    // Formular: das Token wird gespeichert - mit jeder Ausgabeart und fuer die Tabelle (Pruefauftrag 01.11.2026)
+    $fb131 = array('tts_port' => '7091', 'tts_zones' => '1', 'tts_volume' => '8', 'tts_lang' => 'de', 'tts_alexa_token' => $TOK, 'tts_google_token' => $TOK2);
+    foreach (array('aus', 'musicserver', 'alexang', 'cc4lox') as $m131) {
+        $mg131 = array();
+        $be131 = array();
+        $f131 = ansage_formular_lesen(array('tts_mode' => $m131) + $fb131, array(), $mg131, $be131, array('ziele' => true));
+        $pruef('131 token gespeichert bei ' . $m131, array($f131['alexa_token'], $f131['google_token'], $mg131), array($TOK, $TOK2, array()));
+    }
+    $mg131 = array();
+    $be131 = array();
+    $f131 = ansage_formular_lesen(array('tts_mode' => 'musicserver', 'tts_ziel_art' => array(2 => 'alexang', 3 => 'cc4lox'), 'tts_ziel_wo' => array(2 => 'Flur', 3 => 'Bad'), 'tts_ziel_ein' => array(2 => '1', 3 => '1')) + $fb131,
+                                  array(), $mg131, $be131, array('ziele' => true));
+    $pruef('131 token mit zielen in der tabelle', array($f131['alexa_token'], $f131['google_token'], count($f131['ziele']), $mg131), array($TOK, $TOK2, 2, array()));
+    $mg131 = array();
+    $be131 = array();
+    $f131 = ansage_formular_lesen(array('tts_mode' => 'aus', 'tts_port' => '7091', 'tts_zones' => '1', 'tts_volume' => '8', 'tts_lang' => 'de'),
+                                  array('alexa_token' => $TOK, 'google_token' => $TOK2), $mg131, $be131);
+    $pruef('131 leeres feld behaelt das token', array($f131['alexa_token'], $f131['google_token']), array($TOK, $TOK2));
+
+    // --- 1.3.2: das SDK laesst die Globalen der Linie in Ruhe, und das Modul laedt es nicht ---
+    $GLOBALS['cfg'] = array('linie' => 132);
+    $GLOBALS['cfgwasread'] = null;
+    $r132 = ansage_sdk_ruf(function () {
+        global $cfg, $cfgwasread, $webserverport;
+        $cfg = new stdClass();
+        $cfgwasread = 1;
+        $webserverport = 8132;
+        return 'ok';
+    });
+    $pruef('132 rueckgabe', $r132, 'ok');
+    $pruef('132 cfg bleibt feld', $GLOBALS['cfg'], array('linie' => 132));
+    $pruef('132 wasread bleibt', $GLOBALS['cfgwasread'], null);
+    $pruef('132 fehlendes bleibt fehlend', array_key_exists('webserverport', $GLOBALS), false);
+    unset($GLOBALS['cfg'], $GLOBALS['cfgwasread']);
+    ansage_sdk_ruf(function () { global $cfg; $cfg = new stdClass(); });
+    $pruef('132 ohne cfg wieder ohne', array_key_exists('cfg', $GLOBALS), false);
+    $GLOBALS['cfg'] = array('linie' => 133);
+    try {
+        ansage_sdk_ruf(function () { global $cfg; $cfg = new stdClass(); throw new Exception('x'); });
+    } catch (Exception $e132) {
+        // erwartet
+    }
+    $pruef('132 auch nach einem fehler', $GLOBALS['cfg'], array('linie' => 133));
+    unset($GLOBALS['cfg']);
+    $o132 = sys_get_temp_dir() . '/ansage132_' . getmypid() . '_' . mt_rand(1000, 9999);
+    if (@mkdir($o132 . '/libs/phplib', 0700, true) && @mkdir($o132 . '/config/system', 0700, true)) {
+        @file_put_contents($o132 . '/libs/phplib/loxberry_system.php', "<?php function ansage_test_sdk_geladen132() { return 1; }\n");
+        @file_put_contents($o132 . '/config/system/general.json', '{"Webserver":{"Port":"8132"}}');
+        $pruef('132 port aus general.json', function_exists('lbwebserverport') ? 8132 : ansage_webport($o132 . '/config/system/general.json'), 8132);
+        $pruef('132 sdk nicht geladen', function_exists('ansage_test_sdk_geladen132'), false);
+        @unlink($o132 . '/libs/phplib/loxberry_system.php');
+        @unlink($o132 . '/config/system/general.json');
+        @rmdir($o132 . '/libs/phplib');
+        @rmdir($o132 . '/libs');
+        @rmdir($o132 . '/config/system');
+        @rmdir($o132 . '/config');
+        @rmdir($o132);
+    }
+
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();
     $pruef('sprachschluessel eindeutig', count($sl), count(array_unique($sl)));
@@ -4845,10 +5248,10 @@ function ansage_ziele_formular(array $post, array $neu, $modi, $melden, array $o
             $melden('M_ZIEL_SPRACHE|' . $nr, $fn('ziel_sprache')); $fehler = true;
         }
         if ($fehler) { continue; }
-        if ($ein === 1 && $art === 'alexang' && (!isset($neu['alexa_token']) || $neu['alexa_token'] === '')) {
+        if (empty($opt['token_vor_ort']) && $ein === 1 && $art === 'alexang' && (!isset($neu['alexa_token']) || $neu['alexa_token'] === '')) {
             $melden('M_ZIEL_OHNE_TOKEN|' . $nr, $fn('ziel_art')); continue;
         }
-        if ($ein === 1 && $art === 'cc4lox' && (!isset($neu['google_token']) || $neu['google_token'] === '')) {
+        if (empty($opt['token_vor_ort']) && $ein === 1 && $art === 'cc4lox' && (!isset($neu['google_token']) || $neu['google_token'] === '')) {
             $melden('M_ZIEL_OHNE_TOKEN|' . $nr, $fn('ziel_art')); continue;
         }
         $s = ansage_ziel_schluessel($art, $wo);
@@ -4858,7 +5261,7 @@ function ansage_ziele_formular(array $post, array $neu, $modi, $melden, array $o
     }
     $an = false;
     foreach ($liste as $z) { if ($z['ein'] === 1) { $an = true; } }
-    if ($an && isset($neu['mode']) && $neu['mode'] === 'aus') { $melden('M_ZIEL1_AUS', 'mode'); }
+    if ($an && isset($neu['mode']) && $neu['mode'] === 'aus' && empty($opt['aus_gewinnt'])) { $melden('M_ZIEL1_AUS', 'mode'); }
     if ($an && isset($neu['mode']) && $neu['mode'] === 'audioserver') { $melden('M_ZIEL1_AUDIOSERVER', 'mode'); }
     return $liste;
 }
@@ -4942,6 +5345,765 @@ function ansage_ziele_html(array $tts, array $h, array $k)
     $o[] = '    <div class="sm-hilfe">' . $e($t('ZIEL_SPRACHE_HINWEIS')) . '</div>';
     $o[] = '</div>';
     return $o;
+}
+
+/* ==================================================================
+ * Wann gesprochen wird (seit 1.3.0)
+ * ================================================================== */
+
+/** Das Haus-Thema des Loxone-Schalters "Ansagen aus": retained, 1 = alle Plugins schweigen, sonst frei. */
+define('ANSAGE_SCHALTER_THEMA', 'haus/ansage/ruhe');
+/** So lange (Sekunden) wartet eine Sitzung hoechstens auf den Broker. */
+define('ANSAGE_SCHALTER_FRIST', 2);
+
+/** Die Ausgabeart von Ziel 1 einer Anlage, die nie etwas zur Sprachausgabe gespeichert hat. */
+function ansage_werk_modus()
+{
+    return 'musicserver';
+}
+
+/**
+ * Der Block tts ab Werk (Entscheidung des Hausherrn 01.11.2026): EIN, mit Loxone Music Server,
+ * Google ueber Chromecast4lox und Amazon Echo ueber Alexa-NG. Die Regel, wann er gilt, gehoert in
+ * die Linie und ist genau eine Zeile: der Schluessel fehlt in der gespeicherten Konfiguration (nie
+ * gesetzt). Ein gespeicherter Block bleibt, wie er ist - auch nach einem Update, auch mit mode 'aus';
+ * ein ungueltiger gilt als 'aus' (ansage_block_oder_aus()). Solange ein Ziel nicht eingerichtet ist,
+ * wird es uebergangen, ohne Fehler (ansage_ziele_bereit()).
+ */
+function ansage_werk_block()
+{
+    $b = ansage_vorgaben(ansage_werk_modus());
+    $b['ziele'] = array(
+        array('art' => 'cc4lox', 'wo' => '', 'laut' => -1, 'sprache' => '', 'ein' => 1),
+        array('art' => 'alexang', 'wo' => '', 'laut' => -1, 'sprache' => '', 'ein' => 1),
+    );
+    return $b;
+}
+
+/** Ein gespeicherter Block, geprueft und vervollstaendigt; ein ungueltiger gilt als 'aus' - er schaltet nie etwas ein. */
+function ansage_block_oder_aus($tts, $modi = null)
+{
+    $g = '';
+    $p = ansage_wert_pruefen($tts, $g, $modi);
+    if ($p === null) { $p = array('mode' => 'aus'); }
+    list($b) = ansage_vervollstaendigen($p, 'aus');
+    return $b;
+}
+
+/** Die Regeln ab Werk (Entscheidungen 01.11.2026): Nachtruhe 22-7 Uhr, dieselbe Ansage hoechstens einmal in 30 Minuten. */
+function ansage_regeln_vorgaben()
+{
+    return array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30);
+}
+
+/**
+ * Den Block der Regeln pruefen. Fehlende Schluessel bekommen ihre Vorgabe (nie gesetzt).
+ * Rueckgabe: der Block oder null; $grund nennt den Mangel (Kennung M_R_...).
+ */
+function ansage_regeln_wert($r, &$grund = '')
+{
+    $grund = '';
+    if (!is_array($r)) { $grund = 'M_R_BLOCK'; return null; }
+    $aus = ansage_regeln_vorgaben();
+    foreach ($r as $s => $w) {
+        switch ((string) $s) {
+            case 'nachtruhe':
+                if ($w !== 0 && $w !== 1 && $w !== '0' && $w !== '1') { $grund = 'M_R_NACHTRUHE'; return null; }
+                $aus['nachtruhe'] = (int) $w;
+                break;
+            case 'von':
+            case 'bis':
+                if (!is_string($w) || !preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w)) {
+                    $grund = 'M_R_' . strtoupper((string) $s);
+                    return null;
+                }
+                $aus[$s] = $w;
+                break;
+            case 'sperre_min':
+                if (!(is_int($w) || (is_string($w) && preg_match('/^[0-9]{1,3}\z/', $w))) || (int) $w < 5 || (int) $w > 240) {
+                    $grund = 'M_R_SPERRE';
+                    return null;
+                }
+                $aus['sperre_min'] = (int) $w;
+                break;
+            default:
+                $grund = 'M_R_BLOCK';
+                return null;
+        }
+    }
+    if ($aus['von'] === $aus['bis']) { $grund = 'M_R_GLEICH'; return null; }
+    return $aus;
+}
+
+/** Liegt $jetzt in der Nachtruhe? Von einschliesslich, bis ausschliesslich, auch ueber Mitternacht. */
+function ansage_nachtruhe(array $regeln, $jetzt)
+{
+    if (empty($regeln['nachtruhe'])) { return false; }
+    $min = function ($hm) { return ((int) substr($hm, 0, 2)) * 60 + (int) substr($hm, 3, 2); };
+    $n = $min(date('H:i', (int) $jetzt));
+    $v = $min($regeln['von']);
+    $b = $min($regeln['bis']);
+    return $v < $b ? ($n >= $v && $n < $b) : ($n >= $v || $n < $b);
+}
+
+/**
+ * Darf dieser Eintrag sprechen? Rein: keine Datei, kein Netz. Rueckgabe '' oder der Grund
+ * (NACHTRUHE, NUR_NACH, SPERRE). Dringendes uebergeht nur die Nachtruhe; die Sperre gilt auch fuer
+ * Dringendes (ein flatternder Trockenlauf spraeche sonst im Minutentakt) - wer jedes Mal sprechen muss
+ * (Klingel), setzt im Eintrag 'sperre_min' => 0.
+ */
+function ansage_regel_grund(array $e, array $regeln, array $stand, $jetzt)
+{
+    if (empty($e['dringend']) && ansage_nachtruhe($regeln, $jetzt)) { return 'NACHTRUHE'; }
+    if (isset($e['nur_nach']) && empty($stand['g'][$e['nur_nach']])) { return 'NUR_NACH'; }
+    $min = isset($e['sperre_min']) ? (int) $e['sperre_min'] : (int) $regeln['sperre_min'];
+    $s = (string) $e['schluessel'];
+    if ($min > 0 && isset($stand['z'][$s]) && is_int($stand['z'][$s])) {
+        $d = (int) $jetzt - $stand['z'][$s];
+        if ($d >= 0 && $d < $min * 60) { return 'SPERRE'; }     // eine zurueckgestellte Uhr sperrt nicht
+    }
+    return '';
+}
+
+/**
+ * Den Stand der Regeln (ansage_regeln.json im Ordner $k['ordner']) unter einer Dateisperre aendern:
+ * $aendern(Stand) -> array(neuer Stand oder null, Ergebnis). Rueckgabe array(Ergebnis) oder null, wenn der
+ * Stand nicht geschrieben werden konnte. Fuer den Selbsttest: $k['stand_fn'] ersetzt die Datei.
+ */
+function ansage_stand_aendern($aendern, array $k)
+{
+    if (isset($k['stand_fn']) && is_callable($k['stand_fn'])) {
+        return call_user_func($k['stand_fn'], $aendern);
+    }
+    $o = (isset($k['ordner']) && is_string($k['ordner'])) ? $k['ordner'] : '';
+    if ($o === '' || !is_dir($o)) { return null; }
+    $f = $o . '/ansage_regeln.json';
+    $h = @fopen($f, 'c+');
+    if ($h === false) { return null; }
+    if (!flock($h, LOCK_EX)) { fclose($h); return null; }
+    $roh = stream_get_contents($h);
+    $d = is_string($roh) ? json_decode($roh, true) : null;
+    list($neu, $erg) = call_user_func($aendern, is_array($d) ? $d : array());
+    $ok = true;
+    if ($neu !== null) {
+        $js = json_encode($neu);
+        $ok = is_string($js) && rewind($h) && ftruncate($h, 0) && fwrite($h, $js) === strlen($js) && fflush($h);
+    }
+    flock($h, LOCK_UN);
+    fclose($h);
+    @chmod($f, 0600);
+    return $ok ? array($erg) : null;
+}
+
+/**
+ * Was ein Zielplugin ueber sich sagt, rein aus dem Inhalt seiner Konfiguration:
+ * array('token' => '', 'standard' => bool|null (ein Standardgeraet ist eingestellt), 'ein' => bool|null (spricht es fuer
+ * andere Plugins)). Alexa-NG: JSON mit sprechtoken, standardgeraet. Chromecast: .cfg mit Zeilen name=wert.
+ * Gelesen werden nur diese Felder; das Sprechtoken bleibt im Speicher und wird nie geschrieben.
+ */
+function ansage_nachbar_aus($modus, $roh)
+{
+    $aus = array('token' => '', 'standard' => null, 'ein' => null);
+    if (!is_string($roh) || $roh === '') { return $aus; }
+    if ($modus === 'alexang') {
+        $d = json_decode($roh, true);
+        if (!is_array($d)) { return $aus; }
+        if (isset($d['sprechtoken']) && ansage_token_ok($d['sprechtoken'])) { $aus['token'] = $d['sprechtoken']; }
+        $aus['standard'] = isset($d['standardgeraet']) && is_string($d['standardgeraet']) && $d['standardgeraet'] !== '';
+        $aus['ein'] = true;
+        return $aus;
+    }
+    if ($modus === 'cc4lox') {
+        $w = array();
+        foreach (preg_split('/\r?\n/', $roh) as $z) {
+            if (preg_match('/^\s*(sprechen_ein|sprechen_geraet|sprechtoken)\s*=\s*"?(.*?)"?\s*\z/', $z, $t)) { $w[$t[1]] = $t[2]; }
+        }
+        if (!$w) { return $aus; }
+        if (isset($w['sprechtoken']) && ansage_token_ok($w['sprechtoken'])) { $aus['token'] = $w['sprechtoken']; }
+        $aus['standard'] = isset($w['sprechen_geraet']) && $w['sprechen_geraet'] !== '';
+        $aus['ein'] = isset($w['sprechen_ein']) && $w['sprechen_ein'] === '1';
+    }
+    return $aus;
+}
+
+/** Dasselbe aus der Datei des Plugins auf diesem LoxBerry. Fuer den Selbsttest: $k['nachbar'] ersetzt die Datei. */
+function ansage_nachbar($modus, array $k)
+{
+    if (isset($k['nachbar']) && is_callable($k['nachbar'])) { return call_user_func($k['nachbar'], $modus); }
+    $leer = array('token' => '', 'standard' => null, 'ein' => null);
+    $h = ansage_lbhome(ansage_k_home($k));
+    if ($h === '' || !ansage_ist_ng($modus)) { return $leer; }
+    $o = ansage_plugin_ordner($modus, $h);
+    $f = $h . '/config/plugins/' . $o . '/' . ($modus === 'alexang' ? 'alexang.json' : $o . '.cfg');
+    if (!is_file($f) || !is_readable($f) || (int) @filesize($f) > 1048576) { return $leer; }
+    $roh = @file_get_contents($f);
+    return ansage_nachbar_aus($modus, $roh === false ? '' : $roh);
+}
+
+/**
+ * Leere Sprechtoken eines Blocks aus dem Zielplugin auf diesem LoxBerry ergaenzen, im Speicher fuer den einen Lauf. Gibt es keines
+ * oder spricht das Zielplugin nicht fuer andere, bleibt es leer. Dauerhaft uebernimmt seit 1.3.1 ansage_token_abgleich().
+ */
+function ansage_tts_vor_ort(array $tts, array $k)
+{
+    foreach (array('alexang' => 'alexa_token', 'cc4lox' => 'google_token') as $modus => $s) {
+        if (isset($tts[$s]) && $tts[$s] !== '') { continue; }
+        $n = ansage_nachbar($modus, $k);
+        if ($n['token'] !== '' && $n['ein'] !== false) { $tts[$s] = $n['token']; }
+    }
+    return $tts;
+}
+
+/**
+ * Warum ein flacher Block nicht eingerichtet ist: '' = eingerichtet, sonst KEINE_ADRESSE, KEIN_ORT, KEIN_TOKEN,
+ * PLUGIN_FEHLT, SPRECHEN_AUS, KEIN_GERAET. Fragt nichts im Netz. Ein Nein ist kein Fehler: das Ziel wird uebergangen.
+ */
+function ansage_ziel_eingerichtet(array $b, array $k)
+{
+    $m = isset($b['mode']) && is_string($b['mode']) ? $b['mode'] : '';
+    if ($m === 'musicserver' || $m === 'ms4h' || $m === 'custom') {
+        $u = ansage_tts_url('x', $b);
+        return ($u === '' || $u === null) ? 'KEINE_ADRESSE' : '';
+    }
+    if (ansage_plugin_da($m, ansage_k_home($k)) === false) { return 'PLUGIN_FEHLT'; }
+    if ($m === 'sonos4lox') { return (isset($b['sonos_zone']) && $b['sonos_zone'] !== '') ? '' : 'KEIN_ORT'; }
+    if ($m === 'sonox') { return (isset($b['sonox_raum']) && $b['sonox_raum'] !== '') ? '' : 'KEIN_ORT'; }
+    if (ansage_ist_ng($m)) {
+        $art = ansage_art($m);
+        $n = ansage_nachbar($m, $k);
+        if ($n['ein'] === false) { return 'SPRECHEN_AUS'; }
+        if (!isset($b[$art . '_token']) || !ansage_token_ok($b[$art . '_token'])) { return 'KEIN_TOKEN'; }
+        if ((!isset($b[$art . '_geraet']) || $b[$art . '_geraet'] === '') && $n['standard'] === false) { return 'KEIN_GERAET'; }
+        return '';
+    }
+    return 'KEIN_ORT';
+}
+
+/** Der Tabelleneintrag zu einem flachen Block (Gegenstueck zu ansage_ziel_block()). */
+function ansage_ziel_aus_block(array $b)
+{
+    $art = $b['mode'];
+    $f = array('alexang' => 'alexa_laut', 'cc4lox' => 'google_laut', 'sonos4lox' => 'sonos_laut', 'sonox' => 'sonox_laut');
+    $sp = '';
+    if (ansage_ziel_ist_zonenart($art)) { $sp = (string) $b['lang']; }
+    if ($art === 'sonox') { $sp = (string) $b['sonox_sprache']; }
+    return array('art' => $art, 'wo' => ansage_ziel_wo($b),
+                 'laut' => isset($f[$art]) ? (int) $b[$f[$art]] : (int) $b['volume'], 'sprache' => $sp, 'ein' => 1);
+}
+
+/**
+ * Nur die eingerichteten Ziele: array(Block oder null (keines), bereit: array(nr, art), offen: array(nr, art, grund)).
+ * Das erste eingerichtete Ziel wird Ziel 1 des Blocks, die uebrigen seine Liste; mit genau einem bleibt der Einzelweg.
+ * Ein Eintrag, den die Pruefung abweist (von Hand verbogen), zaehlt als offen. Erwartet aufgeloeste Token.
+ */
+function ansage_ziele_bereit(array $tts, array $k)
+{
+    $bereit = array();
+    $offen = array();
+    $bloecke = array();
+    foreach (ansage_ziel_liste($tts) as $z) {
+        if ($z['block'] === null) {
+            $offen[] = array('nr' => $z['nr'], 'art' => $z['art'], 'grund' => 'EINSTELLUNG');
+            continue;
+        }
+        $g = ansage_ziel_eingerichtet($z['block'], $k);
+        if ($g !== '') {
+            $offen[] = array('nr' => $z['nr'], 'art' => $z['art'], 'grund' => $g);
+            continue;
+        }
+        $bereit[] = array('nr' => $z['nr'], 'art' => $z['art']);
+        $bloecke[] = $z['block'];
+    }
+    if (!$bloecke) { return array(null, $bereit, $offen); }
+    $b = array_shift($bloecke);
+    unset($b['ziele']);
+    if ($bloecke) {
+        $b['ziele'] = array();
+        foreach ($bloecke as $x) { $b['ziele'][] = ansage_ziel_aus_block($x); }
+    }
+    return array($b, $bereit, $offen);
+}
+
+/**
+ * Den Schalter "Ansagen aus" lesen: '1' gesetzt, '0' nicht gesetzt, '' keine Aussage (kein Broker, nie gesetzt, '-').
+ * Keine Aussage heisst sprechen: ein fehlender Broker darf eine dringende Warnung nicht stumm schalten.
+ * Der Wert ist retained, also kommt er in jeder kurzen Sitzung sofort - es gibt keinen Zaehler und damit keine
+ * Phasenfalle. Zugang aus general.json (Mqtt.Brokerhost/-port/-user/-pass). $k['schalter'] ersetzt den Weg (Selbsttest,
+ * Linien mit eigenem Broker).
+ */
+function ansage_schalter_lesen(array $k = array())
+{
+    if (isset($k['schalter']) && is_callable($k['schalter'])) {
+        $w = (string) call_user_func($k['schalter']);
+    } else {
+        $h = ansage_lbhome(ansage_k_home($k));
+        if ($h === '') { return ''; }
+        $g = ansage_json_datei($h . '/config/system/general.json');
+        $m = (is_array($g) && isset($g['Mqtt']) && is_array($g['Mqtt'])) ? $g['Mqtt'] : null;
+        if ($m === null || !isset($m['Brokerhost']) || !is_string($m['Brokerhost']) || $m['Brokerhost'] === '') { return ''; }
+        $w = ansage_mqtt_retained($m['Brokerhost'], isset($m['Brokerport']) ? (int) $m['Brokerport'] : 1883,
+                                  isset($m['Brokeruser']) ? (string) $m['Brokeruser'] : '',
+                                  isset($m['Brokerpass']) ? (string) $m['Brokerpass'] : '', ANSAGE_SCHALTER_THEMA, ANSAGE_SCHALTER_FRIST);
+    }
+    return ($w === '1' || $w === '0') ? $w : '';
+}
+
+/** Ein Paket aus dem Empfangspuffer nehmen: array(Art, Rumpf, Rest) oder null, wenn es noch nicht ganz da ist. */
+function ansage_mqtt_paket($p)
+{
+    $n = strlen($p);
+    if ($n < 2) { return null; }
+    $len = 0;
+    $mal = 1;
+    $i = 1;
+    do {
+        if ($i >= $n || $i > 4) { return null; }
+        $b = ord($p[$i]);
+        $len += ($b & 127) * $mal;
+        $mal *= 128;
+        $i++;
+    } while ($b & 128);
+    if ($n < $i + $len) { return null; }
+    return array(ord($p[0]) >> 4, (string) substr($p, $i, $len), (string) substr($p, $i + $len));
+}
+
+/** Thema und Nutzlast eines PUBLISH-Rumpfs mit QoS 0: array(Thema, Nutzlast) oder null. */
+function ansage_mqtt_publish($rumpf)
+{
+    if (strlen($rumpf) < 2) { return null; }
+    $l = (ord($rumpf[0]) << 8) | ord($rumpf[1]);
+    if (strlen($rumpf) < 2 + $l) { return null; }
+    return array((string) substr($rumpf, 2, $l), (string) substr($rumpf, 2 + $l));
+}
+
+/** Ein MQTT-Paket bauen (Restlaenge bis 127 Byte Vielfache reichen fuer Anmeldung und Abo). */
+function ansage_mqtt_bauen($kopf, $rumpf)
+{
+    $n = strlen($rumpf);
+    $l = '';
+    do {
+        $b = $n % 128;
+        $n = (int) ($n / 128);
+        $l .= chr($n > 0 ? $b | 128 : $b);
+    } while ($n > 0);
+    return chr($kopf) . $l . $rumpf;
+}
+
+/**
+ * Eine kurze Lesesitzung am Broker (MQTT 3.1.1, QoS 0, saubere Sitzung): anmelden, ein Thema abonnieren, die
+ * retained Nutzlast nehmen, abmelden. Sendet nichts ausser Anmeldung und Abo. Kein mosquitto_sub: das Kennwort stuende
+ * sonst in der Prozessliste oder in einer Datei, und die Linien in Python haetten denselben Weg nicht. Nach der
+ * Abo-Bestaetigung wird noch 0,3 s gewartet (der Broker schickt den retained Wert unmittelbar). '' = keine Aussage.
+ */
+function ansage_mqtt_retained($host, $port, $user, $pass, $thema, $frist)
+{
+    $s16 = function ($x) { return pack('n', strlen($x)) . $x; };
+    $bis = microtime(true) + max(1, (int) $frist);
+    set_error_handler(function () { return true; });     // auch ein fremder Fehler-Aufnehmer sieht kein "connection refused"
+    $h = stream_socket_client('tcp://' . (strpos($host, ':') !== false ? '[' . $host . ']' : $host) . ':' . (int) $port, $en, $es,
+                              max(1, (int) $frist), STREAM_CLIENT_CONNECT);
+    restore_error_handler();
+    if ($h === false) { return ''; }
+    stream_set_blocking($h, false);
+    $flaggen = 2 | ($user !== '' ? 128 : 0) | ($pass !== '' ? 64 : 0);
+    $rumpf = $s16('MQTT') . chr(4) . chr($flaggen) . pack('n', 30) . $s16('ansage-' . getmypid() . '-' . mt_rand(1000, 9999))
+           . ($user !== '' ? $s16($user) : '') . ($pass !== '' ? $s16($pass) : '');
+    $senden = function ($d) use ($h, $bis) {
+        while ($d !== '') {
+            set_error_handler(function () { return true; });
+            $n = fwrite($h, $d);
+            restore_error_handler();
+            if ($n === false || microtime(true) > $bis) { return false; }
+            $d = (string) substr($d, (int) $n);
+        }
+        return true;
+    };
+    $wert = '';
+    $puffer = '';
+    $angemeldet = false;
+    $abo_bis = 0.0;
+    if ($senden(ansage_mqtt_bauen(0x10, $rumpf))) {
+        while (microtime(true) < ($abo_bis > 0 ? min($bis, $abo_bis) : $bis)) {
+            $r = array($h);
+            $w = null;
+            $x = null;
+            set_error_handler(function () { return true; });
+            $c = stream_select($r, $w, $x, 0, 50000);
+            $teil = ($c > 0) ? fread($h, 4096) : '';
+            restore_error_handler();
+            if ($c > 0 && ($teil === false || $teil === '') && feof($h)) { break; }
+            $puffer .= (string) $teil;
+            if (strlen($puffer) > 65536) { break; }
+            while (($p = ansage_mqtt_paket($puffer)) !== null) {
+                $puffer = $p[2];
+                if ($p[0] === 2 && !$angemeldet) {
+                    if (strlen($p[1]) < 2 || ord($p[1][1]) !== 0) { $bis = 0.0; break; }    // abgelehnt
+                    $angemeldet = true;
+                    if (!$senden(ansage_mqtt_bauen(0x82, pack('n', 1) . $s16($thema) . chr(0)))) { $bis = 0.0; break; }
+                } elseif ($p[0] === 9) {
+                    $abo_bis = microtime(true) + 0.3;
+                } elseif ($p[0] === 3) {
+                    $pub = ansage_mqtt_publish($p[1]);
+                    if ($pub !== null && $pub[0] === $thema) { $wert = trim($pub[1]); $bis = 0.0; break; }
+                }
+            }
+        }
+        set_error_handler(function () { return true; });
+        fwrite($h, ansage_mqtt_bauen(0xE0, ''));
+        restore_error_handler();
+    }
+    fclose($h);
+    return $wert;
+}
+
+/**
+ * Sprechen nach den Regeln - der eine Weg fuer die Anlaesse einer Linie. $eintraege: Liste von
+ *   'schluessel' Anlass und Geraet, z. B. 'ladeziel:1' (Sperre je Schluessel)
+ *   'text'       der fertige Satz
+ *   'dringend'   wahlfrei: spricht auch in der Nachtruhe und geht als dringend=1 hinaus
+ *   'sperre_min' wahlfrei: statt der Sperre der Regeln; 0 = keine (Klingel)
+ *   'nur_nach'   wahlfrei: ein Schluessel; spricht nur, wenn jener zuletzt gesprochen hat ("wieder da" nach "gestoert")
+ * Mehrere zugleich zugelassene Eintraege werden EIN Satz (eine zweite Ansage schnitte bei SonoX die erste ab, Alexa-NG
+ * bremst sie). In der Nachtruhe wird nicht nachgeholt. Der Stand steht VOR dem Senden fest; laesst er sich nicht
+ * schreiben, wird nicht gesprochen. Die Testansage geht an den Regeln vorbei (ansage_testansage()).
+ *
+ * Rueckgabe: 'regel' ('' = gesprochen, AUS, KEIN_ZIEL, KEIN_TEXT, SCHALTER, ANLASS (alle Eintraege durch die Regeln
+ * zurueckgehalten), STAND), 'einzeln' (Schluessel => '' oder Grund), 'offen' (nicht eingerichtete Ziele), 'r' (Ergebnis von
+ * ansage_sprechen() oder null). Kein Rueckgabewert traegt Text oder Token. Nichts davon ist ein Fehler ausser
+ * r.stand = 0 - und auch den legt die Linie nur einmal je Aenderung ab.
+ */
+function ansage_regel_sprechen(array $eintraege, array $tts, array $regeln, array $k = array())
+{
+    $aus = array('regel' => '', 'einzeln' => array(), 'offen' => array(), 'r' => null);
+    $modus = isset($tts['mode']) && is_string($tts['mode']) ? $tts['mode'] : '';
+    if ($modus === 'aus' || $modus === 'audioserver' || !in_array($modus, ansage_modi(), true)) {
+        $aus['regel'] = 'AUS';
+        return $aus;
+    }
+    $roh = ansage_tts_vor_ort($tts, $k);
+    list($block, , $aus['offen']) = ansage_ziele_bereit($roh, $k);
+    if ($block === null) {
+        $aus['regel'] = 'KEIN_ZIEL';
+        return $aus;
+    }
+    $g = '';
+    $rg = ansage_regeln_wert($regeln, $g);
+    if ($rg === null) { $rg = ansage_regeln_vorgaben(); }       // eine verbogene Regel spricht nicht ohne Nachtruhe
+    $jetzt = (isset($k['jetzt']) && is_callable($k['jetzt'])) ? (int) call_user_func($k['jetzt']) : time();
+    $gueltig = array();
+    foreach ($eintraege as $e) {
+        if (!is_array($e) || !isset($e['schluessel'], $e['text']) || !is_string($e['schluessel']) || !is_string($e['text'])) { continue; }
+        list($st) = ansage_text_pruefen($e['text'], $block['mode']);
+        if ($st === 1) { $gueltig[] = $e; }
+    }
+    if (!$gueltig) {
+        $aus['regel'] = 'KEIN_TEXT';
+        return $aus;
+    }
+    /* Erst ein Blick ohne Sperre: wird ohnehin nichts gesprochen, fragt niemand den Broker. */
+    $vorab = ansage_stand_aendern(function ($stand) use ($gueltig, $rg, $jetzt) {
+        $frei = false;
+        foreach ($gueltig as $e) { if (ansage_regel_grund($e, $rg, $stand, $jetzt) === '') { $frei = true; } }
+        return array(null, $frei);
+    }, $k);
+    if ($vorab === null) {
+        $aus['regel'] = 'STAND';
+        return $aus;
+    }
+    if ($vorab[0] && ansage_schalter_lesen($k) === '1') {
+        foreach ($gueltig as $e) { $aus['einzeln'][$e['schluessel']] = 'SCHALTER'; }
+        $aus['regel'] = 'SCHALTER';
+        return $aus;
+    }
+    $erg = ansage_stand_aendern(function ($stand) use ($gueltig, $rg, $jetzt) {
+        $einzeln = array();
+        $text = array();
+        $laenge = 0;
+        $dringend = false;
+        foreach (array('z', 'g') as $f) { if (!isset($stand[$f]) || !is_array($stand[$f])) { $stand[$f] = array(); } }
+        foreach ($gueltig as $e) {
+            $s = $e['schluessel'];
+            $gr = ansage_regel_grund($e, $rg, $stand, $jetzt);
+            if ($gr === '' && $laenge + ansage_zeichen($e['text']) + 1 > ANSAGE_TEXT_MAX) { $gr = 'ZU_LANG'; }
+            $einzeln[$s] = $gr;
+            if ($gr !== '') { continue; }
+            $stand['z'][$s] = $jetzt;
+            $stand['g'][$s] = 1;
+            if (isset($e['nur_nach'])) { unset($stand['g'][$e['nur_nach']]); }
+            $text[] = $e['text'];
+            $laenge += ansage_zeichen($e['text']) + 1;
+            if (!empty($e['dringend'])) { $dringend = true; }
+        }
+        foreach ($stand['z'] as $s => $t) { if (!is_int($t) || $jetzt - $t > 86400) { unset($stand['z'][$s]); } }
+        return array($text ? $stand : null, array($einzeln, $text, $dringend));
+    }, $k);
+    if ($erg === null) {
+        foreach ($gueltig as $e) { $aus['einzeln'][$e['schluessel']] = 'STAND'; }
+        $aus['regel'] = 'STAND';
+        return $aus;
+    }
+    list($aus['einzeln'], $text, $dringend) = $erg[0];
+    if (!$text) {
+        $aus['regel'] = 'ANLASS';
+        return $aus;
+    }
+    $aus['r'] = ansage_sprechen(implode(' ', $text), $block, $k, array('dringend' => $dringend));
+    return $aus;
+}
+
+/** Fuers Protokoll der Linie: eine Zeile ohne Text und Token. */
+function ansage_regel_kurz(array $a)
+{
+    $t = array();
+    foreach ($a['einzeln'] as $s => $g) { $t[] = $s . '=' . ($g === '' ? 'ja' : $g); }
+    $z = implode(', ', $t);
+    if ($a['r'] !== null) { $z .= ($z !== '' ? ' - ' : '') . ansage_kurz($a['r']); }
+    return ($a['regel'] !== '' ? $a['regel'] . ($z !== '' ? ': ' : '') : '') . $z;
+}
+
+/** Die Zeilen im Reiter Test: array(array(Stand wie ansage_pruefzeile(), Klartext), ...). Nur $offen fragt den Broker. */
+function ansage_regel_lage(array $tts, array $regeln, array $k, $offen)
+{
+    $t = function ($id) use ($k) { return ansage_t($id, $k); };
+    $name = function ($art) use ($t) { return in_array($art, ansage_modi(), true) ? $t('O_' . strtoupper($art)) : (string) $art; };
+    $z = array();
+    $modus = isset($tts['mode']) && is_string($tts['mode']) ? $tts['mode'] : '';
+    if ($modus === 'aus') {
+        $z[] = array(-2, $t('T_AUS'));
+    } else {
+        list($block, $bereit, $off) = ansage_ziele_bereit(ansage_tts_vor_ort($tts, $k), $k);
+        $n = array();
+        foreach ($bereit as $b) { $n[] = $name($b['art']); }
+        $m = array();
+        foreach ($off as $o) { $m[] = $name($o['art']) . ': ' . $t('T_R_G_' . $o['grund']); }
+        $z[] = array($block === null ? -1 : 1,
+                     ($block === null ? $t('T_R_KEIN_ZIEL') : sprintf($t('T_R_BEREIT'), implode(', ', $n)))
+                     . ($m ? ' ' . sprintf($t('T_R_OFFEN'), implode('; ', $m)) : ''));
+    }
+    $g = '';
+    $rg = ansage_regeln_wert($regeln, $g);
+    if ($rg === null) { $rg = ansage_regeln_vorgaben(); }
+    $jetzt = (isset($k['jetzt']) && is_callable($k['jetzt'])) ? (int) call_user_func($k['jetzt']) : time();
+    $z[] = array(1, empty($rg['nachtruhe']) ? sprintf($t('T_R_OHNE_RUHE'), $rg['sperre_min'])
+        : sprintf($t(ansage_nachtruhe($rg, $jetzt) ? 'T_R_NACHT' : 'T_R_TAG'), $rg['von'], $rg['bis'], $rg['sperre_min']));
+    if ($offen) {
+        $w = ansage_schalter_lesen($k);
+        $z[] = array($w === '1' ? -1 : 1, sprintf($t($w === '1' ? 'T_R_SCHALTER_AUS' : ($w === '0' ? 'T_R_SCHALTER_FREI' : 'T_R_SCHALTER_NIE')),
+                                                 ANSAGE_SCHALTER_THEMA));
+    }
+    return $z;
+}
+
+/* ------------------------------------------------------------------
+ * Formular: "Wann gesprochen wird"
+ * ------------------------------------------------------------------ */
+
+/** Die Felder des Blocks fuer die Einmalmeldung (X-2). */
+function ansage_regeln_x2_felder(array $anlaesse = array())
+{
+    $f = array('ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min');
+    foreach (array_keys($anlaesse) as $a) { $f[] = 'ansage_anlass_' . $a; }
+    return $f;
+}
+
+/**
+ * Den Block lesen: array(Regeln, Haken je Anlass (Name => 1/0)). Beanstandung wie ansage_formular_lesen(): $mangel, $bean;
+ * der Rueckgabewert traegt dort den alten Wert. $anlaesse: Name => Beschriftung (hier nur die Namen).
+ */
+function ansage_regeln_formular(array $post, array $alt, array $anlaesse, array &$mangel, array &$bean, array $k = array())
+{
+    $g = '';
+    $neu = ansage_regeln_wert($alt, $g);
+    if ($neu === null) { $neu = ansage_regeln_vorgaben(); }
+    $neu['nachtruhe'] = !empty($post['ansage_ruhe_ein']) ? 1 : 0;
+    foreach (array('von' => 'ansage_ruhe_von', 'bis' => 'ansage_ruhe_bis', 'sperre_min' => 'ansage_sperre_min') as $s => $f) {
+        if (!isset($post[$f])) { continue; }
+        $w = is_string($post[$f]) ? trim($post[$f]) : null;
+        $p = ($w === null) ? null : ansage_regeln_wert(array($s => $w) + ($s === 'von' ? array('bis' => '00:00') : array()) + ($s === 'bis' ? array('von' => '00:00') : array()), $g);
+        if ($w === '00:00' && $p === null && $g === 'M_R_GLEICH') { $p = array($s => $w); }
+        if ($p === null) {
+            $id = ($s === 'sperre_min') ? 'M_R_SPERRE' : 'M_R_' . strtoupper($s);
+            $mangel[] = array('kennung' => $id, 'text' => ansage_t($id, $k));
+            $bean[] = $f;
+        } else {
+            $neu[$s] = $p[$s];
+        }
+    }
+    if ($neu['von'] === $neu['bis'] && !in_array('ansage_ruhe_von', $bean, true) && !in_array('ansage_ruhe_bis', $bean, true)) {
+        $mangel[] = array('kennung' => 'M_R_GLEICH', 'text' => ansage_t('M_R_GLEICH', $k));
+        $bean[] = 'ansage_ruhe_von';
+        $bean[] = 'ansage_ruhe_bis';
+    }
+    $haken = array();
+    foreach (array_keys($anlaesse) as $a) { $haken[$a] = !empty($post['ansage_anlass_' . $a]) ? 1 : 0; }
+    return array($neu, $haken);
+}
+
+/**
+ * Den Block zeichnen (im Einstellungsformular der Linie, unter ansage_formular_html()). $h: 'w', 'm', 'c' wie dort,
+ * 'token_vor_ort' zeigt den Satz zum Sprechtoken (nur, wenn die Linie ansage_tts_vor_ort() nutzt).
+ * $anlaesse: Name => Beschriftung; $haken: Name => 1/0 (fehlt = an, ab Werk).
+ */
+function ansage_regeln_html(array $regeln, array $haken, array $anlaesse, array $h = array(), array $k = array())
+{
+    $e = ansage_e_fn($k);
+    $t = function ($id) use ($k) { return ansage_t($id, $k); };
+    $w = isset($h['w']) && is_callable($h['w']) ? $h['w'] : function ($name, $wert) { return $wert; };
+    $m = isset($h['m']) && is_callable($h['m']) ? $h['m'] : function ($name) { return ''; };
+    $c = isset($h['c']) && is_callable($h['c']) ? $h['c'] : function ($name, $wert) { return (bool) $wert; };
+    $g = '';
+    $r = ansage_regeln_wert($regeln, $g);
+    if ($r === null) { $r = ansage_regeln_vorgaben(); }
+    $haken_zeile = function ($name, $an, $text) use ($e, $c, $m) {
+        return '    <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="'
+             . $e($name) . '" value="1"' . (call_user_func($c, $name, $an) ? ' checked' : '') . call_user_func($m, $name) . '> ' . $e($text) . '</label>';
+    };
+    $o = array();
+    $o[] = '<div class="sm-hinweis">' . $e($t('R_HINWEIS')) . '</div>';
+    if (!empty($h['token_vor_ort'])) { $o[] = '<div class="sm-hilfe">' . $e($t('TOKEN_VOR_ORT_HINWEIS')) . '</div>'; }
+    if ($anlaesse) {
+        $o[] = '<div class="sm-feld" id="ansage_anlaesse">';
+        $o[] = '    <label>' . $e($t('L_R_ANLAESSE')) . '</label>';
+        foreach ($anlaesse as $a => $text) {
+            $o[] = $haken_zeile('ansage_anlass_' . $a, !isset($haken[$a]) || !empty($haken[$a]), $text) . '<br>';
+        }
+        $o[] = '    <div class="sm-hilfe">' . $e($t('R_ANLAESSE_HINWEIS')) . '</div>';
+        $o[] = '</div>';
+    }
+    $o[] = '<div class="sm-feld">';
+    $o[] = $haken_zeile('ansage_ruhe_ein', !empty($r['nachtruhe']), $t('L_R_NACHTRUHE'));
+    $o[] = '    <div class="sm-hilfe">' . $e($t('R_NACHT_HINWEIS')) . '</div>';
+    $o[] = '</div>';
+    foreach (array('von' => 'ansage_ruhe_von', 'bis' => 'ansage_ruhe_bis') as $s => $f) {
+        $o[] = '<div class="sm-feld">';
+        $o[] = '    <label for="' . $f . '">' . $e($t('L_R_' . strtoupper($s))) . '</label>';
+        $o[] = '    <input data-role="none" type="time" id="' . $f . '" name="' . $f . '" value="' . $e((string) call_user_func($w, $f, $r[$s])) . '"'
+             . call_user_func($m, $f) . '>';
+        $o[] = '</div>';
+    }
+    $o[] = '<div class="sm-feld">';
+    $o[] = '    <label for="ansage_sperre_min">' . $e($t('L_R_SPERRE')) . '</label>';
+    $o[] = '    <input data-role="none" type="number" min="5" max="240" id="ansage_sperre_min" name="ansage_sperre_min" value="'
+         . $e((string) call_user_func($w, 'ansage_sperre_min', $r['sperre_min'])) . '"' . call_user_func($m, 'ansage_sperre_min') . '>';
+    $o[] = '    <div class="sm-hilfe">' . $e($t('R_SPERRE_HINWEIS')) . '</div>';
+    $o[] = '</div>';
+    $o[] = '<div class="sm-hilfe">' . $e(sprintf($t('R_SCHALTER_HINWEIS'), ANSAGE_SCHALTER_THEMA)) . '</div>';
+    return implode("\n", $o) . "\n";
+}
+
+/* ------------------------------------------------------------------
+ * Das Sprechtoken aus dem Zielplugin dauerhaft uebernehmen (seit 1.3.1)
+ * ------------------------------------------------------------------ */
+
+/** Ausgabeart => Schluessel des Sprechtokens im Block tts. */
+function ansage_token_felder()
+{
+    return array('alexang' => 'alexa_token', 'cc4lox' => 'google_token');
+}
+
+/**
+ * Den Block tts mit dem Zielplugin abgleichen (Entscheidung des Hausherrn 01.11.2026: "Speicher das Token ab").
+ * $herkunft ist ein eigener Schluessel der Konfiguration der Linie (Feldname => 'nachbar'), nie im Block tts: eine zuerst
+ * geladene aeltere Abschrift wiese ihn sonst ab. Er unterscheidet ein uebernommenes Token von einem von Hand eingetragenen.
+ *   - Nur fuer eingeschaltete Ziele; bei 'aus' wird nichts gelesen.
+ *   - Von Hand eingetragen (Token da, kein Vermerk): nie angefasst.
+ *   - Das Zielplugin spricht nicht fuer andere (ein === false): nichts uebernehmen; das Gespeicherte bleibt liegen, wird aber
+ *     nicht benutzt (ansage_ziel_eingerichtet(), ansage_token_fuer_lauf()).
+ *   - Leer oder uebernommen: das Token des Zielplugins uebernehmen, wenn es abweicht.
+ *   - Das Zielplugin sagt lesbar "kein Token": ein uebernommenes wird geleert. Laesst es sich nicht lesen: alles bleibt.
+ * Rueckgabe: array(Block, Herkunft, Liste der geaenderten Ausgabearten). Die Linie speichert NUR, wenn die Liste nicht leer ist,
+ * und nennt im Protokoll nie das Token. Schreibt nichts, fragt kein Netz.
+ */
+function ansage_token_abgleich(array $tts, $herkunft, array $k)
+{
+    if (!is_array($herkunft)) { $herkunft = array(); }
+    $modus = isset($tts['mode']) && is_string($tts['mode']) ? $tts['mode'] : '';
+    if ($modus === 'aus' || $modus === 'audioserver') { return array($tts, $herkunft, array()); }
+    $felder = ansage_token_felder();
+    $aktiv = array();
+    foreach (ansage_ziel_liste($tts) as $z) {
+        if ($z['block'] !== null && isset($felder[$z['art']])) { $aktiv[$z['art']] = true; }
+    }
+    $geaendert = array();
+    foreach (array_keys($aktiv) as $m) {
+        $s = $felder[$m];
+        $alt = (isset($tts[$s]) && is_string($tts[$s])) ? $tts[$s] : '';
+        if ($alt !== '' && empty($herkunft[$s])) { continue; }
+        $n = ansage_nachbar($m, $k);
+        if ($n['ein'] === false) { continue; }
+        if ($n['token'] !== '') {
+            if ($n['token'] !== $alt) {
+                $tts[$s] = $n['token'];
+                $herkunft[$s] = 'nachbar';
+                $geaendert[] = $m;
+            }
+        } elseif ($n['ein'] === true && $alt !== '') {
+            $tts[$s] = '';
+            unset($herkunft[$s]);
+            $geaendert[] = $m;
+        }
+    }
+    return array($tts, $herkunft, $geaendert);
+}
+
+/**
+ * Der Block fuer einen Lauf (Sprechen, Testansage, Reiter Test), nur im Speicher: ein uebernommenes Token ist leer, solange das
+ * Zielplugin nicht fuer andere spricht; ein leeres wird aus dem Zielplugin ergaenzt (bevor der naechste Abgleich es speichert).
+ */
+function ansage_token_fuer_lauf(array $tts, $herkunft, array $k)
+{
+    if (is_array($herkunft)) {
+        foreach (ansage_token_felder() as $m => $s) {
+            if (!empty($herkunft[$s]) && ansage_nachbar($m, $k)['ein'] === false) { $tts[$s] = ''; }
+        }
+    }
+    return ansage_tts_vor_ort($tts, $k);
+}
+
+/**
+ * Der Vermerk nach dem Formular: ein eingetipptes Token ist von Hand, ein geloeschtes hat keine Herkunft mehr. Rein. Ein geloeschtes
+ * Token kommt beim naechsten Abgleich wieder, solange das Ziel eingeschaltet ist und das Zielplugin eines hat.
+ */
+function ansage_token_herkunft_formular(array $post, $herkunft, array $opt = array())
+{
+    if (!is_array($herkunft)) { $herkunft = array(); }
+    $n = ansage_feldnamen($opt);
+    foreach (ansage_token_felder() as $s) {
+        $eingetippt = isset($post[$n[$s]]) && is_string($post[$n[$s]]) && trim($post[$n[$s]]) !== '';
+        if ($eingetippt || !empty($post[$n[$s . '_loeschen']])) { unset($herkunft[$s]); }
+    }
+    return $herkunft;
+}
+
+/* ------------------------------------------------------------------
+ * Das LoxBerry-SDK und die Globalen der Linie (seit 1.3.2)
+ * ------------------------------------------------------------------ */
+
+/** Die Globalen, die das SDK beim Lesen der general.json ueberschreibt ($cfg wird dort ein stdClass). */
+function ansage_sdk_globale()
+{
+    return array('cfg', 'cfgwasread', 'miniservers', 'miniservercount', 'binaries', 'lbversion', 'lbfriendlyname', 'lblang', 'lbcountry',
+                 'webserverport', 'clouddnsaddress');
+}
+
+/**
+ * Eine Funktion rufen, die ins SDK geht, und danach alle seine Globalen wiederherstellen - auch ihr Fehlen. Das SDK merkt dann nicht, dass es gelesen
+ * hatte, und liest beim naechsten eigenen Aufruf neu. Noetig seit dem Ausfall am Geraet 01.11.2026: Der Minutenlauf von MGiSmart 1.1.31 hatte im globalen
+ * Bereich ein $cfg als Feld, ansage_webport() rief lbwebserverport(), und ab dort war $cfg ein stdClass: "Cannot use object of type stdClass as array".
+ */
+function ansage_sdk_ruf($fn)
+{
+    $alt = array();
+    foreach (ansage_sdk_globale() as $g) {
+        if (array_key_exists($g, $GLOBALS)) { $alt[$g] = $GLOBALS[$g]; }
+    }
+    try {
+        return call_user_func($fn);
+    } finally {
+        foreach (ansage_sdk_globale() as $g) {
+            if (array_key_exists($g, $alt)) { $GLOBALS[$g] = $alt[$g]; } else { unset($GLOBALS[$g]); }
+        }
+    }
 }
 
 }   // Ende des Blocks "noch keine Abschrift geladen"

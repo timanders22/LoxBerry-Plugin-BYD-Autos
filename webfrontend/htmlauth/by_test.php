@@ -934,6 +934,8 @@ function by_pruefungen()
     foreach (by_haus_pruefzeilen($cfg) as $by_hz) {
         $zeilen[] = by_pruefzeile($by_hz[1] ? 1 : 2, by_e($by_hz[0]), by_e($by_hz[2]));
     }
+    list($by_sfs, $by_sft) = by_sammel_lage($cfg);
+    $zeilen[] = by_pruefzeile($by_sfs, by_t('EINST.F_HAUS_FAHRZEUG'), by_e($by_sft));
     $by_vk = by_vorklima_pruefzeile($cfg);
     if ($by_vk !== null) {
         $zeilen[] = by_pruefzeile($by_g42_grau($by_vk[0]), by_t('HAUS.VK_FRAGE'), by_e($by_vk[1]));
@@ -946,7 +948,7 @@ function by_pruefungen()
 function by_ansage_zeile($offen)
 {
     $cfg = by_config();
-    list($st, $html) = ansage_pruefzeile(by_tts(), (bool) $offen, by_ansage_k());
+    list($st, $html) = ansage_pruefzeile(by_ansage_pruefblock(), (bool) $offen, by_ansage_k());
     $an = array();
     foreach (by_ansage_anlaesse() as $a) {
         if ((string) (isset($cfg[$a[0]]) ? $cfg[$a[0]] : '') === '1') {

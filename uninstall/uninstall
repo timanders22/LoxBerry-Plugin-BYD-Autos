@@ -233,11 +233,11 @@ mqtt_behaltene_themen_loeschen() {
         return 0
     fi
     if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
-        su -s /bin/bash loxberry -c "$(printf 'LBHOMEDIR=%q LBPPLUGINDIR=%q PYTHONDONTWRITEBYTECODE=1 timeout 60 %q %q --mqtt-leeren' \
+        su -s /bin/bash loxberry -c "$(printf 'LBHOMEDIR=%q LBPPLUGINDIR=%q PYTHONDONTWRITEBYTECODE=1 timeout 120 %q %q --mqtt-leeren' \
             "$BASE" "$PFOLDER" "$PYBIN" "$PBIN/byd.py")" 2>&1 || true
     else
         LBHOMEDIR="$BASE" LBPPLUGINDIR="$PFOLDER" PYTHONDONTWRITEBYTECODE=1 \
-            timeout 60 "$PYBIN" "$PBIN/byd.py" --mqtt-leeren 2>&1 || true
+            timeout 120 "$PYBIN" "$PBIN/byd.py" --mqtt-leeren 2>&1 || true
     fi
     return 0
 }

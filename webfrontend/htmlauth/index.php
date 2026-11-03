@@ -315,6 +315,8 @@ if ($by_post && $by_formular === 'einstellungen') {
      * Endpunkt. Zwei getrennt gepflegte Tabellen sind zwei Wahrheiten, und
      * das Zurueckspielen hatte bis dahin gar keine. */
     foreach (by_grenzen() as $by_feld => $by_grenzen) {
+        /* Diese Felder stehen im Formular Hausform. Bis 0.9.30 verlangte sie auch dieses Formular: Es liess sich nie speichern. */
+        if (in_array($by_feld, array('vorklima_kalt_unter', 'vorklima_heiss_ueber', 'kabel_soc', 'kabel_abfahrt_min', 'vorklima_min_soc'), true)) { continue; }
         $by_wert = isset($_POST[$by_feld]) ? trim((string) $_POST[$by_feld]) : '';
         if (!preg_match('/^[0-9]+$/', $by_wert)) {
             $by_fehler[] = sprintf(by_t('EINST.FEHLER_ZAHL'),
@@ -554,7 +556,8 @@ if ($by_post && $by_formular === 'einstellungen') {
     $by_tbean = array();
     $by_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $by_cfg['tts'] = ansage_formular_lesen($_POST, by_tts(), $by_tmangel, $by_tbean,
-        array('modi' => by_ansage_modi(), 'ziele' => by_mit_zielen()), by_ansage_k(), $by_thinw);
+        array('modi' => by_ansage_modi(), 'ziele' => by_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), by_ansage_k(), $by_thinw);
+    list($by_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, by_ansage_regeln($by_cfg), array(), $by_tmangel, $by_tbean, by_ansage_k());     // S2: Wann gesprochen wird (Stamm)
     foreach ($by_tmangel as $by_tm) {
         $by_fehler[] = by_e($by_tm['text']);
     }
@@ -619,6 +622,7 @@ if ($by_post && $by_formular === 'mqtt') {
     $by_mcfg = by_config();
     $by_malt = $by_mcfg;
     $by_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    $by_mcfg['haus_fahrzeug_ein'] = isset($_POST['haus_fahrzeug_ein']) ? 1 : 0;
     /* Nr. 19 (B-Nachzug 01.10.2026): bis 0.9.22 fielen Steuer- und
      * Anfuehrungszeichen hier still weg, und ein Feld statt Text wurde zu
      * "Array" - das die Pruefung bestand und gespeichert wurde. Jetzt
@@ -699,12 +703,22 @@ if ($by_post && $by_formular === 'g42') {
     $by_g = by_config();
     foreach (array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein',
                    'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_ausfall',
-                   'signal_vorklima') as $by_k) {
+                   'signal_vorklima', 'signal_kabel', 'vorklima_nur_kabel') as $by_k) {
         $by_g[$by_k] = isset($_POST[$by_k]) ? 1 : 0;
     }
     $by_tx = function ($k) {
         return (isset($_POST[$k]) && is_string($_POST[$k])) ? trim($_POST[$k]) : '';
     };
+    /* 0.9.31: Kabel-Warnung, Mindest-Akku. */
+    foreach (array('kabel_soc' => 'L_KABEL_SOC', 'kabel_uhr' => 'L_KABEL_UHR', 'kabel_abfahrt_min' => 'L_KABEL_ABFAHRT_MIN', 'vorklima_min_soc' => 'L_VORKLIMA_MIN_SOC') as $by_k => $by_l) {
+        $by_w = by_sammel_wert($by_k, $by_tx($by_k));
+        if ($by_w === null) {
+            $by_fehler[] = sprintf(by_t('G42.FEHLER_SAMMEL'), by_t('EINST.' . $by_l));
+            $by_beanstandet[] = $by_k;
+        } else {
+            $by_g[$by_k] = $by_w;
+        }
+    }
     $by_ku = $by_tx('vorklima_kalt_unter');
     $by_hu = $by_tx('vorklima_heiss_ueber');
     if (!preg_match('/^-?[0-9]{1,2}$/', $by_ku) || !preg_match('/^-?[0-9]{1,2}$/', $by_hu)
@@ -882,9 +896,9 @@ if ($by_post && $by_formular === 'ansage' && (isset($_POST['ansage_test']) || is
     if (isset($_POST['ansage_test_ziel']) && $by_tnur === 0) {
         $by_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
     } elseif ($by_tnur >= 1) {
-        $by_tr = ansage_testansage(by_tts(), $by_tk, $by_tnur);
+        $by_tr = ansage_testansage(by_ansage_vor_ort(), $by_tk, $by_tnur);
     } else {
-        $by_tr = ansage_testansage(by_tts(), $by_tk);
+        $by_tr = ansage_testansage(by_ansage_vor_ort(), $by_tk);
     }
     by_log('Testansage' . ($by_tnur >= 1 ? ' an Ziel ' . $by_tnur : '') . ': ' . ansage_kurz($by_tr));
     if ($by_tr['stand'] === 1) {
@@ -1532,6 +1546,11 @@ ob_start();
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
 'ziele' => by_mit_zielen(),
 'ziele_post' => by_eingaben_aktiv() === 'einstellungen' ? by_ziele_x2_post(by_eingaben_setzen()['werte']) : null), by_ansage_k()); ?>
+<?= ansage_regeln_html(by_ansage_regeln($by_cfg), array(), array(), array(
+    'w' => function ($n, $g) { return by_eingabe('einstellungen', $n, $g); },
+    'm' => function ($n) { return by_markierung($n); },
+    'c' => function ($n, $g) { return by_eingabe_an('einstellungen', $n, $g); },
+    'token_vor_ort' => true), by_ansage_k()) ?>
 <h3><?= by_e(by_t('EINST.H_ANSAGE_ANLAESSE')) ?></h3>
 <?php foreach (by_ansage_anlaesse() as $by_a) { ?>
 <div class="sm-feld">
@@ -1588,6 +1607,18 @@ $by_gh = function ($k) use ($by_cfg) { return by_eingabe_an('g42', $k, !empty($b
   <input data-role="none" type="text" id="vorklima_kalt_unter" name="vorklima_kalt_unter" value="<?= by_e($by_gw('vorklima_kalt_unter')) ?>"<?= by_markierung('vorklima_kalt_unter') ?>></div>
 <div class="sm-feld"><label for="vorklima_heiss_ueber"><?= by_e(by_t('G42.L_HEISS')) ?></label>
   <input data-role="none" type="text" id="vorklima_heiss_ueber" name="vorklima_heiss_ueber" value="<?= by_e($by_gw('vorklima_heiss_ueber')) ?>"<?= by_markierung('vorklima_heiss_ueber') ?>></div>
+<div class="sm-feld">
+  <label for="vorklima_min_soc"><?= by_e(by_t('EINST.L_VORKLIMA_MIN_SOC')) ?></label>
+  <input data-role="none" type="number" id="vorklima_min_soc" name="vorklima_min_soc" value="<?= by_e($by_gw('vorklima_min_soc')) ?>"<?= by_markierung('vorklima_min_soc') ?> min="0" max="100">
+  <div class="sm-hilfe"><?= by_t('EINST.H_VORKLIMA_MIN_SOC') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="vorklima_nur_kabel" value="1" <?= $by_gh('vorklima_nur_kabel') ?><?= by_markierung('vorklima_nur_kabel') ?>>
+    <?= by_e(by_t('EINST.L_VORKLIMA_NUR_KABEL')) ?>
+  </label>
+  <div class="sm-hilfe"><?= by_t('EINST.H_VORKLIMA_NUR_KABEL') ?></div>
+</div>
 <div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
   <input data-role="none" type="checkbox" name="ankunft_ein" value="1" <?= $by_gh('ankunft_ein') ?>> <?= by_e(by_t('G42.L_ANKUNFT')) ?></label></div>
 <div class="sm-feld"><label for="ankunft_quelle"><?= by_e(by_t('G42.L_ANKUNFT_QUELLE')) ?></label>
@@ -1602,6 +1633,27 @@ $by_gh = function ($k) use ($by_cfg) { return by_eingabe_an('g42', $k, !empty($b
     <option value="<?= $by_ok ?>"<?= $by_gw('ladeempf_quelle') === $by_ok ? ' selected' : '' ?>><?= by_e(by_t($by_ot)) ?></option>
 <?php } ?>
   </select></div>
+<h3><?= by_e(by_t('EINST.H_SAMMEL_KABEL')) ?></h3>
+<p class="sm-hilfe"><?= by_t('EINST.SAMMEL_KABEL_HILFE') ?></p>
+<div class="sm-feld">
+  <label for="kabel_soc"><?= by_e(by_t('EINST.L_KABEL_SOC')) ?></label>
+  <input data-role="none" type="number" id="kabel_soc" name="kabel_soc" value="<?= by_e($by_gw('kabel_soc')) ?>"<?= by_markierung('kabel_soc') ?> min="1" max="100">
+</div>
+<div class="sm-feld">
+  <label for="kabel_uhr"><?= by_e(by_t('EINST.L_KABEL_UHR')) ?></label>
+  <input data-role="none" type="time" id="kabel_uhr" name="kabel_uhr" value="<?= by_e($by_gw('kabel_uhr')) ?>"<?= by_markierung('kabel_uhr') ?>>
+</div>
+<div class="sm-feld">
+  <label for="kabel_abfahrt_min"><?= by_e(by_t('EINST.L_KABEL_ABFAHRT_MIN')) ?></label>
+  <input data-role="none" type="number" id="kabel_abfahrt_min" name="kabel_abfahrt_min" value="<?= by_e($by_gw('kabel_abfahrt_min')) ?>"<?= by_markierung('kabel_abfahrt_min') ?> min="0" max="720">
+  <div class="sm-hilfe"><?= by_t('EINST.H_KABEL_ABFAHRT_MIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_kabel" value="1" <?= $by_gh('signal_kabel') ?><?= by_markierung('signal_kabel') ?>>
+    <?= by_e(by_t('EINST.L_SIGNAL_KABEL')) ?>
+  </label>
+</div>
 <h3><?= by_e(by_t('G42.H_SIGNAL')) ?></h3>
 <p class="sm-hilfe"><?= by_t('G42.H_SIGNAL_TEXT') ?></p>
 <?php foreach (array('signal_ein' => 'G42.L_SIGNAL', 'signal_laden_fertig' => 'G42.L_SIG_FERTIG',
@@ -1686,6 +1738,13 @@ $by_gh = function ($k) use ($by_cfg) { return by_eingabe_an('g42', $k, !empty($b
   <label for="mqtt_topic"><?= by_e(by_t('EINST.L_MQTT_TOPIC')) ?></label>
   <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= by_e(by_eingabe('mqtt', 'mqtt_topic', $by_cfg['mqtt_topic'])) ?>"<?= by_markierung('mqtt_topic') ?> placeholder="byd">
   <div class="sm-hilfe"><?= by_t('EINST.H_MQTT_TOPIC') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="haus_fahrzeug_ein" value="1" <?= by_eingabe_an('mqtt', 'haus_fahrzeug_ein', !empty($by_cfg['haus_fahrzeug_ein'])) ? 'checked' : '' ?>>
+    <?= by_e(by_t('EINST.L_HAUS_FAHRZEUG_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= by_t('EINST.H_HAUS_FAHRZEUG_EIN') ?></div>
 </div>
 <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= by_t('LEGENDE.AKTION') ?></span></div>
 <div class="sm-knopfreihe">
@@ -2349,6 +2408,7 @@ if (isset($_GET['rohdaten'])) {
    ohne weitere Ziele nichts. */
 if (by_mit_zielen()) { echo ansage_testknoepfe_html(by_tts(), by_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
   </form>
+<?= by_ansage_lage_html() ?>
 </div>
 
 <h3><?= by_e(by_t('TEST.H_SCHALTEN')) ?></h3>

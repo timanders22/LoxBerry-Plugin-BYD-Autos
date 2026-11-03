@@ -320,6 +320,15 @@ VORGABEN = {
     "signal_laden_fertig": 1,
     "signal_ausfall": 1,
     "signal_vorklima": 1,
+    # Sammelthemen und Kabel-Warnung (0.9.31, Regeln/07): dieselben Werte wie die PHP-Vorgaben.
+    "haus_fahrzeug_ein": 1,
+    "kabel_soc": 30,
+    "kabel_uhr": "20:00",
+    "kabel_abfahrt_min": 60,
+    "signal_kabel": 1,
+    "vorklima_min_soc": 20,
+    "vorklima_nur_kabel": 0,
+    "ansage_kabel_vergessen": 1,
 }
 
 # Untergrenze des Abruftakts.
@@ -1056,6 +1065,12 @@ def config() -> dict:
         c["ladeempf_quelle"] = "thema"
     c["vorklima_kalt_unter"] = max(-30, min(45, ganz(c.get("vorklima_kalt_unter"), 5)))
     c["vorklima_heiss_ueber"] = max(-30, min(45, ganz(c.get("vorklima_heiss_ueber"), 25)))
+    # 0.9.31: Sammelthemen, Kabel-Warnung, Mindest-Akku. "0" waere in Python wahr, in PHP leer.
+    for s in ("haus_fahrzeug_ein", "signal_kabel", "vorklima_nur_kabel", "ansage_kabel_vergessen"):
+        c[s] = 1 if str(c.get(s)).strip() == "1" else 0
+    c["kabel_soc"] = max(1, min(100, ganz(c.get("kabel_soc"), 30)))
+    c["kabel_abfahrt_min"] = max(0, min(720, ganz(c.get("kabel_abfahrt_min"), 60)))
+    c["vorklima_min_soc"] = max(0, min(100, ganz(c.get("vorklima_min_soc"), 20)))
     if c["vorklima_kalt_unter"] >= c["vorklima_heiss_ueber"]:
         c["vorklima_kalt_unter"], c["vorklima_heiss_ueber"] = 5, 25
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", str(c.get("signal_praefix") or "")):
@@ -2806,8 +2821,8 @@ ZUSATZNAMEN = {
 # ---------------------------------------------------------------------------
 SKRIPT_ANSAGE = SELF / "by_ansage.php"
 DATEI_ANSAGE_SPERRE = PDATA / "ansage_sperre.json"
-ANSAGE_ANLAESSE = ("laden_fertig", "ausfall")
-ANSAGE_SPERRE_S = 3600     # derselbe Anlass fuer dasselbe Fahrzeug hoechstens einmal je Stunde
+ANSAGE_ANLAESSE = ("laden_fertig", "ausfall", "kabel_vergessen")
+ANSAGE_SPERRE_S = 3600     # nur noch SignalBot: je Ereignis und Fahrzeug einmal je Stunde. Die Ansage regelt der Stamm (Welle S4).
 ANSAGE_FRIST_S = 25        # Bruecke: PHP-Start plus Sprechfrist 20 s (by_ansage_k(); Modul 1.2.1: in jedem Weg, B1)
 ANSAGE_AUSFALL_FOLGE = 3
 _ANSAGE_ZEICHEN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:,|/-")
@@ -2849,7 +2864,8 @@ def _ansage_aus(cfg: dict) -> bool:
     tts unveraendert durch); geprueft wird er in der Bruecke. Fehlt er oder ist er
     unlesbar, gilt er als aus (Vorgabe)."""
     t = cfg.get("tts")
-    return not isinstance(t, dict) or t.get("mode", "aus") == "aus"
+    # Stamm 1.3.2: nie gespeichert heisst ab Werk an; ein gespeichertes "aus" bleibt.
+    return isinstance(t, dict) and t.get("mode", "aus") == "aus"
 
 
 def _ansage_sperre(schluessel: str, jetzt: int) -> bool:
@@ -2873,11 +2889,7 @@ def ansage_senden(anlass: str, nr: str, daten: dict, cfg: dict) -> None:
         return
     if _ansage_aus(cfg):
         return
-    jetzt = int(time.time())
-    if _ansage_sperre(anlass + ":" + str(nr), jetzt):
-        _LOG.info("Ansage %s (Fahrzeug %s) unterdrueckt - hoechstens eine je %d s.",
-                  anlass, nr, ANSAGE_SPERRE_S)
-        return
+    # Stamm 1.3.2: Sperre, Nachtruhe und Schalter stehen im Stamm; die Bruecke legt nur hin.
     auftrag = {"anlass": anlass, "nr": ganz(nr, 0), "name": str(daten.get("name") or "")}
     for k in ("soc", "grenze"):
         v = daten.get(k)
@@ -3152,6 +3164,8 @@ def vorklima_wert(m, jetzt: float) -> int:
         return 2
     if m.get("warten_anwesend"):
         return 4
+    if m.get("sperre"):
+        return 5 if m.get("sperre") == "akku" else 6
     if m.get("versuche"):
         return 3
     return 0
@@ -3253,6 +3267,16 @@ def vorklima_takt(horcher, cfg: dict, merker: dict, stand: dict, jetzt: float):
         vk[nr] = m
         return None
     m.pop("warten_anwesend", None)
+    # 0.9.31 (Form MGiSmart 1.1.31): Mindest-Akku und "nur mit Kabel". Kein Versuch wird verbraucht, unbekannt sperrt nie.
+    sperre = "" if (m.get("versuche") or m.get("erfolg") or m.get("mild")) else vorklima_sperre(cfg, fz.get(nr) or {})
+    if sperre:
+        if m.get("sperre") != sperre:
+            _LOG.info("Vorklimatisierung Fahrzeug %s: ausgesetzt (%s).", nr,
+                      "Akku unter der Grenze" if sperre == "akku" else "Kabel steckt nicht")
+        m["sperre"] = sperre
+        vk[nr] = m
+        return None
+    m.pop("sperre", None)
     aktion, m = vorklima_schritt(m, in_min, jetzt, vorlauf, None)
     if aktion in ("senden", "abruf") and int(m.get("versuche", 0)) == 1 and not m.get("wetter"):
         m["wetter"] = 1
@@ -3584,6 +3608,423 @@ def signal_thema(praefix, ordner) -> str:
     return "%s/befehl/plugin/%s" % (p, o)
 
 
+# ---------------------------------------------------------------------------
+# Sammelthemen haus/fahrzeug/<name>/... (0.9.31; Regeln/07, Vorbild MGiSmart 1.1.31)
+#
+# soc, reichweite_km, kabel, laedt, zuhause: retained, ohne Aussage "-" (nie 0, nie leer; Entscheidung Nr. 5).
+# zaehler: 0...999 je Minute, NIE retained. Eine kurze Sitzung direkt am Broker mit qos 1, nicht ueber den
+# UDP-Eingang (Regeln/07 "Technik"); unabhaengig vom Haken mqtt_ein und vom eigenen Praefix. Zustaende bei einer
+# Aenderung und alle 30 Minuten voll, der Zaehler aus dem Wartetakt, also auch zwischen zwei Abrufen.
+# Kein Standort, keine VIN. Ein Stand, der aelter als HAUS_FZ_ALT_S ist, ist keine Aussage mehr: "-".
+# Abraeumen mit Nachlesen: Haken aus, geaenderter Name, Fahrzeug nicht mehr im Konto, Deinstallation.
+# ---------------------------------------------------------------------------
+DATEI_HAUS_FZ = PDATA / "haus_fahrzeug.json"
+DATEI_KABEL = PDATA / "kabel.json"
+HAUS_FZ_FELDER = ("soc", "reichweite_km", "kabel", "laedt", "zuhause")
+HAUS_FZ_TAKT_S = 55            # der Wartetakt ruft alle 10 s; so entsteht ein Minutentakt
+HAUS_FZ_VOLL_S = 1800
+HAUS_FZ_ALT_S = 21600          # 6 h ohne gelungenen Abruf: keine Aussage mehr
+KABEL_FRISCH_S = 43200         # die Warnung braucht einen Fahrzeugstand bis 12 h (wie MGiSmart)
+DATEI_HAUS_FZ_FREMD = PDATA / "haus_fahrzeug_fremd.json"
+HAUS_FZ_LAUSCH_S = 62          # so lange hoert die Pruefung auf fremde Zaehler: jede Linie sendet ihn einmal je Minute
+HAUS_FZ_LAUSCH_ABSTAND_S = 3600
+_HAUS_FZ_SITZUNG = None        # Nahtstelle fuer Proben: Funktion (nachrichten, lesen, warten, gesehen) -> (ok, behalten)
+_HAUS_FZ = {"zaehler": -1, "letzt": 0.0, "lausch": 0.0, "eigene": {}}
+
+
+def haus_fz_name(name, nr) -> str:
+    """<name> nach der Namensregel von Regeln/07; reserviert: zaehler, anbieter. Sonst by<n>. Rein."""
+    s = str(name or "")
+    for a, b in (("\u00c4", "ae"), ("\u00d6", "oe"), ("\u00dc", "ue"), ("\u00e4", "ae"), ("\u00f6", "oe"),
+                 ("\u00fc", "ue"), ("\u00df", "ss")):
+        s = s.replace(a, b)
+    s = "".join(c if ("a" <= c <= "z" or "0" <= c <= "9" or c in "_-") else "_" for c in s.lower())[:40]
+    if s.strip("_") == "" or s in ("zaehler", "anbieter"):
+        return "by%s" % nr
+    return s
+
+
+def haus_fz_namen(fahrzeuge: dict) -> dict:
+    """Nummer -> <name>, je Fahrzeug eindeutig (ein doppelter Name bekommt _<n>). Rein."""
+    aus: dict = {}
+    for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
+        f = fahrzeuge.get(nr) if isinstance(fahrzeuge.get(nr), dict) else {}
+        n = haus_fz_name(f.get("name") or f.get("modell"), nr)
+        aus[str(nr)] = "%s_%s" % (n[:36], nr) if n in aus.values() else n
+    return aus
+
+
+def haus_fz_zahl(w) -> str:
+    """Zahl >= 0 mit hoechstens einer Nachkommastelle, sonst "-". Rein."""
+    if isinstance(w, bool):
+        return "-"
+    try:
+        v = float(w)
+    except (TypeError, ValueError):
+        return "-"
+    if v != v or v < 0 or v == float("inf"):
+        return "-"
+    return ("%.1f" % v).rstrip("0").rstrip(".")
+
+
+def haus_fz_ja(w) -> str:
+    """Nur 1 oder 0 ist eine Aussage. Rein."""
+    return str(int(w)) if isinstance(w, (int, float)) and w in (0, 1) else "-"
+
+
+def haus_fz_alter(f: dict, stand: dict, jetzt: float):
+    """Sekunden seit dem letzten gelungenen Abruf dieses Fahrzeugs, None = unbekannt. Rein."""
+    ts = ganz(f.get("ts"), 0) or ganz((stand or {}).get("ts"), 0)
+    return None if ts <= 0 else jetzt - ts
+
+
+def haus_fz_werte(f: dict, stand: dict, jetzt: float) -> dict:
+    """Die retained Zustaende eines Fahrzeugs. Ein zu alter oder unbekannter Stand ist ohne Aussage. Rein."""
+    alter = haus_fz_alter(f, stand, jetzt)
+    if alter is None or alter > HAUS_FZ_ALT_S:
+        return {n: "-" for n in HAUS_FZ_FELDER}
+    soc = haus_fz_zahl(f.get("SOC"))
+    if soc != "-" and float(soc) > 100:
+        soc = "-"
+    return {"soc": soc, "reichweite_km": haus_fz_zahl(f.get("REICHW")),
+            "kabel": haus_fz_ja(f.get("KABEL")), "laedt": haus_fz_ja(f.get("LAEDT")),
+            "zuhause": haus_fz_ja(f.get("ZUHAUSE"))}
+
+
+def haus_fz_sitzung(nachrichten: list, lesen=None, warten: float = 0.0, gesehen=None) -> tuple:
+    """Eine kurze Sitzung am Broker (Anmeldung aus general.json, nie in einer Befehlszeile).
+    nachrichten: [(thema, nutzlast, retain)], qos 1, gewartet wird auf die Bestaetigung (hoechstens 8 s).
+    lesen: Themen, deren retained Werte danach gefragt werden. gesehen: Liste, die die fluechtigen Nachrichten dieser
+    Themen aufnimmt (thema, wert). Rueckgabe (ok, {thema: wert})."""
+    if _HAUS_FZ_SITZUNG is not None:
+        return _HAUS_FZ_SITZUNG(nachrichten, lesen, warten, gesehen)
+    try:
+        import threading  # noqa: PLC0415
+        import paho.mqtt.client as mqtt  # noqa: PLC0415
+    except ImportError:
+        melde_gebremst("haus_fz_paho", "haus/fahrzeug nicht gesendet: paho-mqtt fehlt.", 86400)
+        return (False, {})
+    b = broker_anmeldung()
+    # Jede Sitzung ihre eigene Kennung: die Pruefung auf fremde Zaehler laeuft neben dem Minutentakt, und eine doppelte Kennung wirft der Broker hinaus.
+    kennung = "bydautos-hausfz-%d-%d" % (os.getpid(), int(time.time() * 1000) % 1000000)
+    try:
+        k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=kennung)     # paho 2.x
+    except (AttributeError, TypeError):
+        k = mqtt.Client(client_id=kennung)                                       # paho 1.x
+    if b["auth"]:
+        k.username_pw_set(b["auth"]["username"], b["auth"]["password"])
+    da, abo = threading.Event(), threading.Event()
+    antwort: dict = {"rc": None}
+    behalten: dict = {}
+
+    def bei_verbindung(_k, _u, _f, rc, *_r):
+        antwort["rc"] = getattr(rc, "value", rc)
+        da.set()
+
+    def bei_nachricht(_k, _u, n):
+        if getattr(n, "retain", False):
+            if n.payload:
+                behalten[n.topic] = n.payload.decode("utf-8", "replace")
+        elif gesehen is not None:
+            gesehen.append((n.topic, n.payload.decode("utf-8", "replace")))
+
+    def bei_abo(*_a):
+        abo.set()
+
+    k.on_connect, k.on_message, k.on_subscribe = bei_verbindung, bei_nachricht, bei_abo
+    laeuft = False
+    try:
+        k.connect(b["host"], b["port"], 30)
+        k.loop_start()
+        laeuft = True
+        if not da.wait(5) or antwort["rc"] != 0:
+            raise ConnectionError("Broker antwortet nicht oder weist ab")
+        marken = [k.publish(t, w if w != "" else None, qos=1, retain=bool(r)) for t, w, r in nachrichten]
+        ende = time.time() + 8
+        for m in marken:
+            while not m.is_published():
+                if time.time() > ende:
+                    raise TimeoutError("keine Bestaetigung")
+                time.sleep(0.02)
+        if lesen:
+            k.subscribe([(t, 0) for t in lesen])
+            abo.wait(3)
+            time.sleep(max(0.0, warten))
+        return (True, behalten)
+    except Exception as err:  # noqa: BLE001
+        melde_gebremst("haus_fz_senden", "haus/fahrzeug: Sitzung am Broker gescheitert (%s)." % type(err).__name__, 3600)
+        return (False, {})
+    finally:
+        try:
+            k.disconnect()
+            if laeuft:
+                k.loop_stop()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def haus_fz_staemme(merker: dict) -> list:
+    """Die Staemme aus dem Merker, nur unterhalb von haus/fahrzeug/. Rein."""
+    aus: list = []
+    fz = merker.get("fahrzeuge") if isinstance(merker, dict) else None
+    for e in (fz.values() if isinstance(fz, dict) else ()):
+        s = e.get("stamm") if isinstance(e, dict) else None
+        if isinstance(s, str) and s.startswith("haus/fahrzeug/") and s not in aus:
+            aus.append(s)
+    return aus
+
+
+def haus_fz_abraeumen(staemme: list, warten: float = 3.0) -> tuple:
+    """Die retained Themen dieser Staemme loeschen und nachlesen. Rueckgabe (rc, Zahl, Rest): 0 bestaetigt, 1 Rest, 2 Broker."""
+    themen = [s + "/" + n for s in staemme for n in HAUS_FZ_FELDER]
+    if not themen:
+        return (0, 0, [])
+    ok, _b = haus_fz_sitzung([(t, "", True) for t in themen])
+    if not ok:
+        return (2, len(themen), themen)
+    ok, b = haus_fz_sitzung([], themen, warten)
+    if not ok:
+        return (2, len(themen), themen)
+    rest = sorted(t for t in b if t in themen)
+    return (1 if rest else 0, len(themen), rest)
+
+
+def haus_fz_fremde(staemme: list, warten: float, eigene=None) -> tuple:
+    """Hoert warten Sekunden auf <stamm>/zaehler. Ein Wert, den diese Linie nicht gesendet hat, ist ein fremder Zaehler: Unter
+    diesem Stamm sendet noch eine andere Linie. Rueckgabe (ok, Liste der Staemme mit fremdem Zaehler)."""
+    gesehen: list = []
+    ok, _b = haus_fz_sitzung([], [s + "/zaehler" for s in staemme], warten, gesehen)
+    if not ok:
+        return (False, [])
+    eigene = eigene or {}
+    aus: list = []
+    for t, w in gesehen:
+        s = t.rsplit("/", 1)[0]
+        if s in staemme and s not in aus and w not in eigene.get(s, ()):
+            aus.append(s)
+    return (True, aus)
+
+
+def haus_fz_fremd_lesen() -> dict:
+    """Die zuletzt gefundenen Staemme mit fremdem Zaehler: {stamm: Zeit}."""
+    d = json_lesen(DATEI_HAUS_FZ_FREMD)
+    return {k: v for k, v in d.items() if isinstance(k, str) and k.startswith("haus/fahrzeug/")}
+
+
+def haus_fz_lausch_lauf(staemme: list) -> None:
+    """Einmal je Stunde neben dem Minutentakt. Das Ergebnis liest der Reiter Test; ein sauberer Lauf nimmt den Vermerk zurueck."""
+    ok, fremd = haus_fz_fremde(staemme, HAUS_FZ_LAUSCH_S, _HAUS_FZ["eigene"])
+    if not ok:
+        return
+    alt = haus_fz_fremd_lesen()
+    neu = {s: int(time.time()) for s in fremd}
+    if neu or alt:
+        json_schreiben(DATEI_HAUS_FZ_FREMD, neu, 0o600)
+    for s in fremd:
+        if s not in alt:
+            _LOG.warning("%s: hier sendet auch eine andere Linie (fremder Zaehler). Bitte einem Fahrzeug einen anderen Namen geben.", s)
+
+
+def haus_fz_leeren(warten: float = 3.0, lausch=None) -> int:
+    """Deinstallation: die Staemme aus dem Merker und aus dem letzten Stand. Der eigene Dienst ist angehalten: Laeuft unter einem
+    Stamm noch ein Zaehler, gehoert er einer anderen Linie, und ihre Themen bleiben stehen. Ausgabe im Format des Installers."""
+    staemme = haus_fz_staemme(json_lesen(DATEI_HAUS_FZ))
+    fz = json_lesen(DATEI_LOXONE).get("fahrzeuge")
+    if isinstance(fz, dict):
+        for n in haus_fz_namen(fz).values():
+            if "haus/fahrzeug/" + n not in staemme:
+                staemme.append("haus/fahrzeug/" + n)
+    if not staemme:
+        print("<INFO> MQTT: kein Fahrzeug bekannt - unter haus/fahrzeug ist nichts abzuraeumen.")
+        return 0
+    ok, behalten = haus_fz_sitzung([], [s + "/" + n for s in staemme for n in HAUS_FZ_FELDER], warten)
+    if not ok:
+        print("<WARNING> MQTT: der Broker war nicht zu erreichen - unter haus/fahrzeug kann noch etwas stehen.")
+        return 1
+    staemme = [s for s in staemme if any(t.startswith(s + "/") for t in behalten)]
+    if not staemme:
+        print("<INFO> MQTT: unter haus/fahrzeug steht nichts von diesem Plugin - nachgemessen.")
+        return 0
+    ok, fremd = haus_fz_fremde(staemme, HAUS_FZ_LAUSCH_S if lausch is None else lausch)
+    for s in fremd:
+        print("<WARNING> MQTT: unter %s/ sendet noch eine andere Linie (fremder Zaehler) - diese Themen bleiben stehen." % s)
+    staemme = [s for s in staemme if s not in fremd]
+    if not staemme:
+        return 0
+    rc, n, rest = haus_fz_abraeumen(staemme, warten)
+    if rc == 0:
+        print("<OK> MQTT: %d Themen unter haus/fahrzeug geleert (vom Broker bestaetigt)." % n)
+        return 0
+    if rc == 1:
+        print("<WARNING> MQTT: %d Themen unter haus/fahrzeug stehen weiter im Broker." % len(rest))
+        return 1
+    print("<WARNING> MQTT: der Broker war nicht zu erreichen - unter haus/fahrzeug kann noch etwas stehen.")
+    return 1
+
+
+def haus_fz_takt(cfg: dict, stand: dict, jetzt: float) -> int:
+    """Je Minute: Zustaende bei einer Aenderung und alle 30 min voll, der Zaehler immer. Rueckgabe 1 = gesendet."""
+    merker = json_lesen(DATEI_HAUS_FZ)
+    fremd = haus_fz_fremd_lesen()
+    if not cfg.get("haus_fahrzeug_ein"):
+        if DATEI_HAUS_FZ.exists():
+            # Ein Stamm mit fremdem Zaehler gehoert auch einer anderen Linie: Er bleibt stehen.
+            rc, n, _rest = haus_fz_abraeumen([s for s in haus_fz_staemme(merker) if s not in fremd], 1.5)
+            if rc == 0:
+                _LOG.info("haus/fahrzeug: Haken aus, %d Themen abgeraeumt.", n)
+                try:
+                    DATEI_HAUS_FZ.unlink()
+                except OSError:
+                    pass
+            else:
+                melde_gebremst("haus_fz_aus", "haus/fahrzeug: Haken aus, das Abraeumen gelang noch nicht.", 3600)
+        return 0
+    fahrzeuge = (stand or {}).get("fahrzeuge") or {}
+    if not fahrzeuge:
+        return 0                     # kein Fahrzeug: der Zaehler schweigt, das ist die Aussage
+    namen = haus_fz_namen(fahrzeuge)
+    alt = merker.get("fahrzeuge") if isinstance(merker.get("fahrzeuge"), dict) else {}
+    aktuell = ["haus/fahrzeug/" + n for n in namen.values()]
+    weg = [s for s in haus_fz_staemme(merker) if s not in aktuell and s not in fremd]
+    nachrichten = [(s + "/" + n, "", True) for s in weg for n in HAUS_FZ_FELDER]
+    _HAUS_FZ["zaehler"] = (_HAUS_FZ["zaehler"] + 1) % 1000
+    neu: dict = {}
+    for nr, name in namen.items():
+        stamm = "haus/fahrzeug/" + name
+        e = alt.get(nr) if isinstance(alt.get(nr), dict) else {}
+        werte = haus_fz_werte(fahrzeuge.get(nr) or fahrzeuge.get(int(nr)) or {}, stand, jetzt)
+        vorher = e.get("werte") if isinstance(e.get("werte"), dict) else None
+        voll = e.get("stamm") != stamm or vorher is None or jetzt - ganz(e.get("zeit"), 0) > HAUS_FZ_VOLL_S
+        for n, w in werte.items():
+            if voll or str(vorher.get(n)) != w:
+                nachrichten.append((stamm + "/" + n, w, True))
+        nachrichten.append((stamm + "/zaehler", str(_HAUS_FZ["zaehler"]), False))
+        _HAUS_FZ["eigene"][stamm] = (_HAUS_FZ["eigene"].get(stamm, []) + [str(_HAUS_FZ["zaehler"])])[-5:]
+        neu[nr] = {"stamm": stamm, "zeit": int(jetzt) if voll else ganz(e.get("zeit"), 0), "werte": werte}
+    ok, _b = haus_fz_sitzung(nachrichten)
+    if not ok:
+        return 0                     # nichts gemerkt: der naechste Lauf sendet es noch einmal
+    if neu != alt:
+        json_schreiben(DATEI_HAUS_FZ, {"fahrzeuge": neu}, 0o600)
+    return 1
+
+
+def kabel_regeln(cfg: dict) -> tuple:
+    """Die Nachtruhe aus den Regeln des Stamms (Block ansage_regeln der Konfiguration): (an, von, bis). Fehlt er oder ist er verbogen: 22 bis 7 Uhr."""
+    r = cfg.get("ansage_regeln")
+    if isinstance(r, dict):
+        v, b = str(r.get("von") or ""), str(r.get("bis") or "")
+        if len(v) == 5 and len(b) == 5 and v[2] == ":" and b[2] == ":":
+            return (bool(r.get("nachtruhe")), v, b)
+    return (True, "22:00", "07:00")
+
+
+def kabel_nacht(cfg: dict, hm: str) -> bool:
+    """Wie ansage_nachtruhe() im Stamm."""
+    an, v, b = kabel_regeln(cfg)
+    if not an:
+        return False
+    return (v <= hm < b) if v < b else (hm >= v or hm < b)
+
+
+def kabel_entscheiden(f: dict, m: dict, cfg: dict, abfahrt_in, jetzt: float, alter) -> tuple:
+    """Die Warnung "Kabel vergessen" (Form mg_kabel_entscheiden()): zu Hause, Kabel nicht gesteckt, Akku unter der
+    Schwelle, Stand bis 12 h; abends (ab kabel_uhr), am Morgen nach der Nachtruhe oder wenn die Abfahrt naht.
+    Unbekannt heisst nie warnen. Hoechstens einmal je Standzeit und Tag. In der Nachtruhe wird nichts verbraucht.
+    Rein bis auf die Uhr im Argument. Rueckgabe (faellig, neuer Merker)."""
+    m = dict(m or {})
+    zu, ka = f.get("ZUHAUSE"), f.get("KABEL")
+    if zu == 0 or ka == 1 or haus_fz_zahl(f.get("TEMPO")) not in ("-", "0"):
+        m["seit"], m["gesagt"] = 0, 0
+        return (False, m)
+    if zu != 1 or ka != 0:
+        return (False, m)
+    if not m.get("seit"):
+        m["seit"] = int(jetzt)
+    soc = haus_fz_zahl(f.get("SOC"))
+    if soc == "-" or float(soc) >= float(ganz(cfg.get("kabel_soc"), 30)) or alter is None or alter > KABEL_FRISCH_S:
+        return (False, m)
+    z = time.localtime(jetzt)
+    hm, tag = time.strftime("%H:%M", z), time.strftime("%Y%m%d", z)
+    if m.get("gesagt") or kabel_nacht(cfg, hm) or str(m.get("tag")) == tag:
+        return (False, m)
+    uhr = str(cfg.get("kabel_uhr") or "")
+    if len(uhr) != 5 or uhr[2] != ":":
+        uhr = "20:00"
+    abends = hm >= uhr
+    an, _v, bis = kabel_regeln(cfg)
+    morgen = an and hm < "12:00" and int(m["seit"]) < time.mktime(time.strptime(tag + " " + bis, "%Y%m%d %H:%M"))
+    grenze = ganz(cfg.get("kabel_abfahrt_min"), 0)
+    abfahrt = grenze > 0 and abfahrt_in is not None and 1 <= int(abfahrt_in) <= grenze
+    if not abends and not morgen and not abfahrt:
+        return (False, m)
+    m["gesagt"], m["tag"] = 1, tag
+    return (True, m)
+
+
+def kabel_takt(horcher, cfg: dict, stand: dict, jetzt: float) -> list:
+    """Je Minute je Fahrzeug die Warnung pruefen. Ohne Haken geschieht nichts. Rueckgabe: die gewarnten Nummern."""
+    if not cfg.get("ansage_kabel_vergessen") and not (cfg.get("signal_ein") and cfg.get("signal_kabel")):
+        return []
+    fahrzeuge = (stand or {}).get("fahrzeuge") or {}
+    alt = json_lesen(DATEI_KABEL)
+    neu = dict(alt)
+    in_min = None
+    if ganz(cfg.get("kabel_abfahrt_min"), 0) > 0 and cfg.get("abfahrt_ein") and horcher is not None:
+        in_min, _h = vorklima_minuten(horcher, cfg, jetzt)
+    gewarnt = []
+    for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
+        f = fahrzeuge[nr]
+        if not isinstance(f, dict):
+            continue
+        faellig, m = kabel_entscheiden(f, alt.get(str(nr)) or {}, cfg, in_min, jetzt, haus_fz_alter(f, stand, jetzt))
+        neu[str(nr)] = m
+        if faellig:
+            gewarnt.append(str(nr))
+            name = str(f.get("name") or f.get("modell") or "")[:60]
+            soc = int(round(float(f.get("SOC"))))
+            _LOG.info("Kabel vergessen: Fahrzeug %s steht zu Hause ohne Kabel (Akku %s Prozent).", nr, soc)
+            ansage_senden("kabel_vergessen", str(nr), {"name": name, "soc": soc}, cfg)
+            text = "%s steht ohne Ladekabel zu Hause, der Akku steht bei %d Prozent." % (name or ("Fahrzeug %s" % nr), soc)
+            signal_senden(cfg, "kabel", str(nr), text)
+    if neu != alt:
+        json_schreiben(DATEI_KABEL, neu, 0o600)
+    return gewarnt
+
+
+def sammel_takt(horcher, cfg: dict, stand: dict) -> None:
+    """Aus dem Wartetakt des Dienstes. Eine Stoerung hier haelt nie den Dienst an."""
+    jetzt = time.time()
+    if jetzt - _HAUS_FZ["letzt"] < HAUS_FZ_TAKT_S:
+        return
+    _HAUS_FZ["letzt"] = jetzt
+    try:
+        haus_fz_takt(cfg, stand, jetzt)
+    except Exception as err:  # noqa: BLE001
+        melde_gebremst("haus_fz", "haus/fahrzeug: %s" % type(err).__name__, 3600)
+    try:
+        kabel_takt(horcher, cfg, stand, jetzt)
+    except Exception as err:  # noqa: BLE001
+        melde_gebremst("kabel", "Kabel vergessen: %s" % type(err).__name__, 3600)
+    # Einmal je Stunde (und nach dem Start) auf fremde Zaehler hoeren, im eigenen Faden: Der Takt wartet nicht.
+    staemme = haus_fz_staemme(json_lesen(DATEI_HAUS_FZ))
+    if cfg.get("haus_fahrzeug_ein") and staemme and jetzt - _HAUS_FZ["lausch"] >= HAUS_FZ_LAUSCH_ABSTAND_S:
+        import threading  # noqa: PLC0415
+        _HAUS_FZ["lausch"] = jetzt
+        threading.Thread(target=haus_fz_lausch_lauf, args=(staemme,), daemon=True).start()
+
+
+def vorklima_sperre(cfg: dict, f: dict) -> str:
+    """Warum diese Abfahrt nicht klimatisiert wird: "" (doch), "akku", "kabel". Unbekannt sperrt nie. Rein."""
+    grenze = ganz(cfg.get("vorklima_min_soc"), 0)
+    soc = haus_fz_zahl(f.get("SOC"))
+    if grenze > 0 and soc != "-" and float(soc) < grenze:
+        return "akku"
+    if cfg.get("vorklima_nur_kabel") and f.get("KABEL") == 0:
+        return "kabel"
+    return ""
+
+
 def broker_anmeldung() -> dict:
     """Broker und Anmeldung aus general.json (mqtt_broker()) - nie in einer Befehlszeile."""
     b = mqtt_broker()
@@ -3715,6 +4156,7 @@ async def g42_takt(client, horcher, stand: dict, cfg: dict, z: dict, freigeschal
     nur, wenn der Mindesttakt TAKT_MIN seit dem letzten Abruf um ist; sonst bleibt er vorgemerkt."""
     jetzt = time.time()
     vorher = json.dumps([merker.get("vorklima"), merker.get("ankunft")], sort_keys=True)
+    sammel_takt(horcher, cfg, stand)     # 0.9.31: Sammelthemen und Kabel-Warnung, je Minute
     auftrag = vorklima_takt(horcher, cfg, merker, stand, jetzt)
     if auftrag is not None:
         if auftrag.get("aktion") == "abruf":
@@ -5584,7 +6026,7 @@ def main() -> int:
             return 2
         if praefix_arg:
             return mqtt_leeren(praefix=praefix_arg[-1][len("--praefix="):])
-        return mqtt_leeren()
+        return max(mqtt_leeren(), haus_fz_leeren())     # 0.9.31: auch haus/fahrzeug/<name>/; nicht bei --praefix=
     # Gruppe 42: Testmeldung an SignalBot (Knopf im Reiter Einstellungen). Ohne Protokoll, ohne Sperre - er
     # laeuft neben dem Dienst; eine Zeile fuer die Oberflaeche (by_signal_test_lesen()).
     if "--signal-test" in sys.argv:

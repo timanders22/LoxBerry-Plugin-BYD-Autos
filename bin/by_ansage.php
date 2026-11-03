@@ -125,7 +125,15 @@ if (function_exists('mb_substr')) {
 }
 
 $by_text = by_ansage_satz($by_d['anlass'], $by_d['nr'], $by_name, $by_soc, $by_grenze);
-list($by_rc, $by_zeile) = ansage_cli(json_encode(array('text' => $by_text), JSON_UNESCAPED_UNICODE),
-                                     by_tts(false), by_ansage_k());
-echo $by_zeile, "\n";
-exit($by_rc);
+/* Stamm 1.3.2 (Welle S4): Sperre, Nachtruhe und Schalter "Ansagen aus" stehen im Stamm. Die Bruecke legt nur hin, gesprochen wird in einem eigenen
+ * Vorgang: Der Dienst wartet nicht auf Lautsprecher. Die Antwortzeile bleibt in der Form: STAND=1 heisst hier hingelegt. Rueckgabe 0 hingelegt, 3 Ausgabe aus. */
+$by_kf = by_config(false);
+$by_ausgabe = by_tts_von($by_kf);
+if ((string) $by_ausgabe['mode'] === 'aus') {
+    echo "ANSAGE;STAND=-1;ART=aus;KENNUNG=AUS;HTTP=0;ZEICHEN=0\n";
+    exit(3);
+}
+by_ansage_token_pflegen($by_kf);
+by_ansage_legen(array(array('schluessel' => $by_d['anlass'] . '|' . $by_d['nr'], 'text' => $by_text)));
+echo 'ANSAGE;STAND=1;ART=gelegt;KENNUNG=GELEGT;HTTP=0;ZEICHEN=' . strlen((string) $by_text) . "\n";
+exit(0);
