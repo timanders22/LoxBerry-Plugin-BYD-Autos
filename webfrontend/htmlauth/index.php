@@ -276,6 +276,7 @@ if ($by_post && $by_formular === 'vorlage') {
     // Gruppe 42: download=befehle - die Vorlage der Befehlsbruecke (bb_vorlage(), CRLF).
     list($by_name, $by_inhalt) = ($by_art === 'befehle') ? by_vorlage_befehle()
         : (($by_art === 'vo') ? by_vorlage_vo($by_nr) : by_vorlage($by_nr));
+    while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: application/x-download');
     // Die Anfuehrungszeichen um den Dateinamen sind Pflicht: ohne sie bricht
     // jeder Name, der ein Leerzeichen enthaelt.
@@ -295,6 +296,7 @@ if ($by_post && $by_formular === 'ladungen' && !isset($_POST['ladungen_csv'])) {
     $by_post = false;
 }
 if ($by_post && $by_formular === 'ladungen') {
+    while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="byd_ladevorgaenge_'
            . date('Ymd_His') . '.csv"');
@@ -947,6 +949,7 @@ if ($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern'])) {
     $by_js = json_encode($by_sich,
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($by_js !== false) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="byd_einstellungen_'
                . date('Ymd_His') . '.json"');
