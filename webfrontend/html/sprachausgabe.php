@@ -249,6 +249,20 @@
  *   - ansage_webport() laedt das SDK nicht mehr: Der Port steht in general.json, dieselbe Datei liest das SDK. Hat die Linie es selbst geladen, geht der
  *     Aufruf durch ansage_sdk_ruf(), das alle Globalen des SDK wiederherstellt. Das Modul veraendert also keine Globale der Linie.
  *     Bis 1.3.1 ueberschrieb lbwebserverport() ein globales $cfg der Linie, und LBSystem war danach auch fuer die Linie geladen.
+ *
+ * 1.4.0 (03.11.2026, Auftrag des Hausherrn vom 02./03.11.2026, iPad 10. Generation am 02.11. gemessen), nur ergaenzend:
+ *   - Neue Ausgabeart 'tafel': die offenen Tafeln des Plugins Dashboard ab 0.9.40 auf diesem LoxBerry (POST an 127.0.0.1, kein Netz nach aussen).
+ *     Gesprochen wird im Browser der Tafel; das Modul gibt Text und Ziel nur ab. Das Token ist das aktionstoken des Dashboards. Es wird bei jedem
+ *     Senden aus dessen Konfiguration gelesen und nie in der Linie gespeichert: es darf mehr als ein Sprechtoken.
+ *   - Ab Werk an, ohne dass die Linie etwas tut: ansage_regel_sprechen() und ansage_regel_lage() reihen das Ziel selbst ein
+ *     (ansage_tafel_einreihen()), auch bei einem schon gespeicherten Block. Nie gesetzt = EIN. Der Schalter steht in den Regeln, nicht im Block tts
+ *     (Schluessel 'tafel', 'tafel_namen'; eine zuerst geladene aeltere Abschrift wiese einen Block mit neuen Schluesseln ab), und erscheint in
+ *     ansage_regeln_html(). AUS bleibt AUS; Ausgabeart 'aus' der Linie schaltet auch die Tafel ab.
+ *   - Uebergangen wie ein nicht eingerichtetes Ziel, ohne Fehler: kein Dashboard (PLUGIN_FEHLT), zu alt (ZU_ALT), dort abgeschaltet (SPRECHEN_AUS),
+ *     kein Token (KEIN_TOKEN), keine Tafel offen (KEINE_TAFEL; seit 5 Minuten keine Meldung).
+ *   - Es gelten dieselben Regeln: Nachtruhe, Sperre, Schalter haus/ansage/ruhe. Eine Linie, die nichts davon ruft, laeuft weiter wie 1.3.2.
+ *   - Neue Ausgabeart homepod4lox: Apple HomePod ueber das Plugin HomePod4Lox, nach dem Muster cc4lox. Nie gesetzt = EIN, Aus bleibt aus; ohne das Plugin gar keine Wirkung, auch keine Zeile.
+ *   - Wer die Tafel im Testweg will: ansage_tafel_einreihen(<aufgeloester Block>, <Regeln>, $k, true) - nur ein bereites Ziel kommt hinzu.
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -267,7 +281,12 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.3.2');
+define('ANSAGE_FASSUNG', '1.4.0');
+
+/** Ab dieser Fassung nimmt das Plugin Dashboard Ansagen an (seit 1.4.0). */
+define('ANSAGE_TAFEL_MIN', '0.9.40');
+/** So lange (Sekunden) gilt eine Tafel nach ihrer letzten Meldung als offen; dieselbe Zahl wie DB_TAFEL_AUS_S im Dashboard. */
+define('ANSAGE_TAFEL_STILL_S', 300);
 
 /** Hoechstlaenge eines Ansagetexts in Zeichen (Schnittstelle Alexa-NG/Chromecast: 1-1000). */
 define('ANSAGE_TEXT_MAX', 1000);
@@ -294,13 +313,13 @@ define('ANSAGE_ZIELE_MAX', 6);
 /** Alle Ausgabearten in der Reihenfolge der Auswahlliste. */
 function ansage_modi()
 {
-    return array('aus', 'musicserver', 'ms4h', 'audioserver', 'custom', 'alexang', 'cc4lox', 'sonos4lox', 'sonox');
+    return array('aus', 'musicserver', 'ms4h', 'audioserver', 'custom', 'alexang', 'cc4lox', 'sonos4lox', 'sonox', 'tafel', 'homepod4lox');
 }
 
 /** Ausgabearten, die ueber die Sprechschnittstelle eines anderen Plugins gehen. */
 function ansage_ist_ng($modus)
 {
-    return $modus === 'alexang' || $modus === 'cc4lox';
+    return $modus === 'alexang' || $modus === 'cc4lox' || $modus === 'homepod4lox';
 }
 
 /** 'alexa' oder 'google' fuer eine NG-Ausgabeart, sonst ''. */
@@ -308,6 +327,7 @@ function ansage_art($modus)
 {
     if ($modus === 'alexang') { return 'alexa'; }
     if ($modus === 'cc4lox') { return 'google'; }
+    if ($modus === 'homepod4lox') { return 'homepod'; }     // seit 1.4.0
     return '';
 }
 
@@ -320,6 +340,7 @@ function ansage_letzte_art($modus)
 {
     if ($modus === 'sonos4lox') { return 'sonos'; }
     if ($modus === 'sonox') { return 'sonox'; }       // seit 1.1.4
+    if ($modus === 'tafel') { return 'tafel'; }       // seit 1.4.0
     return ansage_art($modus);
 }
 
@@ -359,7 +380,7 @@ function ansage_vorgaben($ab_werk = 'aus')
 /** Die Schluessel, die Geheimnisse tragen: nie in Seite, Sicherung, Protokoll, X-2. */
 function ansage_geheim()
 {
-    return array('alexa_token', 'google_token');
+    return array('alexa_token', 'google_token', 'homepod_token');
 }
 
 /**
@@ -681,11 +702,13 @@ function ansage_wert_pruefen($tts, &$grund = '', $modi = null)
                 break;
             case 'alexa_geraet':
             case 'google_geraet':
+            case 'homepod_geraet':
                 if (!ansage_geraet_ok($w)) { $grund = 'TTS_' . strtoupper(substr($s, 0, strpos($s, '_'))) . '_GERAET'; return null; }
                 $aus[$s] = $w;
                 break;
             case 'alexa_laut':
             case 'google_laut':
+            case 'homepod_laut':
             case 'sonos_laut':
             case 'sonox_laut':
                 $z = ansage_laut_pruefen($w, $grund);
@@ -709,11 +732,22 @@ function ansage_wert_pruefen($tts, &$grund = '', $modi = null)
                 break;
             case 'alexa_token':
             case 'google_token':
+            case 'homepod_token':
                 // Leer heisst "keins gespeichert".
                 if (!is_string($w) || ($w !== '' && !ansage_token_ok($w))) {
                     $grund = 'TTS_' . strtoupper(substr($s, 0, strpos($s, '_'))) . '_TOKEN'; return null;
                 }
                 $aus[$s] = $w;
+                break;
+            case 'tafel_namen':
+                // seit 1.4.0, nur im Block eines Ziels (ansage_ziel_block()): leer = alle offenen Tafeln.
+                if (!ansage_tafel_namen_ok($w)) { $grund = 'TTS_TAFEL_NAMEN'; return null; }
+                $aus[$s] = $w;
+                break;
+            case 'tafel_laut':
+                $z = ansage_laut_pruefen($w, $grund);
+                if ($z === null) { $grund = 'UNTER|tts.' . $s . '|' . $grund; return null; }
+                $aus[$s] = $z;
                 break;
             case 'ziele':
                 // seit 1.2.0: die weiteren Ausgabeziele (ansage_ziele_pruefen()).
@@ -920,6 +954,10 @@ function ansage_plugin_tafel()
         'sonos4lox' => array(array('sonos', 'sonos4lox'), 'sonos4lox'),
         // SonoX: plugin.cfg PLUGINDB_KEY=sonox, NAME=SonoX, FOLDER=sonox (seit 1.1.4).
         'sonox' => array(array('sonox'), 'sonox'),
+        // HomePod4Lox: plugin.cfg NAME=homepod4lox (seit 1.4.0).
+        'homepod4lox' => array(array('homepod4lox'), 'homepod4lox'),
+        // Dashboard: plugin.cfg NAME=dashboard, FOLDER=dashboard (seit 1.4.0).
+        'tafel' => array(array('dashboard'), 'dashboard'),
     );
 }
 
@@ -1113,7 +1151,7 @@ function ansage_adresse($modus, $port, $home = null)
 {
     $port = (int) $port;
     if ($port < 1 || $port > 65535) { $port = 80; }
-    $ordner = ansage_plugin_ordner($modus === 'cc4lox' || $modus === 'sonos4lox' ? $modus : 'alexang', $home);
+    $ordner = ansage_plugin_ordner($modus === 'cc4lox' || $modus === 'sonos4lox' || $modus === 'tafel' || $modus === 'homepod4lox' ? $modus : 'alexang', $home);
     return 'http://127.0.0.1:' . $port . '/plugins/' . $ordner . '/index.php';
 }
 
@@ -1698,6 +1736,43 @@ function ansage_sprechen($text, array $tts, array $k = array(), array $opt = arr
         $r['stand'] = $r['kennung'] === '' ? 1 : 0;
         return ansage_letzte_merken($r, $k);
     }
+    if ($modus === 'tafel') {
+        /* Seit 1.4.0: nur abgeben, gesprochen wird im Browser der Tafel. POST, damit Text und Token nicht in einer Adresse und in keinem Zugriffsprotokoll
+         * stehen. Das Token bleibt im Speicher (ansage_nachbar()). Art "gong" ist ein Signal: Gong und Text, nichts Gesprochenes. */
+        $n = ansage_nachbar('tafel', $k);
+        if ($n['ein'] === false) {
+            $r['stand'] = -1;
+            $r['kennung'] = 'TAFEL_AUS';
+            return $r;
+        }
+        if (!ansage_token_ok($n['token'])) {
+            $r['kennung'] = 'TAFEL_KEIN_TOKEN';
+            return ansage_letzte_merken($r, $k);
+        }
+        $namen = isset($tts['tafel_namen']) ? $tts['tafel_namen'] : '';
+        if (!ansage_tafel_namen_ok($namen)) {
+            $r['kennung'] = 'EINSTELLUNG|TTS_TAFEL_NAMEN';
+            return ansage_letzte_merken($r, $k);
+        }
+        $laut = ansage_tts_laut($tts, 'tafel_laut', $grund);
+        if ($laut === null) {
+            $r['kennung'] = 'EINSTELLUNG|' . $grund;
+            return ansage_letzte_merken($r, $k);
+        }
+        $f = array('aktion' => 'ansage', 'token' => $n['token']);
+        if ($namen !== '') { $f['tafel'] = $namen; }
+        if ($laut >= 1) { $f['laut'] = $laut; }
+        if ($dringend) { $f['dringend'] = '1'; }
+        if (!empty($opt['signal'])) { $f['art'] = 'gong'; }
+        $f['text'] = $text;
+        $url = ansage_adresse($modus, ansage_k_port($k), ansage_k_home($k));
+        $a = ansage_ng_rufen($url, $f, ANSAGE_TMO, $k, 'ANSAGE');
+        $r['http'] = $a['code'];
+        $r['zeile'] = $a['zeile'];
+        $r['kennung'] = ansage_ng_bewerten($a, 'ANSAGE', 'TAFEL', $url, $k);
+        $r['stand'] = $r['kennung'] === '' ? 1 : 0;
+        return ansage_letzte_merken($r, $k);
+    }
     if ($modus === 'sonos4lox') {
         /* GET, weil Sonos4Lox nur $_GET liest (src/Http/Request.php); der Text
          * steht damit in der Adresse an 127.0.0.1 - wie bei jedem Aufruf aus
@@ -1844,7 +1919,7 @@ function ansage_kurz(array $r)
 /** Dateiname der letzten Ansage einer Art. */
 function ansage_letzte_datei($art)
 {
-    return ($art === 'alexa' || $art === 'google' || $art === 'sonos' || $art === 'sonox')
+    return ($art === 'alexa' || $art === 'google' || $art === 'sonos' || $art === 'sonox' || $art === 'tafel' || $art === 'homepod')
         ? $art . '_letzte.json' : 'klassisch_letzte.json';
 }
 
@@ -1900,7 +1975,7 @@ function ansage_ng_selbsttest(array $tts, $modus, array $k, $tmo = ANSAGE_TMO_PR
 {
     $art = ansage_art($modus);
     $art_k = strtoupper($art);
-    $aus = array('stand' => 0, 'kennung' => '', 'zeile' => '', 'sprechen_aus' => false, 'dienst_aus' => false);
+    $aus = array('stand' => 0, 'kennung' => '', 'zeile' => '', 'sprechen_aus' => false, 'dienst_aus' => false, 'online' => null);
     $tok = isset($tts[$art . '_token']) ? $tts[$art . '_token'] : '';
     if (!ansage_token_ok($tok)) {
         $aus['kennung'] = $art_k . '_KEIN_TOKEN';
@@ -1914,6 +1989,7 @@ function ansage_ng_selbsttest(array $tts, $modus, array $k, $tmo = ANSAGE_TMO_PR
         $aus['stand'] = 1;
         $aus['sprechen_aus'] = preg_match('/(?:^|;)SPRECHEN=0(?:;|$)/', $a['zeile']) === 1;
         $aus['dienst_aus'] = preg_match('/(?:^|;)DIENST=0(?:;|$)/', $a['zeile']) === 1;
+        if ($modus === 'alexang' && preg_match('/(?:^|;)ONLINE=(-1|[0-9]{1,4})(?:;|$)/', $a['zeile'], $on)) { $aus['online'] = (int) $on[1]; }     // seit 1.4.0
     }
     return $aus;
 }
@@ -1952,6 +2028,14 @@ function ansage_pruefzeile(array $tts, $offen, array $k = array())
     }
     if ($modus === 'audioserver') {
         return array(-1, $e(ansage_t('T_AUDIOSERVER', $k)));
+    }
+    if ($modus === 'tafel') {
+        // Seit 1.4.0: fragt nichts im Netz. Nicht eingerichtet ist kein Fehler: grau, mit Grund.
+        $g = ansage_ziel_eingerichtet($tts, $k);
+        if ($g !== '') {
+            return array(-1, $e(sprintf(ansage_t('T_TAFEL_OFFEN', $k), ansage_t('T_R_G_' . $g, $k))));
+        }
+        return ansage_mit_letzter(array(1, $e(ansage_t('T_TAFEL_OK', $k))), ansage_letzte('tafel', $k), $k);
     }
     if ($modus === 'sonos4lox') {
         // Nie gefragt: Sonos4Lox hat keinen Selbsttest, eine Probe spraeche.
@@ -2042,6 +2126,9 @@ function ansage_pruefzeile(array $tts, $offen, array $k = array())
     }
     $z = array(1, $e(sprintf(ansage_t('T_' . $art_k . '_OK', $k), ansage_adresse($modus, ansage_k_port($k), ansage_k_home($k)))));
     if ($s['sprechen_aus']) { $z[0] = -1; $z[1] .= ' ' . $e(ansage_t('T_SPRECHEN_AUS', $k)); }
+    // seit 1.4.0: Alexa-NG ab 1.0.9 sagt, wie viele Echos laut letzter Liste online sind. Ein aelteres sagt nichts, dann bleibt die Zeile.
+    if ($s['online'] === 0) { $z[0] = -1; $z[1] .= ' ' . $e(ansage_t('T_ALEXA_OFFLINE', $k)); }
+    if ($s['online'] === -1) { $z[0] = -1; $z[1] .= ' ' . $e(ansage_t('T_ALEXA_LISTE_FEHLT', $k)); }
     if ($s['dienst_aus']) { $z[0] = -1; $z[1] .= ' ' . $e(ansage_t('T_DIENST_AUS', $k)); }
     return ansage_mit_letzter($z, $l, $k);
 }
@@ -2401,6 +2488,9 @@ function ansage_formular_html(array $tts, array $h = array(), array $k = array()
             $feld('sonox_sprache', 'text', 'L_SONOX_SPRACHE', ' maxlength="5"', 'SONOX_SPRACHE_HINWEIS'));
         $o[] = '</div>';
     }
+    // Das Ziel Tafel (seit 1.4.0) nur, wenn die Linie die Art anbietet: keine Felder, das Token liest das Modul beim Dashboard.
+    $mit_tafel = in_array('tafel', $modi, true);
+    if ($mit_tafel) { $o[] = '<div id="ansage_tafel" class="sm-hinweis">' . $e($t('TAFEL_HINWEIS')) . '</div>'; }
     if ($mit_zielen) { $o = array_merge($o, ansage_ziele_html($tts, $h, $k)); }
     $o[] = '<script>';
     $o[] = 'function ansageUmschalten() {';
@@ -2414,6 +2504,7 @@ function ansage_formular_html(array $tts, array $h = array(), array $k = array()
     $o[] = '    zeigen(\'ansage_sonos\', m === \'sonos4lox\');';
     $o[] = '    zeigen(\'ansage_google\', m === \'cc4lox\');';
     if ($mit_sonox) { $o[] = '    zeigen(\'ansage_sonox\', m === \'sonox\');'; }
+    if ($mit_tafel) { $o[] = '    zeigen(\'ansage_tafel\', m === \'tafel\');'; }
     if ($mit_zielen) {
         $o[] = '    var za = function (a) { var s = document.querySelectorAll(\'select.ansage_ziel_art\');';
         $o[] = '        for (var i = 0; i < s.length; i++) { if (s[i].value === a) { return true; } } return false; };';
@@ -2602,7 +2693,16 @@ function ansage_sprachschluessel()
                'T_R_BEREIT', 'T_R_OFFEN', 'T_R_KEIN_ZIEL', 'T_R_NACHT', 'T_R_TAG', 'T_R_OHNE_RUHE',
                'T_R_SCHALTER_AUS', 'T_R_SCHALTER_FREI', 'T_R_SCHALTER_NIE',
                'T_R_G_KEINE_ADRESSE', 'T_R_G_KEIN_ORT', 'T_R_G_KEIN_TOKEN', 'T_R_G_PLUGIN_FEHLT', 'T_R_G_SPRECHEN_AUS',
-               'T_R_G_KEIN_GERAET', 'T_R_G_EINSTELLUNG');
+               'T_R_G_KEIN_GERAET', 'T_R_G_EINSTELLUNG',
+               // seit 1.4.0: das Ziel Tafel (O_TAFEL kommt ueber die Modusschleife)
+               'TAFEL_HINWEIS', 'L_R_TAFEL', 'R_TAFEL_HINWEIS', 'L_R_TAFEL_NAMEN', 'R_TAFEL_NAMEN_HINWEIS', 'M_R_TAFEL_NAMEN',
+               'T_TAFEL_OK', 'T_TAFEL_OFFEN', 'T_R_G_ZU_ALT', 'T_R_G_KEINE_TAFEL', 'K_TTS_TAFEL_NAMEN',
+               'K_TAFEL_AUS', 'K_TAFEL_KEIN_TOKEN', 'K_TAFEL_KEINE_ANTWORT', 'K_TAFEL_ANTWORT', 'K_TAFEL_FEHLT', 'K_TAFEL_UNERWARTET',
+               'T_ALEXA_OFFLINE', 'T_ALEXA_LISTE_FEHLT',
+               'HOMEPOD_HINWEIS', 'L_R_HOMEPOD', 'R_HOMEPOD_HINWEIS', 'L_R_HOMEPOD_GERAET', 'M_R_HOMEPOD_GERAET', 'K_TTS_HOMEPOD_GERAET', 'K_TTS_HOMEPOD_TOKEN',
+               'T_HOMEPOD_ZU', 'T_HOMEPOD_OK', 'T_HOMEPOD_FEHL', 'K_HOMEPOD_KEIN_TOKEN', 'K_HOMEPOD_KEINE_ANTWORT', 'K_HOMEPOD_ANTWORT', 'K_HOMEPOD_FEHLT', 'K_HOMEPOD_UNERWARTET',
+               'K_HOMEPOD_G_TOKEN', 'K_HOMEPOD_G_KEIN_TOKEN_EINGERICHTET', 'K_HOMEPOD_G_SPRECHEN_AUS', 'K_HOMEPOD_G_DIENST_LAEUFT_NICHT', 'K_HOMEPOD_G_GERAETE_OFFLINE', 'K_HOMEPOD_G_GERAET_UNBEKANNT', 'K_HOMEPOD_G_KEIN_GERAET', 'K_HOMEPOD_G_NUR_LOKAL', 'K_HOMEPOD_G_KEINE_GERAETE', 'K_HOMEPOD_G_KOPPLUNG_NOETIG', 'K_HOMEPOD_G_BIBLIOTHEK_FEHLT', 'K_HOMEPOD_G_STUNDENGRENZE',
+               'K_TAFEL_G_TOKEN', 'K_TAFEL_G_ANSAGE_AUS', 'K_TAFEL_G_KEINE_TAFEL', 'K_TAFEL_G_AKTUALISIERUNG');
     foreach (ansage_modi() as $mo) { $s[] = 'O_' . strtoupper($mo); }
     foreach (array('ALEXA', 'GOOGLE') as $a) {
         foreach (array('_HINWEIS', '_GERAET_HINWEIS', '_LAUT_HINWEIS', '_TOKEN_HINWEIS') as $x) { $s[] = $a . $x; }
@@ -3476,7 +3576,7 @@ function ansage_selbsttest()
 
     // --- Modus, Vorgaben, Wertpruefung SonoX ---
     $mm = ansage_modi();
-    $pruef('114 modi', array(end($mm), count($mm)), array('sonox', 9));
+    $pruef('114 modi', array($mm[8], count($mm)), array('sonox', 11));
     $vg = ansage_vorgaben();
     $pruef('114 vorgaben', array($vg['sonox_raum'], $vg['sonox_laut'], $vg['sonox_sprache']), array('', -1, 'de'));
     $pruef('114 vorgabe sonox', ansage_vorgaben('sonox')['mode'], 'sonox');
@@ -4017,7 +4117,7 @@ function ansage_selbsttest()
     // --- 1.3.0: wann gesprochen wird ---
     $p130 = function ($z) { return mktime((int) substr($z, 0, 2), (int) substr($z, 3, 2), 0, 6, 15, 2026); };
     $r130 = ansage_regeln_vorgaben();
-    $pruef('130 vorgaben', $r130, array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30));
+    $pruef('130 vorgaben', $r130, array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => ''));
     foreach (array('21:59' => false, '22:00' => true, '23:30' => true, '00:00' => true, '06:59' => true, '07:00' => false, '12:00' => false) as $z130 => $s130) {
         $pruef('130 nacht ' . $z130, ansage_nachtruhe($r130, $p130($z130)), $s130);
     }
@@ -4076,11 +4176,11 @@ function ansage_selbsttest()
     $jz130 = $t130;
     $log = array();
     $antworten = array();
-    $kr130 = $k + array('nachbar' => function ($m) use (&$nb130) { return $nb130[$m]; }, 'stand_fn' => $sf130,
+    $kr130 = $k + array('nachbar' => function ($m) use (&$nb130) { return isset($nb130[$m]) ? $nb130[$m] : null; }, 'stand_fn' => $sf130,
                         'schalter' => function () use (&$sch130) { return $sch130; }, 'jetzt' => function () use (&$jz130) { return $jz130; });
     $ein130 = array(array('schluessel' => 'a:1', 'text' => 'Satz eins.'));
     $a130 = ansage_regel_sprechen($ein130, $w130, $r130, $kr130);
-    $pruef('130 werk ohne ziel: still', array($a130['regel'], $a130['r'], count($log), count($a130['offen'])), array('KEIN_ZIEL', null, 0, 3));
+    $pruef('130 werk ohne ziel: still', array($a130['regel'], $a130['r'], count($log), count($a130['offen'])), array('KEIN_ZIEL', null, 0, 4));
     $pruef('130 werk ohne ziel: stand leer', $mem130, array());
 
     // Ziel eingerichtet: Alexa-NG vor Ort, Token nur im Speicher
@@ -4195,7 +4295,7 @@ function ansage_selbsttest()
     $pruef('130 block oder aus: bleibt', ansage_block_oder_aus(array('mode' => 'cc4lox'))['mode'], 'cc4lox');
 
     // Eingerichtet oder nicht
-    $bk130 = array('home' => '', 'nachbar' => function ($m) use (&$nb130) { return $nb130[$m]; });
+    $bk130 = array('home' => '', 'nachbar' => function ($m) use (&$nb130) { return isset($nb130[$m]) ? $nb130[$m] : null; });
     $v130 = ansage_vorgaben('aus');
     $nb130['alexang'] = array('token' => '', 'standard' => null, 'ein' => null);
     $nb130['cc4lox'] = array('token' => '', 'standard' => null, 'ein' => null);
@@ -4263,7 +4363,7 @@ function ansage_selbsttest()
     $be130 = array();
     list($r2130, $h130) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_von' => '21:30', 'ansage_ruhe_bis' => '06:00', 'ansage_sperre_min' => '60', 'ansage_anlass_a' => '1'),
                                                  $r130, array('a' => 'A', 'b' => 'B'), $mg130, $be130);
-    $pruef('130 formular regeln', array($r2130, $h130, $mg130), array(array('nachtruhe' => 1, 'von' => '21:30', 'bis' => '06:00', 'sperre_min' => 60), array('a' => 1, 'b' => 0), array()));
+    $pruef('130 formular regeln', array($r2130, $h130, $mg130), array(array('nachtruhe' => 1, 'von' => '21:30', 'bis' => '06:00', 'sperre_min' => 60, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => ''), array('a' => 1, 'b' => 0), array()));
     $mg130 = array();
     $be130 = array();
     list($r2130) = ansage_regeln_formular(array('ansage_ruhe_von' => '25:00', 'ansage_sperre_min' => '1'), $r130, array(), $mg130, $be130);
@@ -4292,7 +4392,7 @@ function ansage_selbsttest()
 
     // --- 1.3.1: das Sprechtoken dauerhaft uebernehmen ---
     $nb131 = array('alexang' => array('token' => $TOK, 'standard' => true, 'ein' => true), 'cc4lox' => array('token' => $TOK2, 'standard' => true, 'ein' => true));
-    $k131 = array('home' => '', 'nachbar' => function ($m) use (&$nb131) { return $nb131[$m]; });
+    $k131 = array('home' => '', 'nachbar' => function ($m) use (&$nb131) { return isset($nb131[$m]) ? $nb131[$m] : null; });
     list($t131, $h131, $g131) = ansage_token_abgleich(ansage_werk_block(), array(), $k131);
     $pruef('131 uebernommen', array($t131['alexa_token'], $t131['google_token'], $h131, $g131),
            array($TOK, $TOK2, array('google_token' => 'nachbar', 'alexa_token' => 'nachbar'), array('cc4lox', 'alexang')));
@@ -4391,6 +4491,301 @@ function ansage_selbsttest()
         @rmdir($o132);
     }
 
+    // --- 1.4.0: das Ziel Tafel ---
+    $n140 = array('token' => $TOK, 'standard' => null, 'ein' => true);
+    $nb140 = function ($m) use (&$n140) { return $m === 'tafel' ? $n140 : array('token' => '', 'standard' => null, 'ein' => null); };
+    $k140 = array('port' => 8080, 'transport' => $transport, 'home' => '', 'tafel_fassung' => '0.9.40', 'tafeln_offen' => 1, 'nachbar' => $nb140);
+    $f140 = function ($i) use (&$log) { $o = array(); parse_str((string) $log[$i]['koerper'], $o); return $o; };
+    $ok140 = array('code' => 200, 'rumpf' => "ANSAGE;OK=1;TAFELN=1\n", 'errno' => 0);
+    $pruef('140 art in den modi', in_array('tafel', ansage_modi(), true), true);
+    $pruef('140 art in den zielarten', in_array('tafel', ansage_ziel_arten(), true), true);
+    $pruef('140 eine liste ohne tafel bleibt ohne', in_array('tafel', ansage_ziel_arten(array('aus', 'alexang')), true), false);
+    $pruef('140 letzte datei', ansage_letzte_datei('tafel'), 'tafel_letzte.json');
+    // Namen
+    foreach (array('' => true, 'flur' => true, 'flur,kueche_2' => true, 'a' => true, 'Flur' => false, 'flur,' => false, ',flur' => false, 'flur kueche' => false,
+                   '1flur' => false, 'a-b' => false, 'flur,1' => false) as $w140 => $s140) {
+        $pruef('140 namen ' . $w140, ansage_tafel_namen_ok((string) $w140), $s140);
+    }
+    $pruef('140 namen liste', ansage_tafel_namen_ok(array('flur')), false);
+    $pruef('140 namen 24', ansage_tafel_namen_ok(str_repeat('a', 24)), true);
+    $pruef('140 namen 25', ansage_tafel_namen_ok(str_repeat('a', 25)), false);
+    $pruef('140 namen grenze laenge', ansage_tafel_namen_ok(str_repeat('abcdefghij,', 18) . 'abcdefghijklmnopqrstuvw'), false);
+    // Fassung und offene Tafeln, rein aus dem Inhalt
+    $pruef('140 fassung', ansage_tafel_fassung_aus('{"plugins":{"x":{"name":"alexang","version":"9.9.9","folder":"alexang"},"y":{"name":"Dashboard","version":"0.9.40","folder":"dashboard"}}}'), '0.9.40');
+    $pruef('140 fassung flach', ansage_tafel_fassung_aus('{"y":{"name":"dashboard","version":"0.9.41"}}'), '0.9.41');
+    $pruef('140 fassung fehlt', ansage_tafel_fassung_aus('{"plugins":{"x":{"name":"alexang","version":"9.9.9"}}}'), '');
+    $pruef('140 fassung kaputt', ansage_tafel_fassung_aus('{kaputt'), '');
+    $j140 = json_encode(array('namen' => array('flur' => array('ts' => 1000), 'alt' => array('ts' => 699), 'grenze' => array('ts' => 700)),
+                              'unbenannt' => array('abcd' => array('ts' => 1000), 'efgh' => array('ts' => 100))));
+    $pruef('140 offen alle', ansage_tafel_offen_aus($j140, '', 1000), 3);
+    $pruef('140 offen ein name', ansage_tafel_offen_aus($j140, 'flur', 1000), 1);
+    $pruef('140 offen name still', ansage_tafel_offen_aus($j140, 'alt', 1000), 0);
+    $pruef('140 offen name unbekannt', ansage_tafel_offen_aus($j140, 'keller', 1000), 0);
+    $pruef('140 offen name ohne unbenannte', ansage_tafel_offen_aus($j140, 'abcd', 1000), 0);
+    $pruef('140 offen kaputt', ansage_tafel_offen_aus('{kaputt', '', 1000), 0);
+    // Nachbar
+    $x140 = ansage_nachbar_aus('tafel', '{"aktionstoken":"' . $TOK . '"}');
+    $pruef('140 nachbar token', $x140['token'], $TOK);
+    $pruef('140 nie gesetzt ist an', $x140['ein'], true);
+    $pruef('140 aus bleibt aus', ansage_nachbar_aus('tafel', '{"aktionstoken":"' . $TOK . '","ansage_ein":0}')['ein'], false);
+    $pruef('140 an bleibt an', ansage_nachbar_aus('tafel', '{"aktionstoken":"' . $TOK . '","ansage_ein":1}')['ein'], true);
+    $pruef('140 kurzes token gilt nicht', ansage_nachbar_aus('tafel', '{"aktionstoken":"kurz"}')['token'], '');
+    // Eingerichtet oder uebergangen: nie ein Fehler
+    $b140 = array('mode' => 'tafel');
+    $pruef('140 bereit', ansage_ziel_eingerichtet($b140, $k140), '');
+    $pruef('140 ohne dashboard', ansage_ziel_eingerichtet($b140, array('tafel_fassung' => '') + $k140), 'PLUGIN_FEHLT');
+    $pruef('140 dashboard zu alt', ansage_ziel_eingerichtet($b140, array('tafel_fassung' => '0.9.39') + $k140), 'ZU_ALT');
+    $pruef('140 dashboard neuer', ansage_ziel_eingerichtet($b140, array('tafel_fassung' => '0.9.100') + $k140), '');
+    $pruef('140 keine tafel offen', ansage_ziel_eingerichtet($b140, array('tafeln_offen' => 0) + $k140), 'KEINE_TAFEL');
+    $n140 = array('token' => $TOK, 'standard' => null, 'ein' => false);
+    $pruef('140 dort aus', ansage_ziel_eingerichtet($b140, $k140), 'SPRECHEN_AUS');
+    $n140 = array('token' => '', 'standard' => null, 'ein' => true);
+    $pruef('140 ohne token', ansage_ziel_eingerichtet($b140, $k140), 'KEIN_TOKEN');
+    $n140 = array('token' => $TOK, 'standard' => null, 'ein' => true);
+    // Sprechen: POST an das Dashboard, Token und Text nie in der Adresse
+    $log = array();
+    $antworten = array($ok140);
+    $r140 = ansage_sprechen($TEXT, array('mode' => 'tafel'), $k140, array('dringend' => true));
+    $pruef('140 sprechen stand', array($r140['stand'], $r140['kennung'], $r140['art']), array(1, '', 'tafel'));
+    $pruef('140 adresse', $log[0]['url'], 'http://127.0.0.1:8080/plugins/dashboard/index.php');
+    $pruef('140 methode', $log[0]['methode'], 'POST');
+    $pruef('140 kein token in der adresse', strpos($log[0]['url'], $TOK), false);
+    $pruef('140 felder', array($f140(0)['aktion'], $f140(0)['token'], $f140(0)['text'], $f140(0)['dringend']),
+           array('ansage', $TOK, $TEXT, '1'));
+    $pruef('140 kein ziel ohne namen', isset($f140(0)['tafel']), false);
+    $pruef('140 keine lautstaerke ohne wert', isset($f140(0)['laut']), false);
+    $pruef('140 kein signal ohne wunsch', isset($f140(0)['art']), false);
+    $pruef('140 nicht dringend', (function () use (&$log, &$antworten, $ok140, $TEXT, $k140, $f140) {
+        $log = array(); $antworten = array($ok140);
+        ansage_sprechen($TEXT, array('mode' => 'tafel'), $k140);
+        return isset($f140(0)['dringend']);
+    })(), false);
+    $log = array();
+    $antworten = array($ok140);
+    ansage_sprechen($TEXT, array('mode' => 'tafel', 'tafel_namen' => 'flur,kueche', 'tafel_laut' => 40), $k140, array('signal' => true));
+    $pruef('140 namen und laut und signal', array($f140(0)['tafel'], $f140(0)['laut'], $f140(0)['art']), array('flur,kueche', '40', 'gong'));
+    $log = array();
+    $antworten = array($ok140);
+    $r140 = ansage_sprechen($TEXT, array('mode' => 'tafel', 'tafel_namen' => 'Flur'), $k140);
+    $pruef('140 namen falsch', array($r140['stand'], $r140['kennung'], count($log)), array(0, 'EINSTELLUNG|TTS_TAFEL_NAMEN', 0));
+    $n140 = array('token' => $TOK, 'standard' => null, 'ein' => false);
+    $r140 = ansage_sprechen($TEXT, array('mode' => 'tafel'), $k140);
+    $pruef('140 dort aus sendet nicht', array($r140['stand'], $r140['kennung'], count($log)), array(-1, 'TAFEL_AUS', 0));
+    $n140 = array('token' => 'kurz', 'standard' => null, 'ein' => true);
+    $r140 = ansage_sprechen($TEXT, array('mode' => 'tafel'), $k140);
+    $pruef('140 kein token sendet nicht', array($r140['stand'], $r140['kennung'], count($log)), array(0, 'TAFEL_KEIN_TOKEN', 0));
+    $n140 = array('token' => $TOK, 'standard' => null, 'ein' => true);
+    $antworten = array(array('code' => 200, 'rumpf' => "ANSAGE;OK=10\n", 'errno' => 0));
+    $r140 = ansage_sprechen($TEXT, array('mode' => 'tafel'), $k140);
+    $pruef('140 ok=10 ist kein ok', $r140['stand'], 0);
+    $antworten = array(array('code' => 409, 'rumpf' => "ANSAGE;OK=0;GRUND=KEINE_TAFEL\n", 'errno' => 0));
+    $r140 = ansage_sprechen($TEXT, array('mode' => 'tafel'), $k140);
+    $pruef('140 abgewiesen', array($r140['stand'], $r140['kennung']), array(0, 'TAFEL_ANTWORT|409|KEINE_TAFEL'));
+    $antworten = array(array('code' => 404, 'rumpf' => "nichts\n", 'errno' => 0));
+    $r140 = ansage_sprechen($TEXT, array('mode' => 'tafel'), $k140);
+    $pruef('140 fehlt', $r140['kennung'], 'TAFEL_FEHLT|http://127.0.0.1:8080/plugins/dashboard/index.php|404');
+    // Pruefungen und Bloecke
+    $pruef('140 ziel namen ok', ansage_ziel_pruefen(array('art' => 'tafel', 'wo' => 'flur'))['wo'], 'flur');
+    $pruef('140 ziel namen falsch', ansage_ziel_pruefen(array('art' => 'tafel', 'wo' => 'Flur!')), null);
+    $pruef('140 ziel ohne sprache', ansage_ziel_pruefen(array('art' => 'tafel', 'sprache' => 'de')), null);
+    $pruef('140 block', array_intersect_key(ansage_ziel_block(array('mode' => 'musicserver'), array('art' => 'tafel', 'wo' => 'flur', 'laut' => 30, 'sprache' => '', 'ein' => 1)),
+                                            array('mode' => 1, 'tafel_namen' => 1, 'tafel_laut' => 1)),
+           array('mode' => 'tafel', 'tafel_namen' => 'flur', 'tafel_laut' => 30));
+    $pruef('140 zurueck aus dem block', ansage_ziel_aus_block(array('mode' => 'tafel', 'tafel_namen' => 'flur', 'tafel_laut' => 30)),
+           array('art' => 'tafel', 'wo' => 'flur', 'laut' => 30, 'sprache' => '', 'ein' => 1));
+    $pruef('140 zurueck ohne schluessel', ansage_ziel_aus_block(array('mode' => 'tafel')), array('art' => 'tafel', 'wo' => '', 'laut' => -1, 'sprache' => '', 'ein' => 1));
+    $pruef('140 wert namen', ansage_wert_pruefen(array('tafel_namen' => 'flur', 'tafel_laut' => 20)), array('tafel_namen' => 'flur', 'tafel_laut' => 20));
+    $g140 = '';
+    $pruef('140 wert namen falsch', ansage_wert_pruefen(array('tafel_namen' => 'A'), $g140), null);
+    $pruef('140 wert namen falsch kennung', $g140, 'TTS_TAFEL_NAMEN');
+    // Regeln: nie gesetzt = EIN
+    $v140 = ansage_regeln_vorgaben();
+    $pruef('140 regeln ab werk an', array($v140['tafel'], $v140['tafel_namen']), array(1, ''));
+    $pruef('140 alte regeln: an', ansage_regeln_wert(array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30))['tafel'], 1);
+    $pruef('140 aus bleibt', ansage_regeln_wert(array('tafel' => 0))['tafel'], 0);
+    $pruef('140 namen bleiben', ansage_regeln_wert(array('tafel_namen' => 'flur'))['tafel_namen'], 'flur');
+    $g140 = '';
+    $pruef('140 regel wert falsch', ansage_regeln_wert(array('tafel' => 2), $g140), null);
+    $pruef('140 regel namen falsch', ansage_regeln_wert(array('tafel_namen' => 'A B'), $g140), null);
+    $pruef('140 regel namen kennung', $g140, 'M_R_TAFEL_NAMEN');
+    // Einreihen
+    $ms140 = array('mode' => 'musicserver', 'ip' => '192.168.1.5', 'port' => 7091, 'zones' => '1', 'volume' => 8, 'lang' => 'de', 'template' => '');
+    $e140 = ansage_tafel_einreihen($ms140, array(), $k140);
+    $pruef('140 eingereiht', $e140['ziele'], array(array('art' => 'tafel', 'wo' => '', 'laut' => -1, 'sprache' => '', 'ein' => 1)));
+    $pruef('140 ursprung unberuehrt', isset($ms140['ziele']), false);
+    $pruef('140 namen aus den regeln', ansage_tafel_einreihen($ms140, array('tafel_namen' => 'flur'), $k140)['ziele'][0]['wo'], 'flur');
+    $pruef('140 kein zweites mal', count(ansage_tafel_einreihen($e140, array(), $k140)['ziele']), 1);
+    $pruef('140 regel aus', isset(ansage_tafel_einreihen($ms140, array('tafel' => 0), $k140)['ziele']), false);
+    $pruef('140 regel aus nimmt zeile', ansage_tafel_einreihen($e140, array('tafel' => 0), $k140)['ziele'], array());
+    $pruef('140 mode aus bleibt aus', isset(ansage_tafel_einreihen(array('mode' => 'aus'), array(), $k140)['ziele']), false);
+    $pruef('140 audioserver bleibt', isset(ansage_tafel_einreihen(array('mode' => 'audioserver'), array(), $k140)['ziele']), false);
+    $pruef('140 ziel 1 tafel', isset(ansage_tafel_einreihen(array('mode' => 'tafel'), array(), $k140)['ziele']), false);
+    $pruef('140 kaputte liste bleibt', ansage_tafel_einreihen(array('mode' => 'musicserver', 'ziele' => 'x'), array(), $k140)['ziele'], 'x');
+    $pruef('140 kaputte regeln gelten als vorgabe', count(ansage_tafel_einreihen($ms140, array('tafel' => 9), $k140)['ziele']), 1);
+    $pruef('140 nur bereit: bereit', count(ansage_tafel_einreihen($ms140, array(), $k140, true)['ziele']), 1);
+    $pruef('140 nur bereit: nicht bereit', isset(ansage_tafel_einreihen($ms140, array(), array('tafel_fassung' => '0.9.39') + $k140, true)['ziele']), false);
+    $pruef('140 regeln aus gewinnt ueber nur bereit', isset(ansage_tafel_einreihen($ms140, array('tafel' => 0), $k140, true)['ziele']), false);
+    // Volle Tabelle: die eingereihte Zeile zaehlt nicht mit
+    $voll140 = $ms140;
+    $voll140['ziele'] = array();
+    foreach (array('2', '3', '4', '5', '6') as $z140) { $voll140['ziele'][] = array('art' => 'musicserver', 'wo' => $z140, 'laut' => -1, 'sprache' => '', 'ein' => 1); }
+    $l140 = ansage_ziel_liste(ansage_tafel_einreihen($voll140, array(), $k140));
+    $pruef('140 volle tabelle plus tafel', array(count($l140), $l140[6]['art'], $l140[6]['kennung']), array(7, 'tafel', ''));
+    $voll140['ziele'][] = array('art' => 'musicserver', 'wo' => '7', 'laut' => -1, 'sprache' => '', 'ein' => 1);
+    $l140 = ansage_ziel_liste($voll140);
+    $pruef('140 zu voll bleibt abgewiesen', $l140[1]['kennung'], 'EINSTELLUNG|TTS_ZIELE');
+    // Regelweg: Tafel spricht mit, wird uebergangen, schweigt nach den Regeln
+    $stand140 = array();
+    $sfn140 = function ($aendern) use (&$stand140) {
+        list($neu, $erg) = call_user_func($aendern, $stand140);
+        if ($neu !== null) { $stand140 = $neu; }
+        return array($erg);
+    };
+    $rk140 = $k140 + array('stand_fn' => $sfn140, 'schalter' => function () { return ''; }, 'jetzt' => function () { return mktime(12, 0, 0, 6, 1, 2026); });
+    $e1 = array(array('schluessel' => 'a', 'text' => $TEXT));
+    $log = array();
+    $antworten = array($ok140);
+    $a140 = ansage_regel_sprechen($e1, array('mode' => 'aus', 'ziele' => array()), array(), $rk140);
+    $pruef('140 regel: aus der linie schaltet die tafel ab', array($a140['regel'], count($log)), array('AUS', 0));
+    $tn140 = array('mode' => 'alexang', 'alexa_token' => '', 'alexa_geraet' => '');     // nicht eingerichtet: kein Token
+    $log = array();
+    $antworten = array($ok140);
+    $stand140 = array();
+    $a140 = ansage_regel_sprechen($e1, $tn140, array(), $rk140);
+    $pruef('140 regel: nur tafel bereit', array($a140['r']['stand'], $a140['r']['art'], count($log), $f140(0)['aktion']), array(1, 'tafel', 1, 'ansage'));
+    $log = array();
+    $stand140 = array();
+    $a140 = ansage_regel_sprechen($e1, $tn140, array('tafel' => 0), $rk140);
+    $pruef('140 regel: tafel aus, nichts bereit', array($a140['regel'], count($log)), array('KEIN_ZIEL', 0));
+    $log = array();
+    $stand140 = array();
+    $a140 = ansage_regel_sprechen($e1, $tn140, array(), array('tafel_fassung' => '0.9.39') + $rk140);
+    $pruef('140 regel: zu altes dashboard still uebergangen', array($a140['regel'], count($log), $a140['offen'][1]['grund']), array('KEIN_ZIEL', 0, 'ZU_ALT'));
+    $log = array();
+    $stand140 = array();
+    $antworten = array($ok140);
+    $nacht140 = array('jetzt' => function () { return mktime(23, 0, 0, 6, 1, 2026); }) + $rk140;
+    $a140 = ansage_regel_sprechen($e1, $tn140, array(), $nacht140);
+    $pruef('140 regel: nachtruhe gilt', array($a140['regel'], $a140['einzeln']['a'], count($log)), array('ANLASS', 'NACHTRUHE', 0));
+    $log = array();
+    $stand140 = array();
+    $antworten = array($ok140);
+    $a140 = ansage_regel_sprechen(array(array('schluessel' => 'a', 'text' => $TEXT, 'dringend' => true)), $tn140, array(), $nacht140);
+    $pruef('140 regel: dringend auch nachts', array($a140['r']['stand'], $f140(0)['dringend']), array(1, '1'));
+    $log = array();
+    $stand140 = array();
+    $a140 = ansage_regel_sprechen($e1, $tn140, array(), array('schalter' => function () { return '1'; }) + $rk140);
+    $pruef('140 regel: schalter gilt', array($a140['regel'], count($log)), array('SCHALTER', 0));
+    $log = array();
+    $stand140 = array('z' => array('a' => mktime(12, 0, 0, 6, 1, 2026) - 60), 'g' => array());
+    $a140 = ansage_regel_sprechen($e1, $tn140, array(), $rk140);
+    $pruef('140 regel: sperre gilt', array($a140['regel'], $a140['einzeln']['a'], count($log)), array('ANLASS', 'SPERRE', 0));
+    // Lage und Pruefzeile
+    $lg140 = ansage_regel_lage($tn140, array(), array('t' => function ($s) { return strpos($s, 'T_R_BEREIT') !== false ? '%s' : $s; }) + $k140, false);
+    $pruef('140 lage nennt die tafel', strpos($lg140[0][1], 'O_TAFEL') !== false, true);
+    $lg140 = ansage_regel_lage($tn140, array('tafel' => 0), array('t' => function ($s) { return strpos($s, 'T_R_KEIN_ZIEL') !== false ? 'nichts' : $s; }) + $k140, false);
+    $pruef('140 lage ohne tafel', strpos($lg140[0][1], 'O_TAFEL'), false);
+    $pz140 = ansage_pruefzeile(array('mode' => 'tafel'), true, array('e' => function ($s) { return $s; }) + $k140);
+    $pruef('140 pruefzeile bereit', $pz140[0], 1);
+    $pz140 = ansage_pruefzeile(array('mode' => 'tafel'), true, array('e' => function ($s) { return $s; }, 'tafel_fassung' => '') + $k140);
+    $pruef('140 pruefzeile uebergangen ist grau', $pz140[0], -1);
+    // Formular
+    $mg140 = array();
+    $bn140 = array();
+    list($r140) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_tafel_da' => '1', 'ansage_tafel_namen' => 'flur'), ansage_regeln_vorgaben(), array(), $mg140, $bn140);
+    $pruef('140 formular haken weg heisst aus', array($r140['tafel'], $r140['tafel_namen'], $mg140), array(0, 'flur', array()));
+    list($r140) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_tafel_da' => '1', 'ansage_tafel_ein' => '1'), ansage_regeln_vorgaben(), array(), $mg140, $bn140);
+    $pruef('140 formular haken an', $r140['tafel'], 1);
+    list($r140) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1'), array('tafel' => 1, 'tafel_namen' => 'kueche'), array(), $mg140, $bn140);
+    $pruef('140 formular ohne merkmal bleibt', array($r140['tafel'], $r140['tafel_namen']), array(1, 'kueche'));
+    $mg140 = array();
+    $bn140 = array();
+    list($r140) = ansage_regeln_formular(array('ansage_tafel_da' => '1', 'ansage_tafel_ein' => '1', 'ansage_tafel_namen' => 'A B'), array('tafel_namen' => 'kueche'), array(), $mg140, $bn140);
+    $pruef('140 formular namen falsch', array($r140['tafel_namen'], $mg140[0]['kennung'], $bn140), array('kueche', 'M_R_TAFEL_NAMEN', array('ansage_tafel_namen')));
+    $h140 = ansage_regeln_html(array('tafel' => 0), array(), array());
+    $pruef('140 html aus', strpos($h140, 'name="ansage_tafel_ein" value="1" checked'), false);
+    $h140 = ansage_regeln_html(array(), array(), array());
+    $pruef('140 html ab werk an', strpos($h140, 'name="ansage_tafel_ein" value="1" checked') !== false, true);
+    $pruef('140 html merkmal', strpos($h140, 'name="ansage_tafel_da"') !== false, true);
+    $pruef('140 werkblock unveraendert', count(ansage_werk_block()['ziele']), 2);
+    // Nachzug Kleinigkeiten: ONLINE= und die eigenen Saetze einer Linie zur Nachtruhe
+    $anb140 = array(array('code' => 200, 'rumpf' => "SELFTEST;OK=1;TOKEN=OK;ART=SPRECH;ONLINE=0\n", 'errno' => 0));
+    $kon140 = array('e' => function ($s) { return $s; }) + $k;
+    $tal140 = array('mode' => 'alexang', 'alexa_token' => $TOK, 'alexa_geraet' => '');
+    $antworten = $anb140;
+    $z140 = ansage_pruefzeile($tal140, true, $kon140);
+    $pruef('140 online 0 ist hinweis', array($z140[0], strpos($z140[1], 'T_ALEXA_OFFLINE') !== false), array(-1, true));
+    $antworten = array(array('code' => 200, 'rumpf' => "SELFTEST;OK=1;TOKEN=OK;ART=SPRECH;ONLINE=2\n", 'errno' => 0));
+    $z140 = ansage_pruefzeile($tal140, true, $kon140);
+    $pruef('140 online 2 ist haken', array($z140[0], strpos($z140[1], 'T_ALEXA'  . '_OFFLINE')), array(1, false));
+    $antworten = array(array('code' => 200, 'rumpf' => "SELFTEST;OK=1;TOKEN=OK;ART=SPRECH;ONLINE=-1\n", 'errno' => 0));
+    $z140 = ansage_pruefzeile($tal140, true, $kon140);
+    $pruef('140 liste fehlt ist hinweis', array($z140[0], strpos($z140[1], 'T_ALEXA_LISTE_FEHLT') !== false), array(-1, true));
+    $antworten = array(array('code' => 200, 'rumpf' => "SELFTEST;OK=1;TOKEN=OK;ART=SPRECH\n", 'errno' => 0));
+    $z140 = ansage_pruefzeile($tal140, true, $kon140);
+    $pruef('140 aelteres alexa-ng aendert nichts', array($z140[0], strpos($z140[1], 'T_ALEXA_OFFLINE'), strpos($z140[1], 'T_ALEXA_LISTE_FEHLT')), array(1, false, false));
+    $pruef('140 nacht_hinweis eigen', strpos(ansage_regeln_html(array(), array(), array(), array('nacht_hinweis' => 'EIGENER SATZ')), 'EIGENER SATZ') !== false, true);
+    $pruef('140 nacht_hinweis sonst stamm', strpos(ansage_regeln_html(array(), array(), array()), 'R_NACHT_HINWEIS') !== false, true);
+    $nk140 = array('jetzt' => function () { return mktime(23, 0, 0, 6, 1, 2026); }, 'nacht_lage' => 'EIGEN %s %s %d') + $k140;
+    $pruef('140 nacht_lage eigen', ansage_regel_lage(array('mode' => 'aus'), array(), $nk140, false)[1][1], 'EIGEN 22:00 07:00 30');
+    unset($nk140['nacht_lage']);
+    $pruef('140 nacht_lage sonst stamm', ansage_regel_lage(array('mode' => 'aus'), array(), $nk140, false)[1][1], 'ANSAGE.T_R_NACHT');
+    // Apple HomePod ueber HomePod4Lox
+    $hp140 = array('token' => $TOK, 'standard' => true, 'ein' => true);
+    $khp = array('port' => 8080, 'transport' => $transport, 'home' => '', 'homepod_da' => true, 'tafel_fassung' => '', 'nachbar' => function ($m) use (&$hp140) { return $m === 'homepod4lox' ? $hp140 : array('token' => '', 'standard' => null, 'ein' => null); });
+    $kohne = array('homepod_da' => false) + $khp;
+    $pruef('hp art', array(in_array('homepod4lox', ansage_modi(), true), ansage_ist_ng('homepod4lox'), ansage_art('homepod4lox')), array(true, true, 'homepod'));
+    $pruef('hp letzte datei', ansage_letzte_datei('homepod'), 'homepod_letzte.json');
+    $pruef('hp geheim', in_array('homepod_token', ansage_geheim(), true), true);
+    $pruef('hp ohne plugin keine wirkung', ansage_tafel_einreihen($ms140, array('tafel' => 0), $kohne), $ms140);
+    $e0 = ansage_tafel_einreihen($ms140, array('tafel' => 0), $khp);
+    $pruef('hp nie gesetzt ein', array($e0['ziele'][0]['art'], $e0['homepod_token']), array('homepod4lox', $TOK));
+    $pruef('hp aus bleibt aus', ansage_tafel_einreihen($ms140, array('tafel' => 0, 'homepod' => 0), $khp), $ms140);
+    $pruef('hp aus nimmt zeile', ansage_tafel_einreihen($e0, array('tafel' => 0, 'homepod' => 0), $khp)['ziele'], array());
+    $pruef('hp kein zweites mal', count(ansage_tafel_einreihen($e0, array('tafel' => 0), $khp)['ziele']), 1);
+    $pruef('hp geraet aus den regeln', ansage_tafel_einreihen($ms140, array('tafel' => 0, 'homepod_geraet' => 'Kueche'), $khp)['ziele'][0]['wo'], 'Kueche');
+    $pruef('hp linie aus', isset(ansage_tafel_einreihen(array('mode' => 'aus'), array(), $khp)['ziele']), false);
+    $hp140 = array('token' => $TOK, 'standard' => false, 'ein' => true);
+    $pruef('hp kein geraet: nur bereit uebergeht', isset(ansage_tafel_einreihen($ms140, array('tafel' => 0), $khp, true)['ziele']), false);
+    $pruef('hp mit geraetename ist bereit', count(ansage_tafel_einreihen($ms140, array('tafel' => 0, 'homepod_geraet' => 'Bad'), $khp, true)['ziele']), 1);
+    $hp140 = array('token' => $TOK, 'standard' => true, 'ein' => false);
+    $pruef('hp dort aus: nur bereit uebergeht', isset(ansage_tafel_einreihen($ms140, array('tafel' => 0), $khp, true)['ziele']), false);
+    $hp140 = array('token' => '', 'standard' => true, 'ein' => true);
+    $pruef('hp ohne token: nur bereit uebergeht', isset(ansage_tafel_einreihen($ms140, array('tafel' => 0), $khp, true)['ziele']), false);
+    $hp140 = array('token' => $TOK, 'standard' => true, 'ein' => true);
+    $log = array();
+    $antworten = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n", 'errno' => 0));
+    $rh = ansage_sprechen($TEXT, array('mode' => 'homepod4lox', 'homepod_token' => $TOK, 'homepod_geraet' => 'Bad'), $khp, array('dringend' => true));
+    $pruef('hp sprechen', array($rh['stand'], $rh['art'], $log[0]['url'], $log[0]['methode']), array(1, 'homepod4lox', 'http://127.0.0.1:8080/plugins/homepod4lox/index.php', 'POST'));
+    $pruef('hp felder', array($f140(0)['aktion'], $f140(0)['token'], $f140(0)['geraet'], $f140(0)['text'], $f140(0)['dringend']), array('sprechen', $TOK, 'Bad', $TEXT, '1'));
+    $antworten = array(array('code' => 403, 'rumpf' => "SPRECHEN;OK=0;GRUND=TOKEN\n", 'errno' => 0));
+    $rh = ansage_sprechen($TEXT, array('mode' => 'homepod4lox', 'homepod_token' => $TOK), $khp);
+    $pruef('hp abgewiesen', array($rh['stand'], substr($rh['kennung'], 0, 27)), array(0, 'HOMEPOD_ANTWORT|403|TOKEN'));
+    $rh = ansage_sprechen($TEXT, array('mode' => 'homepod4lox'), $khp);
+    $pruef('hp ohne token', array($rh['stand'], $rh['kennung']), array(0, 'HOMEPOD_KEIN_TOKEN'));
+    $x = ansage_nachbar_aus('homepod4lox', 'sprechen_ein="1"' . "\n" . 'sprechen_geraet="Bad"' . "\n" . 'sprechtoken="' . $TOK . '"');
+    $pruef('hp nachbar', array($x['token'], $x['standard'], $x['ein']), array($TOK, true, true));
+    $pruef('hp nachbar aus', ansage_nachbar_aus('homepod4lox', 'sprechen_ein="0"')['ein'], false);
+    $pruef('hp nachbar ohne geraet', ansage_nachbar_aus('homepod4lox', 'sprechen_ein="1"' . "\n" . 'sprechtoken="' . $TOK . '"')['standard'], false);
+    $pruef('hp ziel pruefen', ansage_ziel_pruefen(array('art' => 'homepod4lox', 'wo' => 'Bad'))['wo'], 'Bad');
+    $pruef('hp ziel block', ansage_ziel_block(array('mode' => 'aus'), array('art' => 'homepod4lox', 'wo' => 'Bad', 'laut' => 20, 'sprache' => '', 'ein' => 1))['homepod_geraet'], 'Bad');
+    $pruef('hp zurueck aus dem block', ansage_ziel_aus_block(array('mode' => 'homepod4lox', 'homepod_geraet' => 'Bad', 'homepod_laut' => 20)), array('art' => 'homepod4lox', 'wo' => 'Bad', 'laut' => 20, 'sprache' => '', 'ein' => 1));
+    $hh = ansage_regeln_html(array(), array(), array(), array(), array('homepod_da' => false));
+    $pruef('hp html ohne plugin nichts', strpos($hh, 'homepod'), false);
+    $hh = ansage_regeln_html(array('homepod' => 0), array(), array(), array(), array('homepod_da' => true));
+    $pruef('hp html da, aus', array(strpos($hh, 'name="ansage_homepod_da"') !== false, strpos($hh, 'name="ansage_homepod_ein" value="1" checked')), array(true, false));
+    $mg0 = array();
+    $bn0 = array();
+    list($rr) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_homepod_da' => '1', 'ansage_homepod_geraet' => 'Bad'), ansage_regeln_vorgaben(), array(), $mg0, $bn0);
+    $pruef('hp formular', array($rr['homepod'], $rr['homepod_geraet']), array(0, 'Bad'));
+    list($rr) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1'), array('homepod' => 0), array(), $mg0, $bn0);
+    $pruef('hp formular ohne merkmal bleibt', $rr['homepod'], 0);
+    // Token-Abgleich wie Chromecast, wenn der Nutzer die Zeile selbst setzt
+    list($ta) = ansage_token_abgleich(array('mode' => 'homepod4lox', 'homepod_token' => ''), array(), array('nachbar' => function ($m) use ($TOK) { return array('token' => $TOK, 'standard' => true, 'ein' => true); }, 'home' => ''));
+    $pruef('hp token abgleich', $ta['homepod_token'], $TOK);
+    $pruef('hp sicherung ohne token', isset(ansage_sicherung_bereinigen(array('homepod_token' => 'x'))['homepod_token']), false);
+    $pruef('hp herkunft formular ohne feld', ansage_token_herkunft_formular(array(), array('homepod_token' => 'nachbar')), array('homepod_token' => 'nachbar'));
+
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();
     $pruef('sprachschluessel eindeutig', count($sl), count(array_unique($sl)));
@@ -4424,7 +4819,7 @@ function ansage_selbsttest()
 function ansage_ziel_arten($modi = null)
 {
     $m = is_array($modi) ? $modi : ansage_modi();
-    return array_values(array_intersect(array('musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox', 'sonos4lox', 'sonox'), $m));
+    return array_values(array_intersect(array('musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox', 'sonos4lox', 'sonox', 'tafel', 'homepod4lox'), $m));
 }
 
 /** Arten, deren 'wo' eine Zonenliste ist und deren Sprache [a-z]{2} heisst. */
@@ -4487,6 +4882,9 @@ function ansage_ziel_pruefen($z, &$grund = '', $modi = null)
     if (ansage_ziel_ist_zonenart($aus['art'])) {
         if (!ansage_zonen_ok($aus['wo'])) { $grund = 'TTS_ZIEL_WO'; return null; }
         if ($aus['sprache'] !== '' && !preg_match('/^[a-z]{2}\z/', $aus['sprache'])) { $grund = 'TTS_ZIEL_SPRACHE'; return null; }
+    } elseif ($aus['art'] === 'tafel') {
+        if (!ansage_tafel_namen_ok($aus['wo'])) { $grund = 'TTS_ZIEL_WO'; return null; }
+        if ($aus['sprache'] !== '') { $grund = 'TTS_ZIEL_SPRACHE'; return null; }
     } elseif ($aus['art'] === 'sonox') {
         if (preg_match('/^\.+\z/', $aus['wo'])) { $grund = 'TTS_ZIEL_WO'; return null; }
     } elseif ($aus['sprache'] !== '') {
@@ -4526,7 +4924,7 @@ function ansage_ziel_wo(array $tts)
 {
     $m = isset($tts['mode']) && is_string($tts['mode']) ? $tts['mode'] : '';
     $f = array('musicserver' => 'zones', 'ms4h' => 'zones', 'custom' => 'zones', 'alexang' => 'alexa_geraet',
-               'cc4lox' => 'google_geraet', 'sonos4lox' => 'sonos_zone', 'sonox' => 'sonox_raum');
+               'cc4lox' => 'google_geraet', 'sonos4lox' => 'sonos_zone', 'sonox' => 'sonox_raum', 'tafel' => 'tafel_namen', 'homepod4lox' => 'homepod_geraet');
     if (!isset($f[$m]) || !isset($tts[$f[$m]]) || !is_string($tts[$f[$m]])) { return ''; }
     return $tts[$f[$m]];
 }
@@ -4578,6 +4976,12 @@ function ansage_ziel_block(array $tts, array $z)
     } elseif ($art === 'cc4lox') {
         $b['google_geraet'] = $wo;
         $b['google_laut'] = $l;
+    } elseif ($art === 'homepod4lox') {
+        $b['homepod_geraet'] = $wo;
+        $b['homepod_laut'] = $l;
+    } elseif ($art === 'tafel') {
+        $b['tafel_namen'] = $wo;
+        $b['tafel_laut'] = $l;
     } elseif ($art === 'sonos4lox') {
         $b['sonos_zone'] = $wo;
         $b['sonos_laut'] = $l;
@@ -4605,7 +5009,14 @@ function ansage_ziel_liste(array $tts)
     if (!array_key_exists('ziele', $tts)) { return $liste; }
     $gesehen = array(ansage_ziel_schluessel($modus, ansage_ziel_wo($einzeln)) => true);
     $roh = $tts['ziele'];
-    if (!is_array($roh) || array_values($roh) !== $roh || count($roh) > ANSAGE_ZIELE_MAX - 1) {
+    /* Seit 1.4.0: eine Zeile Tafel zaehlt nicht mit. Sie wird im Lauf eingereiht und nie gespeichert; eine volle Tabelle der Linie wuerde sonst abgewiesen. */
+    $grenze = ANSAGE_ZIELE_MAX - 1;
+    if (is_array($roh)) {
+        foreach ($roh as $z) {
+            if (is_array($z) && isset($z['art']) && ($z['art'] === 'tafel' || $z['art'] === 'homepod4lox')) { $grenze++; }
+        }
+    }
+    if (!is_array($roh) || array_values($roh) !== $roh || count($roh) > $grenze) {
         $liste[] = array('nr' => 2, 'art' => '-', 'block' => null, 'kennung' => 'EINSTELLUNG|TTS_ZIELE');
         return $liste;
     }
@@ -5224,7 +5635,8 @@ function ansage_ziele_formular(array $post, array $neu, $modi, $melden, array $o
         if ($art === null || !in_array($art, $arten, true)) { $melden('M_ZIEL_ART|' . $nr, $fn('ziel_art')); $fehler = true; }
         if ($wo === null || !ansage_geraet_ok($wo)
             || ($art !== null && ansage_ziel_ist_zonenart($art) && !ansage_zonen_ok($wo))
-            || ($art === 'sonox' && preg_match('/^\.+\z/', (string) $wo))) {
+            || ($art === 'sonox' && preg_match('/^\.+\z/', (string) $wo))
+            || ($art === 'tafel' && !ansage_tafel_namen_ok($wo))) {
             $melden('M_ZIEL_WO|' . $nr, $fn('ziel_wo')); $fehler = true;
         } elseif (($art === 'sonos4lox' || $art === 'sonox') && $wo === '' && $ein === 1) {
             $melden('M_ZIEL_OHNE_WO|' . $nr, $fn('ziel_wo')); $fehler = true;
@@ -5393,7 +5805,7 @@ function ansage_block_oder_aus($tts, $modi = null)
 /** Die Regeln ab Werk (Entscheidungen 01.11.2026): Nachtruhe 22-7 Uhr, dieselbe Ansage hoechstens einmal in 30 Minuten. */
 function ansage_regeln_vorgaben()
 {
-    return array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30);
+    return array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => '');
 }
 
 /**
@@ -5425,6 +5837,22 @@ function ansage_regeln_wert($r, &$grund = '')
                     return null;
                 }
                 $aus['sperre_min'] = (int) $w;
+                break;
+            case 'homepod':     // seit 1.4.0
+                if (!in_array($w, array(0, 1, '0', '1'), true)) { $grund = 'M_R_BLOCK'; return null; }
+                $aus['homepod'] = (int) $w;
+                break;
+            case 'homepod_geraet':      // seit 1.4.0
+                if (!ansage_geraet_ok($w)) { $grund = 'M_R_HOMEPOD_GERAET'; return null; }
+                $aus['homepod_geraet'] = $w;
+                break;
+            case 'tafel':       // seit 1.4.0
+                if ($w !== 0 && $w !== 1 && $w !== '0' && $w !== '1') { $grund = 'M_R_BLOCK'; return null; }
+                $aus['tafel'] = (int) $w;
+                break;
+            case 'tafel_namen':     // seit 1.4.0
+                if (!ansage_tafel_namen_ok($w)) { $grund = 'M_R_TAFEL_NAMEN'; return null; }
+                $aus['tafel_namen'] = $w;
                 break;
             default:
                 $grund = 'M_R_BLOCK';
@@ -5505,6 +5933,14 @@ function ansage_nachbar_aus($modus, $roh)
 {
     $aus = array('token' => '', 'standard' => null, 'ein' => null);
     if (!is_string($roh) || $roh === '') { return $aus; }
+    if ($modus === 'tafel') {
+        // Seit 1.4.0: das aktionstoken des Dashboards. Ein fehlender Schluessel ansage_ein heisst nie gesetzt, also an.
+        $d = json_decode($roh, true);
+        if (!is_array($d)) { return $aus; }
+        if (isset($d['aktionstoken']) && ansage_token_ok($d['aktionstoken'])) { $aus['token'] = $d['aktionstoken']; }
+        $aus['ein'] = !(array_key_exists('ansage_ein', $d) && (int) $d['ansage_ein'] === 0);
+        return $aus;
+    }
     if ($modus === 'alexang') {
         $d = json_decode($roh, true);
         if (!is_array($d)) { return $aus; }
@@ -5513,7 +5949,7 @@ function ansage_nachbar_aus($modus, $roh)
         $aus['ein'] = true;
         return $aus;
     }
-    if ($modus === 'cc4lox') {
+    if ($modus === 'cc4lox' || $modus === 'homepod4lox') {     // HomePod4Lox seit 1.4.0: dieselbe .cfg-Form (vb_hp_skripte/ENDPUNKT.md, Abschnitt 6)
         $w = array();
         foreach (preg_split('/\r?\n/', $roh) as $z) {
             if (preg_match('/^\s*(sprechen_ein|sprechen_geraet|sprechtoken)\s*=\s*"?(.*?)"?\s*\z/', $z, $t)) { $w[$t[1]] = $t[2]; }
@@ -5529,12 +5965,15 @@ function ansage_nachbar_aus($modus, $roh)
 /** Dasselbe aus der Datei des Plugins auf diesem LoxBerry. Fuer den Selbsttest: $k['nachbar'] ersetzt die Datei. */
 function ansage_nachbar($modus, array $k)
 {
-    if (isset($k['nachbar']) && is_callable($k['nachbar'])) { return call_user_func($k['nachbar'], $modus); }
     $leer = array('token' => '', 'standard' => null, 'ein' => null);
+    if (isset($k['nachbar']) && is_callable($k['nachbar'])) {
+        $x = call_user_func($k['nachbar'], $modus);
+        return is_array($x) ? $x : $leer;
+    }
     $h = ansage_lbhome(ansage_k_home($k));
-    if ($h === '' || !ansage_ist_ng($modus)) { return $leer; }
+    if ($h === '' || (!ansage_ist_ng($modus) && $modus !== 'tafel')) { return $leer; }
     $o = ansage_plugin_ordner($modus, $h);
-    $f = $h . '/config/plugins/' . $o . '/' . ($modus === 'alexang' ? 'alexang.json' : $o . '.cfg');
+    $f = $h . '/config/plugins/' . $o . '/' . ($modus === 'alexang' ? 'alexang.json' : ($modus === 'tafel' ? 'dashboard.json' : $o . '.cfg'));
     if (!is_file($f) || !is_readable($f) || (int) @filesize($f) > 1048576) { return $leer; }
     $roh = @file_get_contents($f);
     return ansage_nachbar_aus($modus, $roh === false ? '' : $roh);
@@ -5546,7 +5985,7 @@ function ansage_nachbar($modus, array $k)
  */
 function ansage_tts_vor_ort(array $tts, array $k)
 {
-    foreach (array('alexang' => 'alexa_token', 'cc4lox' => 'google_token') as $modus => $s) {
+    foreach (array('alexang' => 'alexa_token', 'cc4lox' => 'google_token', 'homepod4lox' => 'homepod_token') as $modus => $s) {
         if (isset($tts[$s]) && $tts[$s] !== '') { continue; }
         $n = ansage_nachbar($modus, $k);
         if ($n['token'] !== '' && $n['ein'] !== false) { $tts[$s] = $n['token']; }
@@ -5561,6 +6000,7 @@ function ansage_tts_vor_ort(array $tts, array $k)
 function ansage_ziel_eingerichtet(array $b, array $k)
 {
     $m = isset($b['mode']) && is_string($b['mode']) ? $b['mode'] : '';
+    if ($m === 'tafel') { return ansage_tafel_grund($b, $k); }      // seit 1.4.0
     if ($m === 'musicserver' || $m === 'ms4h' || $m === 'custom') {
         $u = ansage_tts_url('x', $b);
         return ($u === '' || $u === null) ? 'KEINE_ADRESSE' : '';
@@ -5584,6 +6024,12 @@ function ansage_ziel_aus_block(array $b)
 {
     $art = $b['mode'];
     $f = array('alexang' => 'alexa_laut', 'cc4lox' => 'google_laut', 'sonos4lox' => 'sonos_laut', 'sonox' => 'sonox_laut');
+    if ($art === 'homepod4lox') {       // seit 1.4.0: Schluessel, die nur ein Lauf traegt
+        return array('art' => $art, 'wo' => ansage_ziel_wo($b), 'laut' => isset($b['homepod_laut']) ? (int) $b['homepod_laut'] : -1, 'sprache' => '', 'ein' => 1);
+    }
+    if ($art === 'tafel') {     // seit 1.4.0
+        return array('art' => $art, 'wo' => ansage_ziel_wo($b), 'laut' => isset($b['tafel_laut']) ? (int) $b['tafel_laut'] : -1, 'sprache' => '', 'ein' => 1);
+    }
     $sp = '';
     if (ansage_ziel_ist_zonenart($art)) { $sp = (string) $b['lang']; }
     if ($art === 'sonox') { $sp = (string) $b['sonox_sprache']; }
@@ -5780,7 +6226,7 @@ function ansage_regel_sprechen(array $eintraege, array $tts, array $regeln, arra
         $aus['regel'] = 'AUS';
         return $aus;
     }
-    $roh = ansage_tts_vor_ort($tts, $k);
+    $roh = ansage_tafel_einreihen(ansage_tts_vor_ort($tts, $k), $regeln, $k);
     list($block, , $aus['offen']) = ansage_ziele_bereit($roh, $k);
     if ($block === null) {
         $aus['regel'] = 'KEIN_ZIEL';
@@ -5871,7 +6317,7 @@ function ansage_regel_lage(array $tts, array $regeln, array $k, $offen)
     if ($modus === 'aus') {
         $z[] = array(-2, $t('T_AUS'));
     } else {
-        list($block, $bereit, $off) = ansage_ziele_bereit(ansage_tts_vor_ort($tts, $k), $k);
+        list($block, $bereit, $off) = ansage_ziele_bereit(ansage_tafel_einreihen(ansage_tts_vor_ort($tts, $k), $regeln, $k), $k);
         $n = array();
         foreach ($bereit as $b) { $n[] = $name($b['art']); }
         $m = array();
@@ -5885,7 +6331,7 @@ function ansage_regel_lage(array $tts, array $regeln, array $k, $offen)
     if ($rg === null) { $rg = ansage_regeln_vorgaben(); }
     $jetzt = (isset($k['jetzt']) && is_callable($k['jetzt'])) ? (int) call_user_func($k['jetzt']) : time();
     $z[] = array(1, empty($rg['nachtruhe']) ? sprintf($t('T_R_OHNE_RUHE'), $rg['sperre_min'])
-        : sprintf($t(ansage_nachtruhe($rg, $jetzt) ? 'T_R_NACHT' : 'T_R_TAG'), $rg['von'], $rg['bis'], $rg['sperre_min']));
+        : sprintf(ansage_nachtruhe($rg, $jetzt) ? ((isset($k['nacht_lage']) && is_string($k['nacht_lage'])) ? $k['nacht_lage'] : $t('T_R_NACHT')) : $t('T_R_TAG'), $rg['von'], $rg['bis'], $rg['sperre_min']));
     if ($offen) {
         $w = ansage_schalter_lesen($k);
         $z[] = array($w === '1' ? -1 : 1, sprintf($t($w === '1' ? 'T_R_SCHALTER_AUS' : ($w === '0' ? 'T_R_SCHALTER_FREI' : 'T_R_SCHALTER_NIE')),
@@ -5934,6 +6380,28 @@ function ansage_regeln_formular(array $post, array $alt, array $anlaesse, array 
         $bean[] = 'ansage_ruhe_von';
         $bean[] = 'ansage_ruhe_bis';
     }
+    /* Seit 1.4.0. Das Merkmal ansage_tafel_da sagt: dieses Formular trug den Haken. Fehlt es, bleibt der alte Wert; sonst schaltete
+     * jede fremde Eingabe die Tafel ab. */
+    if (!empty($post['ansage_tafel_da'])) {
+        $neu['tafel'] = !empty($post['ansage_tafel_ein']) ? 1 : 0;
+        $w = isset($post['ansage_tafel_namen']) ? (is_string($post['ansage_tafel_namen']) ? trim($post['ansage_tafel_namen']) : null) : '';
+        if (ansage_tafel_namen_ok($w)) {
+            $neu['tafel_namen'] = $w;
+        } else {
+            $mangel[] = array('kennung' => 'M_R_TAFEL_NAMEN', 'text' => ansage_t('M_R_TAFEL_NAMEN', $k));
+            $bean[] = 'ansage_tafel_namen';
+        }
+    }
+    if (!empty($post['ansage_homepod_da'])) {       // nur, wenn das Plugin da ist: siehe ansage_regeln_html()
+        $neu['homepod'] = !empty($post['ansage_homepod_ein']) ? 1 : 0;
+        $w = isset($post['ansage_homepod_geraet']) ? (is_string($post['ansage_homepod_geraet']) ? trim($post['ansage_homepod_geraet']) : null) : '';
+        if (ansage_geraet_ok($w)) {
+            $neu['homepod_geraet'] = $w;
+        } else {
+            $mangel[] = array('kennung' => 'M_R_HOMEPOD_GERAET', 'text' => ansage_t('M_R_HOMEPOD_GERAET', $k));
+            $bean[] = 'ansage_homepod_geraet';
+        }
+    }
     $haken = array();
     foreach (array_keys($anlaesse) as $a) { $haken[$a] = !empty($post['ansage_anlass_' . $a]) ? 1 : 0; }
     return array($neu, $haken);
@@ -5972,7 +6440,7 @@ function ansage_regeln_html(array $regeln, array $haken, array $anlaesse, array 
     }
     $o[] = '<div class="sm-feld">';
     $o[] = $haken_zeile('ansage_ruhe_ein', !empty($r['nachtruhe']), $t('L_R_NACHTRUHE'));
-    $o[] = '    <div class="sm-hilfe">' . $e($t('R_NACHT_HINWEIS')) . '</div>';
+    $o[] = '    <div class="sm-hilfe">' . $e((isset($h['nacht_hinweis']) && is_string($h['nacht_hinweis'])) ? $h['nacht_hinweis'] : $t('R_NACHT_HINWEIS')) . '</div>';
     $o[] = '</div>';
     foreach (array('von' => 'ansage_ruhe_von', 'bis' => 'ansage_ruhe_bis') as $s => $f) {
         $o[] = '<div class="sm-feld">';
@@ -5987,6 +6455,35 @@ function ansage_regeln_html(array $regeln, array $haken, array $anlaesse, array 
          . $e((string) call_user_func($w, 'ansage_sperre_min', $r['sperre_min'])) . '"' . call_user_func($m, 'ansage_sperre_min') . '>';
     $o[] = '    <div class="sm-hilfe">' . $e($t('R_SPERRE_HINWEIS')) . '</div>';
     $o[] = '</div>';
+    /* Seit 1.4.0: ohne $c und $w. Beide sind Sache der Einmalmeldung der Linie, und dort steht dieser Haken nicht in der Liste; ein $c
+     * lieferte nach einer Beanstandung "nicht gesetzt", das naechste Speichern schaltete die Tafel still ab. Nach einer Beanstandung
+     * steht hier also der gespeicherte Stand. */
+    $o[] = '<div class="sm-feld" id="ansage_tafel_regel">';
+    $o[] = '    <input data-role="none" type="hidden" name="ansage_tafel_da" value="1">';
+    $o[] = '    <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="ansage_tafel_ein" value="1"'
+         . (!empty($r['tafel']) ? ' checked' : '') . call_user_func($m, 'ansage_tafel_ein') . '> ' . $e($t('L_R_TAFEL')) . '</label>';
+    $o[] = '    <div class="sm-hilfe">' . $e($t('R_TAFEL_HINWEIS')) . '</div>';
+    $o[] = '</div>';
+    $o[] = '<div class="sm-feld">';
+    $o[] = '    <label for="ansage_tafel_namen">' . $e($t('L_R_TAFEL_NAMEN')) . '</label>';
+    $o[] = '    <input data-role="none" type="text" maxlength="200" id="ansage_tafel_namen" name="ansage_tafel_namen" value="' . $e((string) $r['tafel_namen']) . '"'
+         . call_user_func($m, 'ansage_tafel_namen') . '>';
+    $o[] = '    <div class="sm-hilfe">' . $e($t('R_TAFEL_NAMEN_HINWEIS')) . '</div>';
+    $o[] = '</div>';
+    /* Apple HomePod nur, wenn das Plugin auf diesem LoxBerry steht: Anlagen ohne HomePod sehen nichts davon. */
+    if (ansage_homepod_da($k)) {
+        $o[] = '<div class="sm-feld" id="ansage_homepod_regel">';
+        $o[] = '    <input data-role="none" type="hidden" name="ansage_homepod_da" value="1">';
+        $o[] = '    <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="ansage_homepod_ein" value="1"'
+             . (!empty($r['homepod']) ? ' checked' : '') . call_user_func($m, 'ansage_homepod_ein') . '> ' . $e($t('L_R_HOMEPOD')) . '</label>';
+        $o[] = '    <div class="sm-hilfe">' . $e($t('R_HOMEPOD_HINWEIS')) . '</div>';
+        $o[] = '</div>';
+        $o[] = '<div class="sm-feld">';
+        $o[] = '    <label for="ansage_homepod_geraet">' . $e($t('L_R_HOMEPOD_GERAET')) . '</label>';
+        $o[] = '    <input data-role="none" type="text" maxlength="200" id="ansage_homepod_geraet" name="ansage_homepod_geraet" value="' . $e((string) $r['homepod_geraet']) . '"'
+             . call_user_func($m, 'ansage_homepod_geraet') . '>';
+        $o[] = '</div>';
+    }
     $o[] = '<div class="sm-hilfe">' . $e(sprintf($t('R_SCHALTER_HINWEIS'), ANSAGE_SCHALTER_THEMA)) . '</div>';
     return implode("\n", $o) . "\n";
 }
@@ -5998,7 +6495,7 @@ function ansage_regeln_html(array $regeln, array $haken, array $anlaesse, array 
 /** Ausgabeart => Schluessel des Sprechtokens im Block tts. */
 function ansage_token_felder()
 {
-    return array('alexang' => 'alexa_token', 'cc4lox' => 'google_token');
+    return array('alexang' => 'alexa_token', 'cc4lox' => 'google_token', 'homepod4lox' => 'homepod_token');
 }
 
 /**
@@ -6069,10 +6566,172 @@ function ansage_token_herkunft_formular(array $post, $herkunft, array $opt = arr
     if (!is_array($herkunft)) { $herkunft = array(); }
     $n = ansage_feldnamen($opt);
     foreach (ansage_token_felder() as $s) {
+        if (!isset($n[$s], $n[$s . '_loeschen'])) { continue; }     // seit 1.4.0: HomePod hat kein Tokenfeld im Formular
         $eingetippt = isset($post[$n[$s]]) && is_string($post[$n[$s]]) && trim($post[$n[$s]]) !== '';
         if ($eingetippt || !empty($post[$n[$s . '_loeschen']])) { unset($herkunft[$s]); }
     }
     return $herkunft;
+}
+
+/* ------------------------------------------------------------------
+ * Das Ziel Tafel: offene Tafeln des Plugins Dashboard (seit 1.4.0)
+ * ------------------------------------------------------------------ */
+
+/** Leer (alle offenen Tafeln) oder eine Kommaliste von Namen in der Regel des Dashboards: a-z vorn, dann a-z, 0-9, _ , hoechstens 24 Zeichen. */
+function ansage_tafel_namen_ok($w)
+{
+    return is_string($w) && ($w === ''
+        || (strlen($w) <= 200 && preg_match('/^[a-z][a-z0-9_]{0,23}(,[a-z][a-z0-9_]{0,23})*\z/', $w) === 1));
+}
+
+/** Die Fassung des Dashboards aus dem Inhalt der plugindatabase.json, sonst ''. */
+function ansage_tafel_fassung_aus($json)
+{
+    $d = is_string($json) ? json_decode($json, true) : null;
+    if (!is_array($d)) { return ''; }
+    $liste = (isset($d['plugins']) && is_array($d['plugins'])) ? $d['plugins'] : $d;
+    foreach ($liste as $e) {
+        if (is_array($e) && isset($e['name'], $e['version']) && is_string($e['name']) && is_string($e['version'])
+            && strtolower($e['name']) === 'dashboard') {
+            return $e['version'];
+        }
+    }
+    return '';
+}
+
+/** Die Fassung des Dashboards auf diesem LoxBerry oder ''. Fuer den Selbsttest: $k['tafel_fassung']. */
+function ansage_tafel_fassung(array $k)
+{
+    if (isset($k['tafel_fassung'])) { return (string) $k['tafel_fassung']; }
+    $h = ansage_lbhome(ansage_k_home($k));
+    $db = $h !== '' ? $h . '/data/system/plugindatabase.json' : '';
+    if ($db === '' || !is_file($db)) { return ''; }
+    $roh = @file_get_contents($db);
+    return ansage_tafel_fassung_aus($roh === false ? '' : $roh);
+}
+
+/** Wie viele Tafeln gelten als offen, rein aus dem Inhalt von tafeln.json? $namen: Kommaliste; leer = alle, auch unbenannte. Eine vorgestellte Uhr zaehlt mit. */
+function ansage_tafel_offen_aus($json, $namen, $jetzt)
+{
+    $d = is_string($json) ? json_decode($json, true) : null;
+    if (!is_array($d)) { return 0; }
+    $n = 0;
+    $wahl = (is_string($namen) && $namen !== '') ? explode(',', $namen) : null;
+    foreach (array('namen', 'unbenannt') as $art) {
+        if (!isset($d[$art]) || !is_array($d[$art])) { continue; }
+        if ($art === 'unbenannt' && $wahl !== null) { continue; }
+        foreach ($d[$art] as $name => $e) {
+            if ($wahl !== null && !in_array((string) $name, $wahl, true)) { continue; }
+            if (is_array($e) && isset($e['ts']) && is_numeric($e['ts']) && (int) $jetzt - (int) $e['ts'] <= ANSAGE_TAFEL_STILL_S) { $n++; }
+        }
+    }
+    return $n;
+}
+
+/** Wie viele Tafeln gelten auf diesem LoxBerry als offen? Fuer den Selbsttest: $k['tafeln_offen']. */
+function ansage_tafel_offen($namen, array $k)
+{
+    if (isset($k['tafeln_offen'])) { return (int) $k['tafeln_offen']; }
+    $h = ansage_lbhome(ansage_k_home($k));
+    if ($h === '') { return 0; }
+    $f = $h . '/data/plugins/' . ansage_plugin_ordner('tafel', $h) . '/tafeln.json';
+    if (!is_file($f) || (int) @filesize($f) > 1048576) { return 0; }
+    $roh = @file_get_contents($f);
+    $jetzt = (isset($k['jetzt']) && is_callable($k['jetzt'])) ? (int) call_user_func($k['jetzt']) : time();
+    return ansage_tafel_offen_aus($roh === false ? '' : $roh, $namen, $jetzt);
+}
+
+/** Warum das Ziel Tafel nicht eingerichtet ist: '' oder PLUGIN_FEHLT, ZU_ALT, SPRECHEN_AUS, KEIN_TOKEN, KEINE_TAFEL. Fragt nichts im Netz. */
+function ansage_tafel_grund(array $b, array $k)
+{
+    $f = ansage_tafel_fassung($k);
+    if ($f === '') { return 'PLUGIN_FEHLT'; }
+    if (version_compare($f, ANSAGE_TAFEL_MIN, '<')) { return 'ZU_ALT'; }
+    $n = ansage_nachbar('tafel', $k);
+    if (false === $n['ein']) { return 'SPRECHEN_AUS'; }
+    if (!ansage_token_ok($n['token'])) { return 'KEIN_TOKEN'; }
+    if (ansage_tafel_offen(isset($b['tafel_namen']) ? $b['tafel_namen'] : '', $k) < 1) { return 'KEINE_TAFEL'; }
+    return '';
+}
+
+/**
+ * Das Ziel Tafel in einen aufgeloesten Block einreihen, im Speicher fuer den einen Lauf; gespeichert wird nichts. Ab Werk an: 'tafel' fehlt in den Regeln = 1.
+ * Aus (0): auch eine Zeile der Tabelle faellt weg. Ausgabeart 'aus' und Original-Audioserver bleiben unberuehrt, genauso ein Block, der Ziel 1 oder eine Zeile
+ * Tafel schon traegt. $nur_bereit (Testansage, Pruefzeile): nur ein eingerichtetes Ziel kommt hinzu; ein Testknopf meldet sonst einen Fehler, wo es keinen gibt.
+ */
+function ansage_tafel_einreihen(array $tts, $regeln, array $k = array(), $nur_bereit = false)
+{
+    return ansage_homepod_reihe(ansage_tafel_reihe($tts, $regeln, $k, $nur_bereit), $regeln, $k, $nur_bereit);
+}
+
+/** Steht das Plugin HomePod4Lox auf diesem LoxBerry? Fuer den Selbsttest: $k['homepod_da']. */
+function ansage_homepod_da(array $k)
+{
+    if (isset($k['homepod_da'])) { return (bool) $k['homepod_da']; }
+    return ansage_plugin_da('homepod4lox', ansage_k_home($k)) === true;
+}
+
+/**
+ * Apple HomePod einreihen, wie die Tafel: nie gesetzt = EIN, auch bei einem gespeicherten Block; Aus bleibt aus. Ohne Plugin passiert gar nichts: kein Eintrag, keine Zeile im Reiter Test.
+ * Das Sprechtoken bleibt im Speicher, solange der Nutzer das Ziel nicht selbst in die Tabelle nimmt (dann gleicht es ansage_token_abgleich() ab).
+ */
+function ansage_homepod_reihe(array $tts, $regeln, array $k, $nur_bereit)
+{
+    $m = isset($tts['mode']) && is_string($tts['mode']) ? $tts['mode'] : '';
+    if (in_array($m, array('aus', 'audioserver'), true) || !in_array($m, ansage_modi(), true)) { return $tts; }
+    if (isset($tts['ziele']) && !is_array($tts['ziele'])) { return $tts; }
+    $g = '';
+    $r = ansage_regeln_wert(is_array($regeln) ? $regeln : array(), $g);
+    if ($r === null) { $r = ansage_regeln_vorgaben(); }
+    $liste = isset($tts['ziele']) ? array_values($tts['ziele']) : array();
+    $da = false;
+    foreach ($liste as $i => $z) {
+        if (is_array($z) && isset($z['art']) && $z['art'] === 'homepod4lox') {
+            if (empty($r['homepod'])) { unset($liste[$i]); } else { $da = true; }
+        }
+    }
+    if (empty($r['homepod'])) {
+        if (isset($tts['ziele'])) { $tts['ziele'] = array_values($liste); }
+        return $tts;
+    }
+    if ($da || $m === 'homepod4lox' || !ansage_homepod_da($k)) { return $tts; }
+    if (!isset($tts['homepod_token']) || $tts['homepod_token'] === '') {
+        $n = ansage_nachbar('homepod4lox', $k);
+        $tts['homepod_token'] = ($n['ein'] !== false) ? $n['token'] : '';
+    }
+    $z = array('art' => 'homepod4lox', 'wo' => $r['homepod_geraet'], 'laut' => -1, 'sprache' => '', 'ein' => 1);
+    if ($nur_bereit && ansage_ziel_eingerichtet(ansage_ziel_block($tts, $z), $k) !== '') { return $tts; }
+    $liste[] = $z;
+    $tts['ziele'] = $liste;
+    return $tts;
+}
+
+/** Die Tafel einreihen: siehe ansage_tafel_einreihen(). */
+function ansage_tafel_reihe(array $tts, $regeln, array $k, $nur_bereit)
+{
+    $m = isset($tts['mode']) && is_string($tts['mode']) ? $tts['mode'] : '';
+    if ($m === 'aus' || $m === 'audioserver' || !in_array($m, ansage_modi(), true)) { return $tts; }
+    if (array_key_exists('ziele', $tts) && !is_array($tts['ziele'])) { return $tts; }
+    $g = '';
+    $r = ansage_regeln_wert(is_array($regeln) ? $regeln : array(), $g);
+    if ($r === null) { $r = ansage_regeln_vorgaben(); }
+    $liste = isset($tts['ziele']) ? array_values($tts['ziele']) : array();
+    $da = false;
+    foreach ($liste as $i => $z) {
+        if (is_array($z) && isset($z['art']) && $z['art'] === 'tafel') {
+            if (empty($r['tafel'])) { unset($liste[$i]); } else { $da = true; }
+        }
+    }
+    if (empty($r['tafel'])) {
+        if (isset($tts['ziele'])) { $tts['ziele'] = array_values($liste); }
+        return $tts;
+    }
+    if ($da || $m === 'tafel') { return $tts; }
+    $z = array('art' => 'tafel', 'wo' => $r['tafel_namen'], 'laut' => -1, 'sprache' => '', 'ein' => 1);
+    if ($nur_bereit && ansage_ziel_eingerichtet(ansage_ziel_block($tts, $z), $k) !== '') { return $tts; }
+    $liste[] = $z;
+    $tts['ziele'] = $liste;
+    return $tts;
 }
 
 /* ------------------------------------------------------------------
