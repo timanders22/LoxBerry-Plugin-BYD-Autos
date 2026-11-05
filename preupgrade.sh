@@ -21,6 +21,10 @@
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bydautos}"
+# 05.11.2026: ein Ordnername mit "/" oder "." waere ein Pfad hinaus (dieselbe Formel wie MGiSmart und Govee).
+case "$PFOLDER" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$PFOLDER' - nichts angefasst."; exit 2 ;;
+esac
 
 # Die Wurzel wird GEPRUEFT, nicht angenommen.
 #
@@ -61,7 +65,7 @@ if ! ist_wurzel "$BASE"; then
     echo "<FAIL> (gesucht wurde ein Verzeichnis mit config/plugins, data/plugins"
     echo "<FAIL> und config/system/general.json)."
     echo "<FAIL> Es wurde nichts gesichert und nichts angehalten."
-    exit 1
+    exit 2
 fi
 
 PDATA="$BASE/data/plugins/$PFOLDER"
@@ -113,15 +117,7 @@ by_inhalt() {   # $1 Datei, $2 Art: zugang | byd
 # Schreiben danach (volle Karte), bleibt eine LEERE Zweitschrift. Gemessen am
 # 18.09.2026 (Fall D2): beide Zweitschriften danach 0 Byte.
 by_kopie() {   # $1 Quelle, $2 Ziel
-    rm -f "$2.neu" 2>/dev/null
-    if ( umask 077; cp -p "$1" "$2.neu" ) 2>/dev/null \
-       && chmod 600 "$2.neu" 2>/dev/null \
-       && cmp -s "$1" "$2.neu" \
-       && mv -f "$2.neu" "$2" 2>/dev/null; then
-        return 0
-    fi
-    rm -f "$2.neu" 2>/dev/null
-    return 1
+    zs_hinlegen "$1" "$2"
 }
 
 # ---------- 0. Marke "Aktualisierung laeuft" ----------
@@ -163,10 +159,36 @@ if grep -Eq '^[0-9]+$' "$MARKE" 2>/dev/null; then
     echo "<OK> Bis zum Ende der Installation speichert die Plugin-Seite nichts"
     echo "<OK> und der Dienst wird nicht gestartet."
 else
-    echo "<WARNING> Die Marke fuer die laufende Aktualisierung liess sich nicht"
-    echo "<WARNING> anlegen: $MARKE"
-    echo "<WARNING> Bitte die Plugin-Seite erst nach dem Ende der Installation oeffnen."
+    # 05.11.2026: ohne Marke haelt die Installation das Update fuer eine Neuinstallation und legt die Einstellungen beiseite; bis hierher nur eine Warnung.
+    [ "$VORHER_MARKE" = 1 ] || rm -f "$MARKE" 2>/dev/null
+    echo "<FAIL> Die Marke $MARKE liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
 fi
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    [ "$VORHER_MARKE" = 1 ] || rm -f "$MARKE" 2>/dev/null
+    [ "$LIEF_JETZT" = "1" ] && [ -x "$PBIN/dienst.sh" ] && "$PBIN/dienst.sh" start >/dev/null 2>&1
+    exit 2
+}
 
 # ---------- 1. Lief der Dienst? ----------
 # Der Merker liegt NEBEN dem Konfigordner, und das ist zwingend.
@@ -274,6 +296,7 @@ for f in byd.json zugang.json; do
         else
             echo "<WARNING> Die Zweitschrift von $f liess sich nicht anlegen; eine"
             echo "<WARNING> vorhandene bleibt unveraendert: $ZW"
+            ZS_FEHL="$ZS_FEHL $f"
         fi
     elif [ -e "$ZW" ]; then
         if [ "$RC" = 2 ]; then
@@ -326,6 +349,7 @@ if [ -d "$VERLAUF" ] && [ -n "$(ls -A "$VERLAUF" 2>/dev/null)" ]; then
         # Anwender erfaehrt es, statt die Liste stillschweigend zu verlieren.
         echo "<INFO> tar ist nicht vorhanden - die Ladehistorie konnte NICHT"
         echo "<INFO> gesichert werden und geht bei diesem Update verloren."
+        ZS_FEHL="$ZS_FEHL Ladehistorie"
         by_bleibt
     else
         # Groesse zuerst: eine Historie ist wenige Kilobyte gross. Alles
@@ -348,6 +372,7 @@ if [ -d "$VERLAUF" ] && [ -n "$(ls -A "$VERLAUF" 2>/dev/null)" ]; then
             echo "<OK> dem Update zurueckgespielt."
         else
             rm -f "$NEU" 2>/dev/null
+            ZS_FEHL="$ZS_FEHL Ladehistorie"
             if [ -f "$SICHERUNG" ]; then
                 echo "<WARNING> Die Ladehistorie liess sich nicht neu sichern."
                 by_bleibt
@@ -420,6 +445,7 @@ if [ -n "$BY_DLISTE" ]; then
         echo "<OK> Laufzeitdaten gesichert:$BY_DLISTE - sie werden nach dem Update zurueckgespielt."
     else
         rm -f "$DNEU" 2>/dev/null
+        ZS_FEHL="$ZS_FEHL Laufzeitdaten"
         if [ -f "$DSICHERUNG" ]; then
             echo "<WARNING> Die Laufzeitdaten liessen sich nicht neu sichern; die vorhandene Sicherung bleibt: $DSICHERUNG"
         else
@@ -459,5 +485,6 @@ fi
 # werden.
 rm -rf "$PBIN/__pycache__" 2>/dev/null
 
+zs_schluss
 echo "<OK> preupgrade abgeschlossen."
 exit 0

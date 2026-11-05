@@ -263,6 +263,11 @@
  *   - Es gelten dieselben Regeln: Nachtruhe, Sperre, Schalter haus/ansage/ruhe. Eine Linie, die nichts davon ruft, laeuft weiter wie 1.3.2.
  *   - Neue Ausgabeart homepod4lox: Apple HomePod ueber das Plugin HomePod4Lox, nach dem Muster cc4lox. Nie gesetzt = EIN, Aus bleibt aus; ohne das Plugin gar keine Wirkung, auch keine Zeile.
  *   - Wer die Tafel im Testweg will: ansage_tafel_einreihen(<aufgeloester Block>, <Regeln>, $k, true) - nur ein bereites Ziel kommt hinzu.
+ *
+ * 1.4.1 (05.11.2026, Auftrag des Hausherrn), nur ergaenzend:
+ *   - ansage_regeln_html(): Tafel- und HomePod-Felder gehen durch $h['w'] und $h['c'] wie die uebrigen Felder. Nach einer Beanstandung stehen der eingetippte
+ *     Name und der Haken wieder im Feld; bis 1.4.0 stand dort der gespeicherte Stand, der falsche Name war weg. Ohne $h['w'] und $h['c'] byte-gleich mit 1.4.0.
+ *   - Die Linie muss ansage_tafel_ein, ansage_tafel_namen, ansage_homepod_ein und ansage_homepod_geraet in ihrer Einmalmeldung fuehren; ansage_regeln_x2_felder() nennt sie nicht.
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -281,7 +286,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.4.0');
+define('ANSAGE_FASSUNG', '1.4.1');
 
 /** Ab dieser Fassung nimmt das Plugin Dashboard Ansagen an (seit 1.4.0). */
 define('ANSAGE_TAFEL_MIN', '0.9.40');
@@ -4785,6 +4790,36 @@ function ansage_selbsttest()
     $pruef('hp token abgleich', $ta['homepod_token'], $TOK);
     $pruef('hp sicherung ohne token', isset(ansage_sicherung_bereinigen(array('homepod_token' => 'x'))['homepod_token']), false);
     $pruef('hp herkunft formular ohne feld', ansage_token_herkunft_formular(array(), array('homepod_token' => 'nachbar')), array('homepod_token' => 'nachbar'));
+    // 1.4.1: Tafel und HomePod fuehren nach einer Beanstandung das Eingetippte (wie die uebrigen Felder des Blocks)
+    $r141 = array('tafel' => 1, 'tafel_namen' => 'flur', 'homepod' => 0, 'homepod_geraet' => 'Bad');
+    $k141 = array('homepod_da' => true);
+    $feld141 = function ($h, $n) { return preg_match('/<input\b[^>]*\bname="' . $n . '"[^>]*>/', $h, $t) === 1 ? $t[0] : ''; };
+    $h141 = ansage_regeln_html($r141, array(), array(), array(), $k141);
+    $pruef('141 ohne rueckruf: gespeicherter name', strpos($feld141($h141, 'ansage_tafel_namen'), 'value="flur"') !== false, true);
+    $pruef('141 ohne rueckruf: gespeichertes geraet', strpos($feld141($h141, 'ansage_homepod_geraet'), 'value="Bad"') !== false, true);
+    $pruef('141 ohne rueckruf: gespeicherte haken', array(strpos($feld141($h141, 'ansage_tafel_ein'), ' checked') !== false, strpos($feld141($h141, 'ansage_homepod_ein'), ' checked') !== false), array(true, false));
+    $gleich141 = ansage_regeln_html($r141, array(), array(), array('w' => function ($n, $g) { return $g; }, 'c' => function ($n, $g) { return $g; }), $k141);
+    $pruef('141 rueckruf ohne eingabe aendert nichts', $gleich141 === $h141, true);
+    $ein141 = array('ansage_tafel_namen' => 'A B', 'ansage_homepod_geraet' => '"><b>', 'ansage_homepod_ein' => '1');
+    $hook141 = array(
+        'w' => function ($n, $g) use ($ein141) { return isset($ein141[$n]) ? $ein141[$n] : $g; },
+        'c' => function ($n, $g) use ($ein141) { return !empty($ein141[$n]); },
+        'm' => function ($n) { return in_array($n, array('ansage_tafel_namen', 'ansage_homepod_geraet'), true) ? ' class="sm-beanstandet"' : ''; });
+    $h141 = ansage_regeln_html($r141, array(), array(), $hook141, $k141);
+    $pruef('141 eingabe: name steht im feld', strpos($feld141($h141, 'ansage_tafel_namen'), 'value="A B"') !== false, true);
+    $pruef('141 eingabe: name markiert', strpos($feld141($h141, 'ansage_tafel_namen'), 'sm-beanstandet') !== false, true);
+    $pruef('141 eingabe: haken tafel weg', strpos($feld141($h141, 'ansage_tafel_ein'), ' checked'), false);
+    $pruef('141 eingabe: haken homepod an', strpos($feld141($h141, 'ansage_homepod_ein'), ' checked') !== false, true);
+    $pruef('141 eingabe: geraet maskiert', strpos($feld141($h141, 'ansage_homepod_geraet'), 'value="&quot;&gt;&lt;b&gt;"') !== false, true);
+    $pruef('141 eingabe: kein roher wert', strpos($h141, '"><b>'), false);
+    $h141r = ansage_regeln_html($r141, array(), array(), array('w' => function ($n, $g) { return $n === 'ansage_tafel_namen' ? '"><i>' : $g; }), $k141);
+    $pruef('141 eingabe: name maskiert', array(strpos($h141r, '"><i>'), strpos($feld141($h141r, 'ansage_tafel_namen'), 'value="&quot;&gt;&lt;i&gt;"') !== false), array(false, true));
+    $pruef('141 eingabe: merkmale bleiben', array(strpos($h141, 'name="ansage_tafel_da"') !== false, strpos($h141, 'name="ansage_homepod_da"') !== false), array(true, true));
+    $pruef('141 eingabe: regeln unberuehrt', $r141['tafel_namen'], 'flur');
+    $h141 = ansage_regeln_html($r141, array(), array(), $hook141, array('homepod_da' => false));
+    $pruef('141 ohne plugin kein homepod-feld, auch mit eingabe', strpos($h141, 'homepod'), false);
+    $pruef('141 ohne plugin tafel trotzdem', strpos($feld141($h141, 'ansage_tafel_namen'), 'value="A B"') !== false, true);
+    $pruef('141 fassung', version_compare(ANSAGE_FASSUNG, '1.4.1', '>='), true);
 
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();
@@ -6344,7 +6379,7 @@ function ansage_regel_lage(array $tts, array $regeln, array $k, $offen)
  * Formular: "Wann gesprochen wird"
  * ------------------------------------------------------------------ */
 
-/** Die Felder des Blocks fuer die Einmalmeldung (X-2). */
+/** Die Felder des Blocks fuer die Einmalmeldung (X-2). Tafel und HomePod stehen nicht darin: Wer $h['w'] und $h['c'] an ansage_regeln_html() gibt, fuehrt deren vier Felder selbst (seit 1.4.1). */
 function ansage_regeln_x2_felder(array $anlaesse = array())
 {
     $f = array('ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min');
@@ -6455,18 +6490,17 @@ function ansage_regeln_html(array $regeln, array $haken, array $anlaesse, array 
          . $e((string) call_user_func($w, 'ansage_sperre_min', $r['sperre_min'])) . '"' . call_user_func($m, 'ansage_sperre_min') . '>';
     $o[] = '    <div class="sm-hilfe">' . $e($t('R_SPERRE_HINWEIS')) . '</div>';
     $o[] = '</div>';
-    /* Seit 1.4.0: ohne $c und $w. Beide sind Sache der Einmalmeldung der Linie, und dort steht dieser Haken nicht in der Liste; ein $c
-     * lieferte nach einer Beanstandung "nicht gesetzt", das naechste Speichern schaltete die Tafel still ab. Nach einer Beanstandung
-     * steht hier also der gespeicherte Stand. */
+    /* Seit 1.4.1 mit $c und $w wie die uebrigen Felder. Beide sind Sache der Einmalmeldung der Linie: Fehlt ein Name dort, kann ein $c nach einer
+     * Beanstandung "nicht gesetzt" liefern, und das naechste Speichern schaltete die Tafel still ab. Eine Linie mit $c fuehrt deshalb alle vier Namen. */
     $o[] = '<div class="sm-feld" id="ansage_tafel_regel">';
     $o[] = '    <input data-role="none" type="hidden" name="ansage_tafel_da" value="1">';
     $o[] = '    <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="ansage_tafel_ein" value="1"'
-         . (!empty($r['tafel']) ? ' checked' : '') . call_user_func($m, 'ansage_tafel_ein') . '> ' . $e($t('L_R_TAFEL')) . '</label>';
+         . (call_user_func($c, 'ansage_tafel_ein', !empty($r['tafel'])) ? ' checked' : '') . call_user_func($m, 'ansage_tafel_ein') . '> ' . $e($t('L_R_TAFEL')) . '</label>';
     $o[] = '    <div class="sm-hilfe">' . $e($t('R_TAFEL_HINWEIS')) . '</div>';
     $o[] = '</div>';
     $o[] = '<div class="sm-feld">';
     $o[] = '    <label for="ansage_tafel_namen">' . $e($t('L_R_TAFEL_NAMEN')) . '</label>';
-    $o[] = '    <input data-role="none" type="text" maxlength="200" id="ansage_tafel_namen" name="ansage_tafel_namen" value="' . $e((string) $r['tafel_namen']) . '"'
+    $o[] = '    <input data-role="none" type="text" maxlength="200" id="ansage_tafel_namen" name="ansage_tafel_namen" value="' . $e((string) call_user_func($w, 'ansage_tafel_namen', $r['tafel_namen'])) . '"'
          . call_user_func($m, 'ansage_tafel_namen') . '>';
     $o[] = '    <div class="sm-hilfe">' . $e($t('R_TAFEL_NAMEN_HINWEIS')) . '</div>';
     $o[] = '</div>';
@@ -6475,12 +6509,12 @@ function ansage_regeln_html(array $regeln, array $haken, array $anlaesse, array 
         $o[] = '<div class="sm-feld" id="ansage_homepod_regel">';
         $o[] = '    <input data-role="none" type="hidden" name="ansage_homepod_da" value="1">';
         $o[] = '    <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400;"><input data-role="none" type="checkbox" name="ansage_homepod_ein" value="1"'
-             . (!empty($r['homepod']) ? ' checked' : '') . call_user_func($m, 'ansage_homepod_ein') . '> ' . $e($t('L_R_HOMEPOD')) . '</label>';
+             . (call_user_func($c, 'ansage_homepod_ein', !empty($r['homepod'])) ? ' checked' : '') . call_user_func($m, 'ansage_homepod_ein') . '> ' . $e($t('L_R_HOMEPOD')) . '</label>';
         $o[] = '    <div class="sm-hilfe">' . $e($t('R_HOMEPOD_HINWEIS')) . '</div>';
         $o[] = '</div>';
         $o[] = '<div class="sm-feld">';
         $o[] = '    <label for="ansage_homepod_geraet">' . $e($t('L_R_HOMEPOD_GERAET')) . '</label>';
-        $o[] = '    <input data-role="none" type="text" maxlength="200" id="ansage_homepod_geraet" name="ansage_homepod_geraet" value="' . $e((string) $r['homepod_geraet']) . '"'
+        $o[] = '    <input data-role="none" type="text" maxlength="200" id="ansage_homepod_geraet" name="ansage_homepod_geraet" value="' . $e((string) call_user_func($w, 'ansage_homepod_geraet', $r['homepod_geraet'])) . '"'
              . call_user_func($m, 'ansage_homepod_geraet') . '>';
         $o[] = '</div>';
     }

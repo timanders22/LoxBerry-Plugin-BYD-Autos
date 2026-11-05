@@ -560,6 +560,8 @@ if ($by_post && $by_formular === 'einstellungen') {
     $by_cfg['tts'] = ansage_formular_lesen($_POST, by_tts(), $by_tmangel, $by_tbean,
         array('modi' => by_ansage_modi(), 'ziele' => by_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), by_ansage_k(), $by_thinw);
     list($by_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, by_ansage_regeln($by_cfg), array(), $by_tmangel, $by_tbean, by_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 0.9.34: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 0.9.33 ueberschrieb es der naechste Abgleich.
+    $by_cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($by_cfg['ansage_token_herkunft']) ? $by_cfg['ansage_token_herkunft'] : array());
     foreach ($by_tmangel as $by_tm) {
         $by_fehler[] = by_e($by_tm['text']);
     }

@@ -851,9 +851,9 @@ function by_eingabe_felder($form)
      * (ansage_x2_felder() nennt sie nicht; markiert werden koennen sie). */
     $by_th = array('tts_alexa_token_loeschen', 'tts_google_token_loeschen');
     $felder['einstellungen']['text'] = array_merge($felder['einstellungen']['text'],
-        array_values(array_diff(ansage_x2_felder(by_ansage_opt()), $by_th)), array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min'));
+        array_values(array_diff(ansage_x2_felder(by_ansage_opt()), $by_th)), array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_tafel_namen', 'ansage_homepod_geraet'));     // 0.9.34: Tafel und HomePod dazu: ansage_regeln_formular() beanstandet sie, ohne Eintrag hier ging die Beanstandung samt Eingaben verloren.
     $felder['einstellungen']['haken'] = array_merge($felder['einstellungen']['haken'], $by_th,
-        array('ansage_laden_fertig', 'ansage_ausfall', 'ansage_kabel_vergessen', 'ansage_ruhe_ein'));
+        array('ansage_laden_fertig', 'ansage_ausfall', 'ansage_kabel_vergessen', 'ansage_ruhe_ein', 'ansage_tafel_ein', 'ansage_homepod_ein'));
     /* Welle Mehrfach-Ziele (0.9.29): die Tabelle der weiteren Ziele (Felder name[N], N = 2..6) - nur, wenn die
      * Abschrift sie kann; by_eingaben_sammeln() liest sie ueber by_post_feld(). */
     if (by_mit_zielen()) {

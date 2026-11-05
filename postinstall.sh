@@ -312,13 +312,13 @@ if [ ! -x "$VENV/bin/python3" ]; then
     exit 1
 fi
 
-"$VENV/bin/python3" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || \
+timeout 900 "$VENV/bin/python3" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null 2>&1 || \
     echo "<INFO> pip liess sich nicht aktualisieren - es wird mit der vorhandenen Fassung versucht."
 
 echo "<INFO> Installiere pybyd $PYBYD (benoetigt eine Internetverbindung) ..."
-if ! "$VENV/bin/python3" -m pip install --no-cache-dir "pybyd==$PYBYD"; then
+if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir "pybyd==$PYBYD"; then
     echo "<INFO> Die feste Fassung ist nicht installierbar - es wird die neueste versucht."
-    if ! "$VENV/bin/python3" -m pip install --no-cache-dir "pybyd"; then
+    if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir "pybyd"; then
         echo "<FAIL> pybyd konnte nicht installiert werden."
         echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, oder PyPI war nicht"
         echo "<FAIL> erreichbar."
