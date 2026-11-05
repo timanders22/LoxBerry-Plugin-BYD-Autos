@@ -433,6 +433,15 @@ if ($by_post && $by_formular === 'einstellungen') {
         $by_cfg[$by_f] = $by_w;
     }
 
+    // 0.9.35: beide Zahlen aus der Karte zusammen ins Feld Breitengrad kopiert ("50.123, 8.456") - hier aufteilen,
+    // wenn Laengengrad leer ist oder schon die zweite Zahl traegt. Eine Kommazahl allein ("51,3") bleibt eine Zahl.
+    if (isset($_POST['heim_breite']) && is_string($_POST['heim_breite'])
+        && !preg_match('/^\s*-?\d+,\d+\s*\z/', $_POST['heim_breite'])
+        && preg_match('/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;\/ ]\s*(-?\d{1,3}(?:\.\d+)?)\s*\z/', $_POST['heim_breite'], $by_pm)
+        && (!isset($_POST['heim_laenge']) || !is_string($_POST['heim_laenge']) || trim($_POST['heim_laenge']) === ''
+            || str_replace(',', '.', trim($_POST['heim_laenge'])) === $by_pm[2])) {
+        $_POST['heim_breite'] = $by_pm[1]; $_POST['heim_laenge'] = $by_pm[2];
+    }
     /* Dezimalzahlen: Grenze und Heimatposition. Ein Komma wird zum Punkt -
      * das ist keine stille Zurechtbiegung, sondern die deutsche Schreibweise
      * derselben Zahl. Alles andere wird abgewiesen. */
@@ -1529,6 +1538,7 @@ ob_start();
 <div class="sm-feld">
   <label for="heim_breite"><?= by_e(by_t('EINST.L_HEIM_BREITE')) ?></label>
   <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= by_e(by_eingabe('einstellungen', 'heim_breite', $by_cfg['heim_breite'])) ?>"<?= by_markierung('heim_breite') ?> placeholder="51.318">
+  <div class="sm-hilfe"><a href="<?= by_e('https://mapatlas.eu/' . (by_sprache() === 'de' ? 'de' : 'en') . '/tools/coordinates') ?>" target="_blank" rel="noopener"><?= by_e(by_t('EINST.KARTE')) ?></a>. <?= by_e(by_t('EINST.KARTE_ZUSAMMEN')) ?></div>
 </div>
 <div class="sm-feld">
   <label for="heim_laenge"><?= by_e(by_t('EINST.L_HEIM_LAENGE')) ?></label>

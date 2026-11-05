@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.34
+Version 0.9.35
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,10 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.35
+
+- Heimatposition: Unter dem Feld „Heimatposition: Breite“ steht ein Link zu einer Karte (mapatlas.eu). Dort die Adresse eingeben und die Zahlen unter „Dezimalgrad“ kopieren. Beide Zahlen dürfen auch zusammen ins Feld „Heimatposition: Breite“ kopiert werden („50.123, 8.456“, getrennt durch Komma, Semikolon, Schrägstrich oder Leerzeichen, Dezimalpunkt); das Plugin teilt sie beim Speichern auf, wenn das Feld Längengrad leer ist oder schon die zweite Zahl trägt. Eine einzelne Zahl mit Komma („51,3“) wird nicht aufgeteilt.
 
 ## Neu in 0.9.34
 
