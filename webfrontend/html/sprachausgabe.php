@@ -268,6 +268,14 @@
  *   - ansage_regeln_html(): Tafel- und HomePod-Felder gehen durch $h['w'] und $h['c'] wie die uebrigen Felder. Nach einer Beanstandung stehen der eingetippte
  *     Name und der Haken wieder im Feld; bis 1.4.0 stand dort der gespeicherte Stand, der falsche Name war weg. Ohne $h['w'] und $h['c'] byte-gleich mit 1.4.0.
  *   - Die Linie muss ansage_tafel_ein, ansage_tafel_namen, ansage_homepod_ein und ansage_homepod_geraet in ihrer Einmalmeldung fuehren; ansage_regeln_x2_felder() nennt sie nicht.
+ *
+ * 1.4.2 (06.11.2026, Befund Hausherr 05.11.: "ok" ohne Sprechen), nur ergaenzend:
+ *   - Chromecast 4 Lox NG ab 1.3.31 und Alexa-NG ab der Folgefassung antworten auf eine bewusst nicht gesprochene Ansage ehrlich mit OK=0:
+ *     429 GRUND=DOPPELT (derselbe Text lief eben), 409 GRUND=GESPERRT (Sperre aus Loxone), 409 GRUND=RUHEZEIT (Ruhezeit von Alexa-NG). Das ist
+ *     kein Ausfall: stand -1 (nichts gesendet ohne Fehler, wie AUS), Kennung <ART>_ANTWORT|code|GRUND bleibt im Ergebnis und im Protokoll.
+ *     Mit stand 0 wiche eine Linie mit Rueckfall auf ein anderes Ziel aus - die Ansage kaeme doppelt bzw. trotz Sperre (ansage_ng_bewusst()).
+ *   - Mehrfachziele: ein solches Ziel zaehlt weder als gesendet noch als gescheitert (ansage_ziele_zusammen() unveraendert).
+ *   - Aeltere Gegenseiten (200 OK=1 UNVERAENDERT/UEBERSPRUNGEN) bleiben stand 1 wie bisher.
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -286,7 +294,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.4.1');
+define('ANSAGE_FASSUNG', '1.4.2');
 
 /** Ab dieser Fassung nimmt das Plugin Dashboard Ansagen an (seit 1.4.0). */
 define('ANSAGE_TAFEL_MIN', '0.9.40');
@@ -1624,6 +1632,17 @@ function ansage_ng_bewerten(array $a, $praefix, $art_k, $adresse, array $k = arr
     return $art_k . '_UNERWARTET|' . (int) $a['code'] . '|' . ($s !== '' ? $s : '-');
 }
 
+/**
+ * Seit 1.4.2: hat die Gegenseite bewusst nicht gesprochen? 409/429 mit GRUND DOPPELT (derselbe Text lief eben),
+ * GESPERRT (Sperre aus Loxone) oder RUHEZEIT - kein Ausfall, also kein Rueckfall auf ein anderes Ziel (stand -1).
+ * Andere 429 (STUNDENGRENZE, BREMSE, AMAZON_PAUSE) bleiben Ausfaelle.
+ */
+function ansage_ng_bewusst($kennung)
+{
+    return is_string($kennung)
+        && preg_match('/^(?:ALEXA|GOOGLE)_ANTWORT\|(?:409\|(?:GESPERRT|RUHEZEIT)|429\|DOPPELT)(?:\||\z)/', $kennung) === 1;
+}
+
 /* ==================================================================
  * Sprechen
  * ================================================================== */
@@ -1738,7 +1757,7 @@ function ansage_sprechen($text, array $tts, array $k = array(), array $opt = arr
         $r['http'] = $a['code'];
         $r['zeile'] = $a['zeile'];
         $r['kennung'] = ansage_ng_bewerten($a, 'SPRECHEN', $art_k, $url, $k);
-        $r['stand'] = $r['kennung'] === '' ? 1 : 0;
+        $r['stand'] = $r['kennung'] === '' ? 1 : (ansage_ng_bewusst($r['kennung']) ? -1 : 0);     // seit 1.4.2
         return ansage_letzte_merken($r, $k);
     }
     if ($modus === 'tafel') {
@@ -4820,6 +4839,46 @@ function ansage_selbsttest()
     $pruef('141 ohne plugin kein homepod-feld, auch mit eingabe', strpos($h141, 'homepod'), false);
     $pruef('141 ohne plugin tafel trotzdem', strpos($feld141($h141, 'ansage_tafel_namen'), 'value="A B"') !== false, true);
     $pruef('141 fassung', version_compare(ANSAGE_FASSUNG, '1.4.1', '>='), true);
+
+    // --- 1.4.2: bewusst nicht gesprochen -> stand -1, kein Ausweichen ---
+    $antw142 = array();
+    $tr142 = function ($anf) use (&$antw142) {
+        $a = array_shift($antw142);
+        return is_array($a) ? $a : array('code' => 0, 'rumpf' => '', 'errno' => 7);
+    };
+    $k142 = array('port' => 8080, 'transport' => $tr142, 'home' => '');
+    $g142 = array('mode' => 'cc4lox', 'google_token' => $TOK2, 'google_geraet' => 'Wohnzimmer');
+    $a142 = array('mode' => 'alexang', 'alexa_token' => $TOK, 'alexa_geraet' => 'Kueche');
+    foreach (array(
+        array('142 google doppelt', $g142, 429, 'SPRECHEN;OK=0;GERAETE=0;UNVERAENDERT=1;FENSTER=5;GRUND=DOPPELT', -1, 'GOOGLE_ANTWORT|429|DOPPELT'),
+        array('142 google gesperrt', $g142, 409, 'SPRECHEN;OK=0;UEBERSPRUNGEN=1;GRUND=GESPERRT', -1, 'GOOGLE_ANTWORT|409|GESPERRT'),
+        array('142 alexa doppelt', $a142, 429, 'SPRECHEN;OK=0;GERAETE=0;UNVERAENDERT=1;FENSTER=5;GRUND=DOPPELT', -1, 'ALEXA_ANTWORT|429|DOPPELT'),
+        array('142 alexa ruhezeit', $a142, 409, 'SPRECHEN;OK=0;UEBERSPRUNGEN=1;GRUND=RUHEZEIT', -1, 'ALEXA_ANTWORT|409|RUHEZEIT'),
+        array('142 stundengrenze bleibt ausfall', $g142, 429, 'SPRECHEN;OK=0;GRUND=STUNDENGRENZE', 0, 'GOOGLE_ANTWORT|429|STUNDENGRENZE'),
+        array('142 alexa bremse bleibt ausfall', $a142, 429, 'SPRECHEN;OK=0;GRUND=BREMSE;WARTE=3', 0, 'ALEXA_ANTWORT|429|BREMSE'),
+        array('142 doppelt mit falschem code', $g142, 503, 'SPRECHEN;OK=0;GRUND=DOPPELT', 0, 'GOOGLE_ANTWORT|503|DOPPELT'),
+        array('142 alt unveraendert bleibt ok', $g142, 200, 'SPRECHEN;OK=1;GERAETE=0;UNVERAENDERT=1;GRUND=UNVERAENDERT', 1, ''),
+    ) as $f142) {
+        $antw142 = array(array('code' => $f142[2], 'rumpf' => $f142[3] . "\n"));
+        $r142 = ansage_sprechen($TEXT, $f142[1], $k142);
+        $pruef($f142[0], array($r142['stand'], $r142['kennung']), array($f142[4], $f142[5]));
+    }
+    $pruef('142 kurz ehrlich', strpos(ansage_kurz($r142 = ansage_sprechen($TEXT, $g142, array('transport' => function ($anf) {
+        return array('code' => 429, 'rumpf' => "SPRECHEN;OK=0;GRUND=DOPPELT\n");
+    }) + $k142)), 'stand=-1') !== false && strpos(ansage_kurz($r142), 'kennung=GOOGLE_ANTWORT|429|DOPPELT') !== false, true);
+    $pruef('142 bewusst muster', array(ansage_ng_bewusst('GOOGLE_ANTWORT|409|GESPERRT|GOOGLE_G_GESPERRT'), ansage_ng_bewusst('GOOGLE_ANTWORT|409|SPRECHEN_AUS'),
+                                       ansage_ng_bewusst('TAFEL_ANTWORT|429|DOPPELT'), ansage_ng_bewusst(null)), array(true, false, false, false));
+    // Mehrfachziele: Alexa gesendet, Google DOPPELT -> stand 1 ohne ZIELE_TEIL; beide bewusst -> stand -1, kein Fehler
+    list($t142) = ansage_vervollstaendigen(array('mode' => 'alexang', 'alexa_token' => $TOK, 'alexa_geraet' => 'Kueche', 'google_token' => $TOK2,
+        'ziele' => array(array('art' => 'cc4lox', 'wo' => 'Bad'))));
+    $antw142 = array(array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n"), array('code' => 429, 'rumpf' => "SPRECHEN;OK=0;GRUND=DOPPELT\n"));
+    $r142 = ansage_sprechen($TEXT, $t142, $k142);
+    $pruef('142 ziele: eins gesendet, eins doppelt', array($r142['stand'], $r142['kennung'], isset($r142['ziele'][1]) ? $r142['ziele'][1]['stand'] : null),
+           array(1, '', -1));
+    $antw142 = array(array('code' => 409, 'rumpf' => "SPRECHEN;OK=0;UEBERSPRUNGEN=1;GRUND=GESPERRT\n"), array('code' => 429, 'rumpf' => "SPRECHEN;OK=0;GRUND=DOPPELT\n"));
+    $r142 = ansage_sprechen($TEXT, $t142, $k142);
+    $pruef('142 ziele: beide bewusst', array($r142['stand'], $r142['kennung']), array(-1, 'ALEXA_ANTWORT|409|GESPERRT'));
+    $pruef('142 fassung', version_compare(ANSAGE_FASSUNG, '1.4.2', '>='), true);
 
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();
