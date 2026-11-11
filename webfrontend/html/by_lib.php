@@ -380,7 +380,7 @@ function by_config($erzeugen = true)
             $sich = by_json_lesen($p['sicherung']);
             if ($sich) {
                 by_log('Aus der Zweitschrift wiederhergestellt.', 'INFO');
-                by_config_speichern(array_merge(by_vorgaben(), $sich), false);
+                by_config_speichern(array_merge(by_vorgaben(), $sich), false, $p['sicherung']);
                 return array_merge(by_vorgaben(), $sich);
             }
             by_log('Es gibt keine Zweitschrift. Das Aktionstoken ist damit fort; '
@@ -416,7 +416,7 @@ function by_config($erzeugen = true)
                     // Lesen UND zurueckschreiben - ein reines Lesen liesse die
                     // Datei dauerhaft fehlen, und jeder Aufruf zoege die
                     // Sicherung erneut und schriebe eine Protokollzeile.
-                    by_config_speichern(array_merge(by_vorgaben(), $sich), false);
+                    by_config_speichern(array_merge(by_vorgaben(), $sich), false, $p['sicherung']);
                     return array_merge(by_vorgaben(), $sich);
                 }
             }
@@ -432,7 +432,7 @@ function by_config($erzeugen = true)
     if ($erzeugen && is_file($p['sicherung'])) {
         $sich = by_json_lesen($p['sicherung']);
         if ($sich) {
-            by_config_speichern(array_merge(by_vorgaben(), $sich), false);
+            by_config_speichern(array_merge(by_vorgaben(), $sich), false, $p['sicherung']);
             return array_merge(by_vorgaben(), $sich);
         }
     }
@@ -494,11 +494,21 @@ function by_kopie_geschuetzt($von, $nach, $rechte = 0600)
     return true;
 }
 
-function by_config_speichern($cfg, $sicherung = true)
+function by_config_speichern($cfg, $sicherung = true, $gestalt = null)
 {
     $p = by_paths();
     if (!is_dir($p['configdir'])) {
         @mkdir($p['configdir'], 0775, true);
+    }
+    /* Leere Objekte bleiben leere Objekte, in JEDEM Speicherweg (seit 0.9.40, Entscheidung des Hausherrn
+     * 11.11.2026). by_config() liest mit json_decode(..., true), dabei wird {} zu einem leeren Feld, und
+     * json_encode() schrieb es als [] zurueck. Fuer tts hiess das im Dienst "an" statt "aus": _ansage_aus()
+     * in byd.py nimmt nur ein Objekt als "aus". Die Gestalt kommt aus dem bisherigen Rohtext der Datei, bei
+     * der Selbstheilung ($gestalt) aus der Zweitschrift; was dort kein leeres Objekt war, bleibt so, wie es
+     * uebergeben wurde. */
+    $by_roh = @file_get_contents($gestalt !== null ? $gestalt : $p['config']);
+    if (is_array($cfg) && $cfg !== array() && is_string($by_roh) && $by_roh !== '') {
+        $cfg = by_json_leere_objekte($cfg, json_decode($by_roh));
     }
     // Erst kodieren, dann den Rueckgabewert ansehen, dann schreiben:
     // json_encode liefert bei ungueltigem UTF-8 false, und file_put_contents
@@ -538,7 +548,8 @@ function by_config_speichern($cfg, $sicherung = true)
 
 /** Leere Objekte des Rohtextes ($o, json_decode ohne true) im Feld $a wieder als Objekt fuehren (11.11.2026),
  *  damit json_encode() sie als {} und nicht als [] schreibt - oben wie verschachtelt, auch unter fremden
- *  Schluesseln. Nur fuer by_config_vervollstaendigen(); das Speichern im Formular bleibt, wie es ist.
+ *  Schluesseln. Seit 0.9.40 ruft by_config_speichern() sie fuer jeden Speicherweg auf; der Aufruf in
+ *  by_config_vervollstaendigen() bleibt stehen und aendert dort nichts mehr.
  *  Bauart Bewaesserung 0.9.56 (bw_json_leere_objekte()). */
 function by_json_leere_objekte($a, $o)
 {
