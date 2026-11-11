@@ -536,6 +536,103 @@ function by_config_speichern($cfg, $sicherung = true)
     return true;
 }
 
+/** Leere Objekte des Rohtextes ($o, json_decode ohne true) im Feld $a wieder als Objekt fuehren (11.11.2026),
+ *  damit json_encode() sie als {} und nicht als [] schreibt - oben wie verschachtelt, auch unter fremden
+ *  Schluesseln. Nur fuer by_config_vervollstaendigen(); das Speichern im Formular bleibt, wie es ist.
+ *  Bauart Bewaesserung 0.9.56 (bw_json_leere_objekte()). */
+function by_json_leere_objekte($a, $o)
+{
+    if (!is_array($a)) { return $a; }
+    if (is_object($o)) {
+        if (!get_object_vars($o) && $a === array()) { return new stdClass(); }
+        foreach ($a as $k => $v) {
+            $ks = (string) $k;
+            if (is_array($v) && property_exists($o, $ks)) { $a[$k] = by_json_leere_objekte($v, $o->$ks); }
+        }
+    } elseif (is_array($o)) {
+        foreach ($a as $k => $v) {
+            if (is_array($v) && array_key_exists($k, $o)) { $a[$k] = by_json_leere_objekte($v, $o[$k]); }
+        }
+    }
+    return $a;
+}
+
+/**
+ * Konfiguration vervollstaendigen (seit 0.9.39, Regeln/05 "Die Konfiguration
+ * wird vervollstaendigt, nicht nur ergaenzt"; Bauform Docker NG 1.3.7).
+ *
+ * Bis 0.9.38 ergaenzten by_config() und config() im Dienst fehlende
+ * Schluessel bei jedem Lesen nur im Speicher; in byd.json kamen sie erst mit
+ * dem naechsten Speichern in der Oberflaeche. Aufgerufen ueber
+ * bin/by_vervollstaendigen.php: beim Dienststart (byd.py main(), vor dem
+ * ersten Lesen der Konfiguration in dienst_lauf()) und von postupgrade.sh
+ * nach dem Entfernen der Marke - beim Update startet postinstall.sh den
+ * Dienst, solange die Marke noch liegt, und waehrend der Marke schreibt diese
+ * Funktion nichts. Weil nur bei FEHLENDEN Schluesseln geschrieben wird, bleibt
+ * es bei einem Schreibvorgang.
+ *
+ * - Nur in der Installation (oder mit ausdruecklich genannter Wurzel), nicht
+ *   waehrend einer Aktualisierung (by_upgrade_laeuft()), und nur wenn byd.json
+ *   ein lesbares Objekt ist und ein Aktionstoken nach dem Muster der
+ *   Sicherungspruefung traegt (nicht leer, [A-Za-z0-9_.-]{1,64}). Eine
+ *   fehlende, leere, "{}" oder kaputte Datei ist Sache der Selbstheilung in
+ *   by_config().
+ * - Geschrieben werden die WERTE AUS DER DATEI, nicht die von by_config() bzw.
+ *   config() im Dienst aufbereiteten; fremde Schluessel bleiben stehen.
+ *   Nachgetragen werden nur Schluessel aus by_vorgaben(), mit deren Wert:
+ *   by_config() kennt keine Lese-Regel fuer Bestandsdateien (endpunkt_ein
+ *   traegt postinstall.sh beim Update fest ein), und die Vorgaben des Dienstes
+ *   (VORGABEN in byd.py) stimmen in allen gemeinsamen Schluesseln ueberein.
+ * - Geschrieben ueber by_config_speichern() (0600, Zweitschrift).
+ * - Genau eine Protokollzeile mit den Namen, nie mit Werten.
+ *
+ * Rueckgabe: array('stand' => ruht|ohne_datei|ohne_merkwort|vollstaendig
+ *                  |ergaenzt|fehler, 'schluessel' => array(...))
+ */
+function by_config_vervollstaendigen()
+{
+    $p = by_paths();
+    if ($p['home'] === '' || by_upgrade_laeuft()) {
+        return array('stand' => 'ruht', 'schluessel' => array());
+    }
+    clearstatcache(true, $p['config']);
+    if (!is_file($p['config'])) {
+        return array('stand' => 'ohne_datei', 'schluessel' => array());
+    }
+    $roh = @file_get_contents($p['config']);
+    $datei = is_string($roh) ? json_decode($roh, true) : null;
+    if (!is_array($datei) || !isset($datei['aktionstoken']) || !is_string($datei['aktionstoken'])
+            || !preg_match('/^[A-Za-z0-9_.\-]{1,64}\z/', $datei['aktionstoken'])) {
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+    }
+    // Ein leeres Objekt der Datei ({}) bliebe nach json_decode(..., true) ein leeres Feld und kaeme beim
+    // Schreiben als [] zurueck - der Rohwert wird erhalten, bevor ergaenzt wird (11.11.2026).
+    $datei = by_json_leere_objekte($datei, json_decode($roh));
+    $fehlend = array();
+    foreach (by_vorgaben() as $k => $w) {
+        /* endpunkt_ein bleibt aussen vor (11.11.2026): den Uebergang fuer Bestandsanlagen setzt das
+         * Update; ein hier festgeschriebenes "aus" koennte ein spaeteres Update nicht mehr berichtigen. */
+        if ($k === 'endpunkt_ein') {
+            continue;
+        }
+        if (!array_key_exists($k, $datei)) {
+            $datei[$k] = $w;
+            $fehlend[] = $k;
+        }
+    }
+    if (!$fehlend) {
+        return array('stand' => 'vollstaendig', 'schluessel' => array());
+    }
+    if (!by_config_speichern($datei)) {
+        by_log('Konfiguration NICHT vervollstaendigt: byd.json liess sich nicht schreiben ('
+             . count($fehlend) . ' fehlende Schluessel).', 'WARN');
+        return array('stand' => 'fehler', 'schluessel' => $fehlend);
+    }
+    by_log('Konfiguration vervollstaendigt - ' . count($fehlend)
+         . ' fehlende Vorgaben in byd.json geschrieben: ' . implode(', ', $fehlend), 'INFO');
+    return array('stand' => 'ergaenzt', 'schluessel' => $fehlend);
+}
+
 /** Eine Zeile ins Plugin-Protokoll, gebremst gegen Wiederholungen. */
 function by_log($text, $stufe = 'INFO', $sekunden = 3600)
 {

@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.38
+Version 0.9.39
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,12 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.39
+
+- **Konfiguration wird nach einem Update vervollständigt:** Fehlen in `byd.json` Einstellungen, die eine neuere Fassung mitbringt, werden sie jetzt einmal in die Datei eingetragen – beim Update durch `postupgrade.sh`, sobald die Marke der Aktualisierung entfernt ist, und bei jedem Start des Dienstes, bevor er die Konfiguration liest (neu: `bin/by_vervollstaendigen.php`, geschrieben wird über `by_lib.php`). Das Protokoll `byd.log` nennt die ergänzten Namen, keine Werte. Bisher ergänzten Oberfläche und Dienst fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern in der Oberfläche. Eingetragen wird jeweils die Vorgabe – genau der Wert, mit dem Oberfläche und Dienst bisher gearbeitet haben; am Verhalten ändert sich dadurch nichts. `endpunkt_ein` trägt wie bisher `postinstall.sh` beim Update ein; das Vervollständigen trägt es nicht ein, ein festgeschriebenes „aus“ könnte eine spätere Aktualisierung nicht mehr berichtigen.
+- Geschrieben werden die Werte aus der Datei, wie sie dort stehen, plus die fehlenden Vorgaben; Schlüssel, die das Plugin nicht kennt, bleiben stehen, die Zweitschrift zieht mit. Nicht angefasst werden eine fehlende, leere oder unlesbare Datei, eine ohne gültiges Aktionstoken und jede Datei, solange eine Aktualisierung läuft. Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, dazu ein echter Lauf des Dienststarts (der Abruf bei BYD durch eine Attrappe ersetzt) und von `postupgrade.sh`; am Gerät ist es noch nicht gemessen.
+- Leere Objekte (`{}`) in der Datei bleiben beim Vervollständigen erhalten, auch verschachtelte und solche unter unbekannten Schlüsseln; sie werden dabei nicht mehr zu leeren Listen (`[]`). Das Speichern im Formular bleibt, wie es war.
 
 ## Neu in 0.9.38
 
