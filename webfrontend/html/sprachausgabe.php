@@ -276,6 +276,15 @@
  *     Mit stand 0 wiche eine Linie mit Rueckfall auf ein anderes Ziel aus - die Ansage kaeme doppelt bzw. trotz Sperre (ansage_ng_bewusst()).
  *   - Mehrfachziele: ein solches Ziel zaehlt weder als gesendet noch als gescheitert (ansage_ziele_zusammen() unveraendert).
  *   - Aeltere Gegenseiten (200 OK=1 UNVERAENDERT/UEBERSPRUNGEN) bleiben stand 1 wie bisher.
+ *
+ * 1.4.3 (11.11.2026, Freigabe des Hausherrn 11.11.: "Ja, beides"), nur ergaenzend:
+ *   - ansage_lbhome() nimmt $LBHOMEDIR nur noch als LoxBerry-Wurzel, wenn dort config/plugins, data/plugins und
+ *     config/system/general.json liegen (neue Funktion ansage_wurzel_gilt(), dieselbe Bedingung wie Regeln/06, Wurzelsuche).
+ *     Bis 1.4.2 genuegte config/system: ein Pruefstand oder ein Rest mit diesem Ordner galt als Wurzel, und Plugin-Datenbank,
+ *     Zonen von Sonos4Lox, Port von SonoX, Nachbarkonfiguration und der Schalter haus/ansage/ruhe wurden dort gelesen.
+ *     Sonst '' wie ohne $LBHOMEDIR - diesen Fall kennt jeder Aufrufer. Mit einer vollstaendigen Wurzel aendert sich nichts.
+ *   - Ein angegebenes $home bleibt, wie es ist ('' = keine Datenbank). Wer ansage_wurzel_gilt() selbst ruft, prueft
+ *     function_exists('ansage_wurzel_gilt').
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -294,7 +303,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.4.2');
+define('ANSAGE_FASSUNG', '1.4.3');
 
 /** Ab dieser Fassung nimmt das Plugin Dashboard Ansagen an (seit 1.4.0). */
 define('ANSAGE_TAFEL_MIN', '0.9.40');
@@ -925,14 +934,26 @@ function ansage_plugin_ordner_aus($json, array $namen, $rueckfall)
 }
 
 /**
+ * Ist $h eine LoxBerry-Wurzel? (seit 1.4.3) Nur mit config/plugins, data/plugins
+ * und config/system/general.json (Regeln/06, Wurzelsuche): ein Pruefstand oder ein
+ * Rest auf einem Pruefrechner traegt die ersten beiden oft, die dritte nie.
+ */
+function ansage_wurzel_gilt($h)
+{
+    return is_string($h) && $h !== '' && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')
+        && is_file($h . '/config/system/general.json');
+}
+
+/**
  * Die LoxBerry-Wurzel fuer die Plugin-Datenbank: $home, wenn angegeben ('' =
- * keine Datenbank), sonst $LBHOMEDIR - aber nur mit config/system darunter.
+ * keine Datenbank), sonst $LBHOMEDIR - aber nur, wenn ansage_wurzel_gilt() sie
+ * annimmt (seit 1.4.3; bis 1.4.2 genuegte config/system darunter). Sonst ''.
  */
 function ansage_lbhome($home = null)
 {
     if (is_string($home)) { return $home; }
     $h = getenv('LBHOMEDIR');
-    return (is_string($h) && $h !== '' && is_dir($h . '/config/system')) ? $h : '';
+    return ansage_wurzel_gilt($h) ? $h : '';
 }
 
 /**
@@ -4879,6 +4900,32 @@ function ansage_selbsttest()
     $r142 = ansage_sprechen($TEXT, $t142, $k142);
     $pruef('142 ziele: beide bewusst', array($r142['stand'], $r142['kennung']), array(-1, 'ALEXA_ANTWORT|409|GESPERRT'));
     $pruef('142 fassung', version_compare(ANSAGE_FASSUNG, '1.4.2', '>='), true);
+
+    // --- 1.4.3: eine LoxBerry-Wurzel nur mit config/plugins, data/plugins und config/system/general.json ---
+    // Ueber ansage_wurzel_gilt() an einer Wegwerfwurzel; LBHOMEDIR wird nicht umgesetzt (unter Apache liest getenv()
+    // zuerst die Umgebung des Servers). Laesst sich die Wurzel nicht anlegen, ist das ein Fehlschlag, kein Schweigen.
+    $o143 = sys_get_temp_dir() . '/ansage143_' . getmypid() . '_' . mt_rand(1000, 9999);
+    if (@mkdir($o143 . '/config/plugins', 0700, true) && @mkdir($o143 . '/config/system', 0700) && @mkdir($o143 . '/data/plugins', 0700, true)) {
+        $pruef('143 ohne general.json keine wurzel', ansage_wurzel_gilt($o143), false);
+        @file_put_contents($o143 . '/config/system/general.json', '{}');
+        $pruef('143 volle wurzel', ansage_wurzel_gilt($o143), true);
+        @rmdir($o143 . '/data/plugins');
+        $pruef('143 ohne data/plugins keine wurzel', ansage_wurzel_gilt($o143), false);
+        @mkdir($o143 . '/data/plugins', 0700);
+        @rmdir($o143 . '/config/plugins');
+        $pruef('143 ohne config/plugins keine wurzel', ansage_wurzel_gilt($o143), false);
+        @unlink($o143 . '/config/system/general.json');
+        @rmdir($o143 . '/config/system');
+        @rmdir($o143 . '/config');
+        @rmdir($o143 . '/data/plugins');
+        @rmdir($o143 . '/data');
+        @rmdir($o143);
+    } else {
+        $pruef('143 wegwerfwurzel anlegbar', false, true);
+    }
+    $pruef('143 leer oder kein text', array(ansage_wurzel_gilt(''), ansage_wurzel_gilt(null), ansage_wurzel_gilt(false)), array(false, false, false));
+    $pruef('143 angegebene wurzel bleibt', array(ansage_lbhome(''), ansage_lbhome('/x')), array('', '/x'));
+    $pruef('143 fassung', version_compare(ANSAGE_FASSUNG, '1.4.3', '>='), true);
 
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();
