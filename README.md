@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.40
+Version 0.9.41
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -41,9 +41,13 @@ schreibenden Befehl.
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
 
+## Neu in 0.9.41
+
+- **Vorprüfung der Sprachausgabe wie die Brücke:** Steht die Sprachausgabe in der Konfiguration als Liste (etwa `"tts": []`, so schrieb das Speichern ein leeres Objekt bis 0.9.39), nimmt die Vorprüfung im Dienst sie jetzt wie die Brücke als „aus“. Bisher hielt der Dienst sie für „an“ und rief die Brücke auf, die dann mit „aus“ ablehnte. Gesprochen wurde in beiden Fassungen nichts; es entfallen nur der vergebliche Aufruf und seine Protokollzeile. Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, am Gerät noch nicht.
+
 ## Neu in 0.9.40
 
-- **Leere Objekte bleiben auch beim Speichern erhalten:** Bisher wurde ein leeres Objekt (`{}`) in `byd.json` bei jedem Speichern außerhalb des Vervollständigens zu einer leeren Liste (`[]`), etwa beim Erzeugen eines Tokens, beim Übernehmen des Sprechtokens, beim Speichern einzelner Reiter oder bei der Wiederherstellung aus der Zweitschrift. Für die Sprachausgabe war das ein Unterschied: `"tts": {}` gilt im Dienst als „aus“, `"tts": []` als „an“. Jetzt behält `by_config_speichern()` die leeren Objekte der bisherigen Datei bei, bei der Wiederherstellung die der Zweitschrift. Was dort schon `[]` ist, bleibt `[]`. Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, am Gerät noch nicht.
+- **Leere Objekte bleiben auch beim Speichern erhalten:** Bisher wurde ein leeres Objekt (`{}`) in `byd.json` bei jedem Speichern außerhalb des Vervollständigens zu einer leeren Liste (`[]`), etwa beim Erzeugen eines Tokens, beim Übernehmen des Sprechtokens, beim Speichern einzelner Reiter oder bei der Wiederherstellung aus der Zweitschrift. Hörbar war das nicht: Die Brücke `bin/by_ansage.php` liest `{}` und `[]` beide als „aus“. Nur die Vorprüfung im Dienst nahm `[]` als „an“ und rief die Brücke dann vergeblich auf (berichtigt 11.11.2026; bis dahin stand hier, die Ansage sei „an“ gewesen). Jetzt behält `by_config_speichern()` die leeren Objekte der bisherigen Datei bei, bei der Wiederherstellung die der Zweitschrift. Was dort schon `[]` ist, bleibt `[]`. Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, am Gerät noch nicht.
 
 ## Neu in 0.9.39
 

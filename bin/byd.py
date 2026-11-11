@@ -2861,10 +2861,16 @@ def ansage_ausfall(ok: int, fehler_folge: int) -> bool:
 
 def _ansage_aus(cfg: dict) -> bool:
     """Ist die Ausgabe aus? Nur der Modus wird angesehen (config() reicht den Block
-    tts unveraendert durch); geprueft wird er in der Bruecke. Fehlt er oder ist er
-    unlesbar, gilt er als aus (Vorgabe)."""
+    tts unveraendert durch); geprueft wird er in der Bruecke. Fehlt er, gilt er als an
+    (ab Werk, Stamm 1.3.2); ein Objekt ohne Modus und eine Liste gelten wie in der
+    Bruecke als aus."""
     t = cfg.get("tts")
     # Stamm 1.3.2: nie gespeichert heisst ab Werk an; ein gespeichertes "aus" bleibt.
+    # Eine Liste (so schrieb das Speichern ein leeres Objekt bis AudiConnect 0.9.41 und BYD-Autos 0.9.39)
+    # liest die Bruecke wie einen Block ohne Modus, also als "aus" (gemessen 11.11.2026). Bis zu dieser
+    # Fassung (BYD-Autos 0.9.41) rief der Dienst die Bruecke dann vergeblich auf; sie antwortete mit ART=aus.
+    if isinstance(t, list):
+        return True
     return isinstance(t, dict) and t.get("mode", "aus") == "aus"
 
 

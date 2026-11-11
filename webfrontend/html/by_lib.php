@@ -502,8 +502,8 @@ function by_config_speichern($cfg, $sicherung = true, $gestalt = null)
     }
     /* Leere Objekte bleiben leere Objekte, in JEDEM Speicherweg (seit 0.9.40, Entscheidung des Hausherrn
      * 11.11.2026). by_config() liest mit json_decode(..., true), dabei wird {} zu einem leeren Feld, und
-     * json_encode() schrieb es als [] zurueck. Fuer tts hiess das im Dienst "an" statt "aus": _ansage_aus()
-     * in byd.py nimmt nur ein Objekt als "aus". Die Gestalt kommt aus dem bisherigen Rohtext der Datei, bei
+     * json_encode() schrieb es als [] zurueck. Fuer tts hielt die Vorpruefung _ansage_aus() in byd.py bis
+     * 0.9.40 ein [] fuer "an"; die Bruecke liest {} und [] beide als "aus" (gemessen 11.11.2026). Die Gestalt kommt aus dem bisherigen Rohtext der Datei, bei
      * der Selbstheilung ($gestalt) aus der Zweitschrift; was dort kein leeres Objekt war, bleibt so, wie es
      * uebergeben wurde. */
     $by_roh = @file_get_contents($gestalt !== null ? $gestalt : $p['config']);
