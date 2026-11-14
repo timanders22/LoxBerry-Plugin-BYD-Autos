@@ -944,19 +944,11 @@ if ($by_post && $by_formular === 'selbsttest') {
  * U4: dieser und der naechste Handler stehen seit dem Umbau VOR dem Laden -
  * nach dem Zurueckspielen zeigte die Seite bis 0.9.19 den alten Stand. */
 if ($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern'])) {
-    /* BYD-b2: mit dem lesbaren Kopf _hinweis/_stand (by_sicherung_bauen). */
+    /* BYD-b2: mit dem lesbaren Kopf (by_sicherung_bauen). Seit 0.9.42 baut ihn das gemeinsame
+     * Sicherungsmodul: _hinweis, _plugin, _fassung, _stand - und X-3 (Verbesserungsbau 30.09.2026):
+     * bestuende ein gespeicherter Wert das eigene Zurueckspielen nicht, sagt es _warnung, mit den NAMEN,
+     * nie den Werten. Geliefert wird trotzdem, vollstaendig. */
     $by_sich = by_sicherung_bauen();
-    /* X-3 (Verbesserungsbau 30.09.2026): bestuende ein gespeicherter Wert das
-     * eigene Zurueckspielen nicht, sagt es der Kopf der Datei - mit den
-     * NAMEN, nie den Werten. Geliefert wird trotzdem, vollstaendig. */
-    $by_altw = by_rueckspiel_altwerte($by_sich);
-    if ($by_altw) {
-        $by_sich = array_merge(array(
-            '_hinweis' => $by_sich['_hinweis'],
-            '_stand'   => $by_sich['_stand'],
-            '_warnung' => sprintf(by_t('EINST.SICH_ALTWERT_KOPF'), implode(', ', $by_altw)),
-        ), $by_sich);
-    }
     $by_js = json_encode($by_sich,
         JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($by_js !== false) {
@@ -976,54 +968,38 @@ if ($by_post && $by_formular === 'sichern' && isset($_POST['by_sichern'])) {
  * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
  * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
 if ($by_post && $by_formular === 'zurueck' && isset($_POST['by_zurueck'])) {
-    if (!isset($_FILES['by_sicherung']) || !is_array($_FILES['by_sicherung'])
-        || !isset($_FILES['by_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['by_sicherung']['tmp_name'])) {
-        $by_fehler[] = by_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['by_sicherung']['size'] > 262144) {
-        $by_fehler[] = by_t('EINST.SICH_ZU_GROSS');
+    /* 0.9.42: Haken, hochgeladene Datei und Groessengrenze prueft das gemeinsame Sicherungsmodul
+     * (sicherung_eingang(), Modul 1.1.0, Entscheidung des Hausherrn 12.11.2026) - in jeder Linie gleich, und
+     * vor is_uploaded_file() steht der Haken zurueck_ok: ohne ihn wird nichts gelesen und nichts geaendert. */
+    list($by_roh, $by_ein_ab) = sicherung_eingang(by_sicherung_beschreibung(), $_POST, $_FILES, 'by_sicherung');
+    if ($by_ein_ab !== null) {
+        $by_ein_m = sicherung_meldungen(by_sicherung_beschreibung(), $by_ein_ab);
+        foreach ($by_ein_m['fehler'] as $by_ein_x) { $by_fehler[] = $by_ein_x; }
     } else {
-        list($by_neu, $by_mangel, $by_n, $by_zneu, $by_spaet) = by_sicherung_lesen(
-            (string) @file_get_contents($_FILES['by_sicherung']['tmp_name']));
-        if ($by_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $by_fehler[] = by_t('EINST.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $by_mangel);
-        } elseif (by_config_speichern($by_neu)) {
-            $by_meldungen[] = sprintf(by_t('EINST.SICH_UEBERNOMMEN'), $by_n);
-            /* Nr. 36 b: eine Sicherung von 0.9.22 oder frueher kennt die Sprachausgabe nicht -
-             * deren Einstellungen bleiben (by_sicherung_spaeter()), und die Seite sagt es. */
-            $by_sd = json_decode((string) @file_get_contents($_FILES['by_sicherung']['tmp_name']), true);
-            if (is_array($by_sd) && !array_key_exists('tts', $by_sd)) {
-                $by_meldungen[] = by_t('EINST.SICH_OHNE_ANSAGE');
-            }
-            /* Welle Mehrfach-Ziele (0.9.29): fehlte die Liste der weiteren Ziele in der Sicherung (aeltere Fassung),
-             * gelten die jetzigen weiteren Ziele - die Seite nennt sie (Spaetliste aus by_sicherung_lesen()). */
-            if ($by_spaet) {
-                $by_meldungen[] = sprintf(by_t('EINST.SICH_SPAET'), by_e(implode(', ', $by_spaet)));
-            }
-            /* C10: die Zugangsdaten - mit denselben Regeln geprueft wie im
-             * Formular (by_sicherung_lesen). Leere Felder behalten den
-             * bisherigen Wert, wie im Formular. */
-            if ($by_zneu) {
-                $by_zb = isset($by_zneu['benutzer']) && $by_zneu['benutzer'] !== ''
-                    ? $by_zneu['benutzer'] : null;
-                $by_zl = isset($by_zneu['land']) && $by_zneu['land'] !== ''
-                    ? $by_zneu['land'] : null;
-                if (by_zugang_speichern($by_zb,
-                        isset($by_zneu['passwort']) ? $by_zneu['passwort'] : '',
-                        isset($by_zneu['pin']) ? $by_zneu['pin'] : '', $by_zl)) {
-                    $by_meldungen[] = by_t('EINST.SICH_ZUGANG_UEBERNOMMEN');
-                } else {
-                    $by_fehler[] = by_t('EINST.FEHLER_ZUGANG_SPEICHERN');
-                }
-            } else {
-                $by_meldungen[] = by_t('EINST.SICH_OHNE_ZUGANG');
-            }
-        } else {
-            $by_fehler[] = by_t('EINST.SICH_SCHREIBFEHLER');
-        }
+        /* 0.9.42: das gemeinsame Sicherungsmodul (sicherung_zurueckspielen()) liest, prueft, verwirft
+         * Unbekanntes mit Namen (oben und in den Bloecken tts und ansage_regeln - bis 0.9.41 wies ein
+         * unbekannter Name die ganze Datei ab), laesst einen leeren Wert den bisherigen stehen und aendert
+         * bei einer Beanstandung GAR NICHTS (alle Beanstandungen, nicht nur die erste). Eine Datei mit
+         * fremdem Kennzeichen _plugin oder ohne Kopf wird als Ganzes abgewiesen. Die Schritte dieser Linie
+         * davor und danach stehen in den Rueckrufen: by_sicherung_vorbereiten() (Sprachausgabe,
+         * Zugangsdaten), Speichern samt Zweitschrift (by_config_speichern()), by_sicherung_nachziehen()
+         * (Zugangsdaten, Abodatei, Dienst). */
+        $by_b = by_sicherung_beschreibung();
+        $by_zug = array();
+        $by_spaet = array();
+        $by_b['vorbereiten'] = function ($neu, $jetzt, $r) use (&$by_zug, &$by_spaet) {
+            return by_sicherung_vorbereiten($neu, $jetzt, $r, $by_zug, $by_spaet);
+        };
+        $by_b['speichern'] = function ($neu) { return by_config_speichern($neu); };
+        $by_b['zweitschrift'] = function () { $p = by_paths(); return array($p['config'], $p['sicherung']); };
+        $by_b['nachziehen'] = function ($neu, $jetzt, $r) use (&$by_zug, &$by_spaet, &$by_fehler, &$by_stoerungen) {
+            return by_sicherung_nachziehen($neu, $r, $by_zug, $by_spaet, $by_fehler, $by_stoerungen);
+        };
+        $by_b['log'] = function ($z) { by_log($z, 'INFO', 0); };
+        $by_r = sicherung_zurueckspielen($by_b, $by_roh);
+        $by_m = sicherung_meldungen($by_b, $by_r);
+        foreach ($by_m['fehler'] as $by_x) { $by_fehler[] = $by_x; }
+        foreach ($by_m['hinweise'] as $by_x) { $by_meldungen[] = $by_x; }
     }
     $by_tab = 'tab-settings';
 }
@@ -1729,6 +1705,7 @@ $by_gh = function ($k) use ($by_cfg) { return by_eingabe_an('g42', $k, !empty($b
     <input data-role="none" type="hidden" name="formtoken" value="<?= by_e($by_ftoken) ?>">
     <input data-role="none" type="hidden" name="formular" value="zurueck">
     <input data-role="none" type="file" name="by_sicherung" accept=".json">
+    <?= sicherung_haken_zeile(by_sicherung_beschreibung()) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="by_zurueck" value="1"><?= by_t('EINST.K_ZURUECK') ?></button>
   </form>
 </div>

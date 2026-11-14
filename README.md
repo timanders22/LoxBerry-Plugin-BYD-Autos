@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.41
+Version 0.9.42
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,22 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.42
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen nach der gemeinsamen Vorlage:** Die Knöpfe im Reiter *Einstellungen* arbeiten jetzt mit demselben Sicherungsmodul wie die übrigen Plugins dieser Reihe. Für den Anwender ändert sich:
+  - Die Sicherungsdatei trägt im Kopf neu das Kennzeichen des Plugins (`_plugin` = `LoxBerry-Plugin-BYD-Autos`) und die Fassung (`_fassung`). Eine Datei eines anderen Plugins und eine Datei ohne Kennzeichen werden als Ganzes abgewiesen; es ändert sich dann nichts. Bis 0.9.41 erkannte das Plugin eine fremde Datei nur an ihren unbekannten Einstellungen.
+  - Sicherungen dieses Plugins von 0.9.21 bis 0.9.41 tragen noch kein Kennzeichen. Sie werden an ihrem Kopf `_hinweis` erkannt (deutsch und englisch) und weiter angenommen, und die Meldung sagt das. Sicherungen von 0.9.21 bis 0.9.25 kennen den zweiten Haken für eingreifende Befehle (seit 0.9.26) nicht; er behält beim Zurückspielen seinen bisherigen Wert (ab Werk aus), und die Meldung nennt ihn. Bis 0.9.41 wurden diese Sicherungen als unvollständig abgewiesen. Sicherungen von 0.9.3 bis 0.9.20 hatten gar keinen Kopf; sie lassen sich von einer fremden Datei nicht sicher unterscheiden und werden abgewiesen.
+  - Eine Einstellung, die diese Fassung nicht kennt, wird nicht übernommen und mit ihrem Namen gemeldet, nie mit ihrem Wert – oben in der Datei und in den Blöcken Sprachausgabe (`tts`) und Regeln der Sprachausgabe (`ansage_regeln`). Die übrigen Einstellungen werden zurückgespielt. Bis 0.9.41 wies ein unbekannter Name die ganze Datei ab.
+  - Ein leerer Wert in der Sicherung überschreibt keinen bestehenden; der bisherige Wert bleibt, und die Meldung nennt den Namen. Das gilt auch für die Zugangsdaten. Bisher behielten nur das Aktionstoken und die Zugangsdaten ihren Wert, ohne dass die Meldung es sagte; ein leeres MQTT-Präfix wies die Datei ab.
+  - Nach dem Zurückspielen wird der Abrufdienst neu gestartet, wenn er läuft, damit er mit den zurückgespielten Werten arbeitet; die Meldung sagt, was mit ihm geschah. Die Abodatei des MQTT-Gateways folgt dem zurückgespielten Präfix wie beim Speichern im Reiter *MQTT*. Bis 0.9.41 lief der Dienst mit dem alten Stand weiter.
+- Unverändert: Eine Datei mit einem unzulässigen Wert ändert gar nichts, und alle Beanstandungen werden genannt. Aktionstoken und Zugangsdaten (Benutzername, Passwort, Steuer-PIN, Land) gehören in die Datei, die Sprechtoken nicht; eine Datei, die ein Sprechtoken trägt, wird abgewiesen. Nach dem Zurückspielen zieht die Zweitschrift mit.
+- **Einbindung über MQTT berichtigt:** Im Reiter *Einbindung in Loxone* und in der Hilfe stand, das MQTT-Gateway lege die Virtuellen Eingänge selbst an. Jetzt steht dort, dass man sie in Loxone Config mit genau dem Titel anlegt, den das Gateway vergibt; das Gateway ordnet nur über den Namen zu.
+- **Verhalten geändert – Zurückspielen nur mit Haken:** Zwischen dem Feld für die Sicherungsdatei und dem Knopf „Einstellungen zurückspielen“ steht ein Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“, ab Werk aus. Ohne ihn wird die Datei nicht gelesen und nichts geändert, und die Meldung sagt es. Haken, Text und die Prüfung der hochgeladenen Datei (über das Formular gekommen, höchstens 256 KB) kommen aus dem gemeinsamen Sicherungsmodul 1.1.0 und sind in allen Plugins dieser Reihe gleich.
+- **Gemeinsames Sicherungsmodul 1.2.0:** Das Modul kann jetzt, was einzelne Plugins dieser Reihe bisher selbst darum herum gebaut haben (Entscheidung „Einheitlichkeit“). Die Prüfung „die Datei trägt ein Sprechtoken“ liest den Block der Datei jetzt über das Modul statt über eine eigene Umgehung; am Verhalten ändert sich nichts. Die Zugangsdaten (`zugang_benutzer`, `zugang_passwort`, `zugang_pin`, `zugang_land`) liest das Modul als flachen Teil; die Sicherungsdatei sieht aus wie bisher.
+- **Gemeinsames Sicherungsmodul 1.2.1:** Ein Vermerk, der nie aus einer Sicherungsdatei kommt (etwa, dass ein Sprechtoken aus einem Nachbar-Plugin übernommen wurde), behält beim Zurückspielen seinen geltenden Wert. An diesem Plugin ändert sich dadurch nichts; es setzte den Vermerk schon bisher selbst wieder ein.
+- **Gemeinsames Sicherungsmodul 1.2.2:** Fehlt eine Einstellung in der Sicherung und setzt das Plugin ihren Wert nach einer eigenen Übergangsregel (etwa aus einer verwandten Einstellung derselben Sicherung), bleibt dieser Wert beim Zurückspielen, und die Meldung nennt ihn als nach einer Übergangsregel abgeleitet – nicht als Werkseinstellung und nicht als bisherigen Wert. An diesem Plugin ändert sich dadurch nichts.
+- Gemessen mit einem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, der über einen Webserver die echten Knöpfe drückt, mit den Sicherungen der Vorfassungen 0.9.6 bis 0.9.41; am Gerät nicht gemessen.
 
 ## Neu in 0.9.41
 

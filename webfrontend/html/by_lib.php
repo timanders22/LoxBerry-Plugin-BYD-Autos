@@ -29,6 +29,11 @@ if (!function_exists('by_e')) {
  * 0.9.23; seit 0.9.29 Stamm 1.2.1 mit weiteren Ausgabezielen, by_mit_zielen(), Welle Mehrfach-Ziele).
  * Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+/* 0.9.42: Das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des
+ * Hausherrn 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den
+ * anderen Linien. Die Beschreibung dieser Linie steht in by_sicherung_beschreibung(). Die Datei tut beim
+ * Laden nichts ausser Funktionen anzulegen und antwortet bei direktem Aufruf mit 403. */
+require_once __DIR__ . '/sicherung.php';
 
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
@@ -3052,6 +3057,27 @@ function by_zugang_wert_pruefen($feld, $w)
  * C10: die Zugangsdaten fuer die Sicherungsdatei - Benutzername, Passwort,
  * Steuer-PIN und Land aus zugang.json, unter eigenen Schluesseln.
  */
+function by_sicherung_zugang_felder()
+{
+    $aus = array();
+    foreach (by_sicherung_zugang() as $k => $w) { $aus[substr($k, 7)] = $w; }
+    return $aus;
+}
+
+/** Der Teil zugang einer Sicherung (seit Modul 1.2.0 ein flacher Teil): dieselbe Pruefung wie bisher je Feld
+ * (by_sicherung_wert()). Ein Feld, das die Datei nicht traegt, hat das Modul schon mit dem geltenden Wert
+ * gefuellt ('fehlt' => 'behalten'). Rueckgabe fuer das Modul: array(Felder, Beanstandungen[]). */
+function by_sicherung_zugang_lesen($w)
+{
+    $aus = array();
+    $mangel = array();
+    foreach (array('benutzer', 'passwort', 'pin', 'land') as $f) {
+        $e = by_sicherung_wert('zugang_' . $f, is_array($w) && array_key_exists($f, $w) ? $w[$f] : '');
+        if ($e[1] !== '') { $mangel[] = $e[1]; } else { $aus[$f] = (string) $e[0]; }
+    }
+    return $mangel ? array(null, $mangel) : array($aus, array());
+}
+
 function by_sicherung_zugang()
 {
     $z = by_json_lesen(by_paths()['zugang']);
@@ -3392,253 +3418,322 @@ function by_ansage_satz($anlass, $nr, $name, $soc = null, $grenze = null)
  * BYD-b2 (Verbesserungsbau 30.09.2026): die Sicherungsdatei - EINE Stelle
  * fuer den Knopf "Einstellungen sichern" und fuer die Pruefung X-3.
  *
- * Vorne der lesbare Kopf (Regeln/05): _hinweis sagt, was die Datei ist und
- * dass sie Geheimnisse traegt, _stand wann sie entstand. by_sicherung_lesen()
- * uebergeht jeden Schluessel, der mit "_" beginnt. Dahinter die VOLLE
- * Konfiguration samt Aktionstoken und die Zugangsdaten (C10).
+ * 0.9.42: gebaut vom gemeinsamen Sicherungsmodul (sicherung_bauen(), Abschrift
+ * von Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn 12.11.2026) mit
+ * der Beschreibung by_sicherung_beschreibung(). Vorne der lesbare Kopf
+ * (Regeln/05): _hinweis sagt, was die Datei ist und dass sie Geheimnisse
+ * traegt, _plugin traegt das Kennzeichen dieser Linie (neu in 0.9.42), dazu
+ * _fassung und _stand; wuerde das eigene Zurueckspielen die Datei abweisen,
+ * steht in _warnung, was (nur Namen, nie Werte). Dahinter die VOLLE
+ * Konfiguration samt Aktionstoken und die Zugangsdaten (C10) unter
+ * zugang_<feld>. Die Sprechtoken und der Vermerk ansage_token_herkunft gehen
+ * nie in eine Sicherung.
  */
 function by_sicherung_bauen()
 {
-    $c = by_config();
-    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung (Entwurf 5) -
-     * anders als Aktionstoken und Zugangsdaten, die diese Linie bewusst mitsichert (C10). */
-    if (isset($c['tts']) && is_array($c['tts'])) {
-        $c['tts'] = ansage_sicherung_bereinigen($c['tts']);
-    }
-    unset($c['ansage_token_herkunft']);     // Stamm 1.3.2: der Vermerk geht nie in eine Sicherung
-    return array_merge(array(
-        '_hinweis' => by_t('EINST.SICH_KOPF_HINWEIS'),
-        '_stand'   => date('Y-m-d H:i'),
-    ), $c, by_sicherung_zugang());
+    // Seit Modul 1.2.0 sind die Zugangsdaten ein flacher Teil ('teile_flach'): in der Datei wie bisher zugang_<feld>.
+    return sicherung_bauen(by_sicherung_beschreibung(), by_sicherung_jetzt(true), array('zugang' => by_sicherung_zugang_felder()));
+}
+
+/**
+ * 0.9.42: der geltende Stand fuer Sichern und Zurueckspielen - die
+ * Konfiguration und die Zugangsdaten unter zugang_<feld> (by_sicherung_zugang()),
+ * wie sie in der Sicherungsdatei stehen. $erzeugen wie by_config().
+ */
+function by_sicherung_jetzt($erzeugen = false)
+{
+    $c = by_config($erzeugen);
+    return array_merge(is_array($c) ? $c : array(), by_sicherung_zugang());
 }
 
 /**
  * X-3 (Verbesserungsbau 30.09.2026): welche gespeicherten Werte bestuenden
- * das eigene Zurueckspielen nicht? Die Sicherung wird gebaut
- * (by_sicherung_bauen, derselbe Weg wie der Knopf) und durch
- * by_sicherung_lesen() geschickt - dieselbe Pruefung wie beim Zurueckspielen.
- * Rueckgabe: Liste der NAMEN, nie der Werte; leer = die Sicherung liesse sich
- * zurueckspielen. '?' = abgewiesen, ohne dass ein Name zu nennen waere.
+ * das eigene Zurueckspielen nicht? Seit 0.9.42 die Selbstpruefung des
+ * Sicherungsmoduls (sicherung_selbstpruefung(): dieselbe Pruefung wie beim
+ * Zurueckspielen, gegen den geltenden Stand). Rueckgabe: Liste der NAMEN, nie
+ * der Werte; leer = die Sicherung liesse sich zurueckspielen. '?' = abgewiesen,
+ * ohne dass ein Name zu nennen waere.
  * Der Name traegt bewusst kein "sicherung": Werkzeuge/sicherung_pruefen.py
  * nimmt die erste Funktion *_sicherung* mit json_encode fuer die Ausfuhr
  * (Scheinbefund, gemessen an Heimkino in der Kette am 30.09.2026).
  */
 function by_rueckspiel_altwerte($sicherung = null)
 {
-    $s = is_array($sicherung) ? $sicherung : by_sicherung_bauen();
-    $js = json_encode($s, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($js === false) {
-        // Nicht kodierbar: der Knopf meldet das selbst (SICH_SCHREIBFEHLER).
-        return array();
-    }
-    $namen = array();
-    $erg = by_sicherung_lesen($js, $namen);
-    if ($erg[0] !== null) {
-        return array();
-    }
-    return $namen ? array_values(array_unique($namen)) : array('?');
+    $b = by_sicherung_beschreibung();
+    $jetzt = by_sicherung_jetzt(true);
+    $s = is_array($sicherung) ? $sicherung : sicherung_bauen($b, $jetzt);
+    unset($s['_warnung']);
+    $namen = sicherung_selbstpruefung($b, $s, $jetzt);
+    return $namen === array('-') ? array('?') : $namen;
 }
 
-function by_sicherung_lesen($roh, &$namen = null)
+/**
+ * 0.9.42: ein Wert der Sicherungsdatei - dieselben Regeln wie bis 0.9.41 in
+ * by_sicherung_lesen() und wie im Formular: by_wert_taugt() am Eingang, die
+ * Grenzen aus by_grenzen(), die Regeln aus by_sicherung_regeln(), die
+ * Zugangsdaten nach by_zugang_wert_pruefen(). Rueckgabe array(Wert in der
+ * Normalform der Linie, Beanstandung - '' wenn er taugt).
+ */
+function by_sicherung_wert($k, $w)
 {
-    $mangel = array();
-    $spaet = array();     // Welle Mehrfach-Ziele (0.9.29): Spaetliste - fehlte in der Sicherung, gilt weiter
-    // X-3: die Namen der beanstandeten Schluessel, nie ihre Werte.
-    $namen = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        return array(null, array(by_t('EINST.SICH_KEIN_JSON')), 0, array(), array());
+    $hk = htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8');
+    if (strpos((string) $k, 'zugang_') === 0) {
+        $grund = by_wert_taugt($w) ? by_zugang_wert_pruefen(substr((string) $k, 7), $w) : 'EINST.SICH_R_ZUGANG';
+        return $grund === '' ? array($w, '') : array(null, sprintf(by_t('EINST.SICH_REGEL'), $hk, by_t($grund)));
     }
-    $neu = by_vorgaben();
-    $bekannt = array_keys($neu);
+    if (!by_wert_taugt($w)) {
+        return array(null, sprintf(by_t('EINST.SICH_WERT'), $hk));
+    }
     $grenzen = by_grenzen();
+    if (isset($grenzen[$k])) {
+        $s = trim((string) $w);
+        if (!preg_match('/^-?[0-9]+$/', $s) || (int) $s < $grenzen[$k][0] || (int) $s > $grenzen[$k][1]) {
+            return array(null, sprintf(by_t('EINST.SICH_BEREICH'), $hk, $grenzen[$k][0], $grenzen[$k][1]));
+        }
+        return array((int) $s, '');
+    }
     $regeln = by_sicherung_regeln();
-    $zugang = array();
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        /* Der lesbare Kopf einer Sicherungsdatei wird UEBERGANGEN, nicht
-         * beanstandet - sonst lehnt die Funktion die Datei ab, die dieselbe
-         * Bibliothek zwei Zeilen vorher erzeugt hat. Seit dem
-         * Verbesserungsbau vom 30.09.2026 (BYD-b2) schreibt
-         * by_sicherung_bauen() _hinweis und _stand, bei X-3 dazu _warnung. */
-        if (is_string($k) && $k !== '' && $k[0] === '_') {
+    if (isset($regeln[$k])) {
+        list($by_taugt, $by_wert, $by_grund) = by_sicherung_regel($regeln[$k], $w);
+        return $by_taugt ? array($by_wert, '') : array(null, sprintf(by_t('EINST.SICH_REGEL'), $hk, by_t($by_grund)));
+    }
+    return array($w, '');
+}
+
+/**
+ * 0.9.42: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul.
+ *
+ * Bekannt sind die Schluessel von by_vorgaben() und die vier Zugangsdaten
+ * zugang_benutzer, zugang_passwort, zugang_pin, zugang_land (C10, flach wie bis
+ * 0.9.41; sie gehen nicht in byd.json, sondern in zugang.json - das macht
+ * by_sicherung_vorbereiten()). Die Bloecke: tts mit den Schluesseln der
+ * Sprachausgabe (ansage_vorgaben(), Sprechtoken ansage_geheim(), mit der
+ * Tabelle der weiteren Ziele 'ziele'), ansage_regeln mit
+ * ansage_regeln_vorgaben().
+ *
+ * Was fehlen darf (wie bis 0.9.41): die Spaetschluessel by_sicherung_spaeter()
+ * und die Zugangsdaten (eine Sicherung bis 0.9.18 traegt sie nicht) behalten den
+ * geltenden Wert; neu in 0.9.42 ebenso gefahr_ein, den eine Sicherung von 0.9.21
+ * bis 0.9.25 nicht kennt (bis 0.9.41 wies das die ganze Datei ab; gemessen
+ * 12.11.2026 an den Sicherungen dieser Fassungen: gefahr_ein ist der einzige
+ * fehlende Schluessel ausserhalb dieser Liste). Auf einer frischen Anlage ist der
+ * geltende Wert die Vorgabe 0 = aus. ansage_token_herkunft kommt nie aus einer Datei. Jeder Wert
+ * geht durch by_sicherung_wert(), tts durch die Pruefung der Sprachausgabe,
+ * ansage_regeln durch ansage_regeln_wert(); die Paarregeln der Temperaturen
+ * stehen in 'quer'.
+ *
+ * Eine aeltere Sicherung dieser Linie (0.9.21 bis 0.9.41, ohne _plugin) erkennt
+ * by_sicherung_alt_erkennen() an ihrem Kopf _hinweis.
+ */
+function by_sicherung_beschreibung()
+{
+    $p = by_paths();
+    $vorgaben = by_vorgaben();
+    $schluessel = array();
+    foreach (array_keys($vorgaben) as $k) {
+        if (in_array($k, array('tts', 'ansage_regeln', 'ansage_token_herkunft'), true)) {
             continue;
         }
-        /* C10: die Zugangsdaten stehen unter zugang_<feld>. Sie sind
-         * freiwillig - eine Sicherung aus 0.9.18 oder frueher traegt sie
-         * nicht und bleibt zurueckspielbar. */
-        if (in_array($k, array('zugang_benutzer', 'zugang_passwort', 'zugang_pin',
-                               'zugang_land'), true)) {
-            $feld = substr($k, 7);
-            $grund = by_wert_taugt($w) ? by_zugang_wert_pruefen($feld, $w) : 'EINST.SICH_R_ZUGANG';
-            if ($grund !== '') {
-                $mangel[] = sprintf(by_t('EINST.SICH_REGEL'),
-                    htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'), by_t($grund));
-                $namen[] = (string) $k;
-                continue;
-            }
-            $zugang[$feld] = $w;
-            continue;
-        }
-        if ((string) $k === 'tts') {
-            /* Nr. 36 b (seit 0.9.23): eine Sicherung dieses Plugins traegt nie ein Sprechtoken -
-             * traegt die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus
-             * "Einstellungen sichern" und wird abgewiesen; die geltenden Sprechtoken bleiben.
-             * Ausgabeart, Adresse und Vorlage werden wie im Formular geprueft (Heimnetz). */
-            $by_tm = ansage_sicherung_mangel($w);
-            if ($by_tm) {
-                $mangel[] = sprintf(by_t('EINST.SICH_TTS_TOKEN'),
-                                    htmlspecialchars(implode(', ', $by_tm), ENT_QUOTES, 'UTF-8'));
-                $namen[] = 'tts';
-                continue;
-            }
-            $by_tg = '';
-            $by_tp = ansage_wert_pruefen($w, $by_tg, by_ansage_modi());
-            if ($by_tp === null) {
-                $mangel[] = sprintf(by_t('EINST.SICH_TTS'), htmlspecialchars(
-                    ansage_kennung_text($by_tg, by_ansage_k()), ENT_QUOTES, 'UTF-8'));
-                $namen[] = 'tts';
-                continue;
-            }
-            $by_tj = by_tts();
-            /* Welle Mehrfach-Ziele (0.9.29): "$by_tp + $by_tj" behielt die geltenden weiteren Ziele einer Sicherung ohne
-             * Liste schon bisher - still. Jetzt geht der Block vorher durch die Spaetliste (5. Rueckgabe), und die
-             * Seite nennt sie. */
-            $by_tneu = array('tts' => $by_tp);
-            $by_tjetzt = array('tts' => $by_tj);
-            /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
-             * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
-             * heisst "keine weiteren Ziele" und wird so uebernommen. */
-            $by_spaete = array();
-            if (is_array($by_tneu['tts']) && function_exists('ansage_sicherung_spaet')) {
-                list($by_tneu['tts'], $by_spaete) = ansage_sicherung_spaet($by_tneu['tts'],
-                    (isset($by_tjetzt['tts']) && is_array($by_tjetzt['tts'])) ? $by_tjetzt['tts'] : null);
-            }
-            foreach ($by_spaete as $by_sn) { $spaet[] = $by_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
-            list($by_tv) = ansage_vervollstaendigen($by_tneu['tts'] + $by_tj, 'aus');
-            $neu['tts'] = ansage_sicherung_tokens_behalten($by_tv, $by_tj);
-            $anzahl++;
-            continue;
-        }
-        if ($k === 'ansage_token_herkunft') { continue; }     // S2: nie aus einer Datei
-        if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
-            $s2_g = '';
-            $s2_r = ansage_regeln_wert($w, $s2_g);
-            if ($s2_r === null) { $mangel[] = by_t('EINST.SICH_REGELN'); $namen[] = 'ansage_regeln'; continue; }
-            $neu['ansage_regeln'] = $s2_r;
-            $anzahl++;
-            continue;
-        }
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(by_t('EINST.SICH_FREMD'),
-                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
-            $namen[] = (string) $k;
-            continue;
-        }
-        if (!by_wert_taugt($w)) {
-            $mangel[] = sprintf(by_t('EINST.SICH_WERT'),
-                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
-            $namen[] = (string) $k;
-            continue;
-        }
-        if (isset($grenzen[$k])) {
-            $s = trim((string) $w);
-            if (!preg_match('/^-?[0-9]+$/', $s)
-                || (int) $s < $grenzen[$k][0] || (int) $s > $grenzen[$k][1]) {
-                $mangel[] = sprintf(by_t('EINST.SICH_BEREICH'),
-                                     htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
-                                     $grenzen[$k][0], $grenzen[$k][1]);
-                $namen[] = (string) $k;
-                continue;
-            }
-            $w = (int) $s;
-        } elseif (isset($regeln[$k])) {
-            list($by_taugt, $by_wert, $by_grund) = by_sicherung_regel($regeln[$k], $w);
-            if (!$by_taugt) {
-                $mangel[] = sprintf(by_t('EINST.SICH_REGEL'),
-                    htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'), by_t($by_grund));
-                $namen[] = (string) $k;
-                continue;
-            }
-            $w = $by_wert;
-        }
-        $neu[$k] = $w;
-        $anzahl++;
+        $schluessel[$k] = array(
+            'pruefen' => function ($w) use ($k) { $e = by_sicherung_wert($k, $w); return $e[1]; },
+            'wandeln' => function ($w) use ($k) { $e = by_sicherung_wert($k, $w); return $e[0]; },
+        );
     }
-    if ($anzahl === 0) {
-        $mangel[] = by_t('EINST.SICH_LEER');
+    /* Der ROHE Block tts der Datei: Regel 3 des Moduls setzt ein leeres Feld auf den geltenden Wert. Ob die
+     * Datei ein Sprechtoken TRAEGT, entscheidet aber die Datei selbst (Nr. 36 b) - den Block der Datei gibt
+     * das Modul seit 1.2.0 als 4. Argument an 'pruefen' (bis dahin hielt 'vorbehandeln' ihn fest). */
+    $tts = array_merge(array_keys(ansage_vorgaben()), ansage_geheim());
+    $tts_knoten = array();
+    if (by_mit_zielen()) {
+        $tts[] = 'ziele';
+        $tts_knoten['ziele'] = sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'));
     }
-    /* C9: die Paarregeln des Formulars. temp_min groesser als temp_max wird
-     * abgewiesen, nicht getauscht (der Dienst tauschte still); die
-     * Zieltemperatur der Vorklimatisierung muss dazwischen liegen. */
-    if (!$mangel) {
-        if ((int) $neu['temp_min'] > (int) $neu['temp_max']) {
-            $mangel[] = by_t('EINST.FEHLER_TEMP_TAUSCH');
-            $namen[] = 'temp_min';
-            $namen[] = 'temp_max';
-        } elseif ((int) $neu['abfahrt_temp'] < (int) $neu['temp_min']
-                  || (int) $neu['abfahrt_temp'] > (int) $neu['temp_max']) {
-            $mangel[] = sprintf(by_t('EINST.FEHLER_ABFAHRT_TEMP'), (int) $neu['abfahrt_temp'],
-                                (int) $neu['temp_min'], (int) $neu['temp_max']);
-            $namen[] = 'abfahrt_temp';
+    $schluessel['tts'] = sicherung_block($tts, $tts_knoten) + array(
+        'sichern' => 'ansage_sicherung_bereinigen',
+        /* Nr. 36 b (seit 0.9.23): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei
+         * eines (auch als Liste, Zahl oder null), stammt sie nicht aus "Einstellungen sichern" und wird
+         * abgewiesen; die geltenden Sprechtoken bleiben. Ausgabeart, Adresse und Vorlage werden wie im
+         * Formular geprueft (Heimnetz). */
+        'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+            $tm = ansage_sicherung_mangel($roh);
+            if ($tm) {
+                return sprintf(by_t('EINST.SICH_TTS_TOKEN'), htmlspecialchars(implode(', ', $tm), ENT_QUOTES, 'UTF-8'));
+            }
+            $g = '';
+            if (ansage_wert_pruefen($w, $g, by_ansage_modi()) === null) {
+                return sprintf(by_t('EINST.SICH_TTS'), htmlspecialchars(ansage_kennung_text($g, by_ansage_k()),
+                    ENT_QUOTES, 'UTF-8'));
+            }
+            return '';
+        },
+        'wandeln' => function ($w) { $g = ''; return ansage_wert_pruefen($w, $g, by_ansage_modi()); },
+    );
+    /* S2: ungueltig = abgewiesen, gueltig = in der Form von ansage_regeln_wert() uebernommen. */
+    $schluessel['ansage_regeln'] = sicherung_block(array_keys(ansage_regeln_vorgaben())) + array(
+        'pruefen' => function ($w) { $g = ''; return ansage_regeln_wert($w, $g) === null ? by_t('EINST.SICH_REGELN') : ''; },
+        'wandeln' => function ($w) { $g = ''; return ansage_regeln_wert($w, $g); },
+    );
+    foreach (by_sicherung_spaeter() as $k) {
+        if (isset($schluessel[$k])) {
+            $schluessel[$k]['fehlt'] = 'behalten';
         }
     }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
-     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
-     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
-     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
-     * zurueck - quittiert mit "1 Wert uebernommen".
-     *
-     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
-     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
-     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
-     * Bestand ausgerollt (30 Linien).
-     *
-     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
-     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
-     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
-     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
-    $fehlend = array();
-    $spaeter = array();
-    foreach (array_keys(by_vorgaben()) as $fk) {
-        if (!array_key_exists($fk, $daten)) {
-            // Laden-1: eine Sicherung aus 0.9.21 oder frueher kennt die
-            // Schluessel der Ladeempfehlung nach Strompreis nicht. Sie
-            // behalten ihren jetzigen Wert (Bauform Heimkino/Matter2Lox,
-            // Verbesserungsbauten Welle 1) - sonst wiese dieser Bau jede
-            // aeltere Sicherung ab.
-            if (in_array($fk, by_sicherung_spaeter(), true)) {
-                $spaeter[] = $fk;
-                continue;
-            }
-            $fehlend[] = $fk;
+    $schluessel['zugang'] = sicherung_block(array('benutzer', 'passwort', 'pin', 'land'), array(
+        'benutzer' => array('fehlt' => 'behalten'), 'passwort' => array('fehlt' => 'behalten'),
+        'pin' => array('fehlt' => 'behalten'), 'land' => array('fehlt' => 'behalten')));
+    /* 0.9.42: Eine Sicherung von 0.9.21 bis 0.9.25 kennt den zweiten Haken (seit 0.9.26) nicht - der geltende
+     * Wert bleibt und wird genannt (K_FEHLT_BEHALTEN), auf einer frischen Anlage 0 = aus. */
+    $schluessel['gefahr_ein']['fehlt'] = 'behalten';
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-BYD-Autos',
+        'hinweis' => by_t('EINST.SICH_KOPF_HINWEIS'),
+        /* Die Fassung im Kopf kommt aus der Plugin-Datenbank bzw. plugin.cfg - keine fuenfte Stelle neben den
+         * vier, die Werkzeuge/fassung_setzen.py pflegt. */
+        'home' => isset($p['home']) ? (string) $p['home'] : '',
+        'ordner' => isset($p['plugin']) ? (string) $p['plugin'] : '',
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => $vorgaben,
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft'),
+        'teile' => array('zugang' => 'by_sicherung_zugang_lesen'),
+        'teile_flach' => array('zugang' => 'zugang_'),
+        'teile_jetzt' => array('zugang' => 'by_sicherung_zugang_felder'),
+        'quer' => 'by_sicherung_quer',
+        'uebersetzer' => 'by_sicherung_alt_erkennen',
+        'jetzt' => function () { return by_sicherung_jetzt(false); },
+        't' => 'by_t',
+        'e' => 'by_e',
+    );
+}
+
+/**
+ * 0.9.42: Eine Sicherung dieser Linie aus der Zeit vor dem Kennzeichen _plugin
+ * (0.9.21 bis 0.9.41) traegt den lesbaren Kopf _hinweis, den nur der
+ * Sichern-Knopf dieser Linie schreibt (by_t('EINST.SICH_KOPF_HINWEIS')): de
+ * "Sicherung der Einstellungen des Plugins BYD Autos. ...", en "Backup of the
+ * settings of the BYD Autos plugin. ..." - je Sprache EIN Wortlaut in allen 21
+ * Fassungen, gemessen 12.11.2026 an den Sprachdateien der Ordner und Archive.
+ * Daran wird sie erkannt. Eine Datei ohne diesen Kopf (0.9.3 bis 0.9.20 schrieben
+ * gar keinen) ist nicht sicher von einer fremden zu unterscheiden und wird
+ * abgewiesen (Entscheidung des Hausherrn 12.11.2026).
+ */
+function by_sicherung_alt_erkennen($d)
+{
+    if (!is_array($d) || !isset($d['_hinweis']) || !is_string($d['_hinweis'])) {
+        return null;
+    }
+    foreach (array('Sicherung der Einstellungen des Plugins BYD Autos.',
+                   'Backup of the settings of the BYD Autos plugin.') as $anfang) {
+        if (strpos($d['_hinweis'], $anfang) === 0) {
+            return $d;
         }
     }
-    if ($spaeter) {
-        $geltend = by_config(false);
-        foreach ($spaeter as $sk) {
-            if (array_key_exists($sk, $geltend)) {
-                $neu[$sk] = $geltend[$sk];
-            }
+    return null;
+}
+
+/**
+ * C9: die Paarregeln des Formulars (wie bis 0.9.41). temp_min groesser als
+ * temp_max wird abgewiesen, nicht getauscht (der Dienst tauschte still); die
+ * Zieltemperatur der Vorklimatisierung muss dazwischen liegen. Nur, wenn
+ * sonst nichts beanstandet ist - sonst stuende an der Stelle eines abgewiesenen
+ * Werts die Vorgabe. Rueckgabe fuer das Modul: Liste von array(Name, Text).
+ */
+function by_sicherung_quer($neu, $r)
+{
+    if (!empty($r['beanstandet'])) {
+        return array();
+    }
+    if ((int) $neu['temp_min'] > (int) $neu['temp_max']) {
+        return array(array('temp_min', by_t('EINST.FEHLER_TEMP_TAUSCH')));
+    }
+    if ((int) $neu['abfahrt_temp'] < (int) $neu['temp_min'] || (int) $neu['abfahrt_temp'] > (int) $neu['temp_max']) {
+        return array(array('abfahrt_temp', sprintf(by_t('EINST.FEHLER_ABFAHRT_TEMP'), (int) $neu['abfahrt_temp'],
+                                                    (int) $neu['temp_min'], (int) $neu['temp_max'])));
+    }
+    return array();
+}
+
+/**
+ * 0.9.42: vor dem Speichern (Rueckruf 'vorbereiten' des Moduls), wie bis 0.9.41
+ * in by_sicherung_lesen():
+ *  - tts: die Spaetliste der weiteren Ziele (fehlt 'ziele' in der Sicherung,
+ *    gelten die jetzigen, genannt in $spaet), dann mit dem geltenden Block
+ *    vervollstaendigt, und die geltenden Sprechtoken bleiben;
+ *  - ansage_token_herkunft kommt aus dem geltenden Stand (nie aus der Datei);
+ *  - die Zugangsdaten zugang_<feld> gehen nicht in byd.json, sondern nach $zug
+ *    (geschrieben in by_sicherung_nachziehen()).
+ */
+function by_sicherung_vorbereiten(array $neu, $jetzt, array $r, &$zug, &$spaet)
+{
+    $zug = array();
+    $spaet = array();
+    if (!in_array('tts', $r['fehlt_behalten'], true) && isset($neu['tts']) && is_array($neu['tts'])) {
+        $tj = by_tts(false);
+        $t = $neu['tts'];
+        if (function_exists('ansage_sicherung_spaet')) {
+            list($t, $spaet) = ansage_sicherung_spaet($t, $tj);
+        }
+        list($tv) = ansage_vervollstaendigen($t + $tj, 'aus');
+        $neu['tts'] = ansage_sicherung_tokens_behalten($tv, $tj);
+    }
+    $neu['ansage_token_herkunft'] = (is_array($jetzt) && isset($jetzt['ansage_token_herkunft']))
+        ? $jetzt['ansage_token_herkunft'] : array();
+    // Seit Modul 1.2.0 kommen die Zugangsdaten als Teil (r['teile']['zugang']), nicht mehr in $neu.
+    foreach (array('benutzer', 'passwort', 'pin', 'land') as $f) {
+        $zug[$f] = isset($r['teile']['zugang'][$f]) ? (string) $r['teile']['zugang'][$f] : '';
+    }
+    return $neu;
+}
+
+/**
+ * 0.9.42: nach dem Speichern (Rueckruf 'nachziehen' des Moduls): die Hinweise
+ * von bis 0.9.41 (Sprachausgabe unbekannt, Spaetliste), die Zugangsdaten in
+ * zugang.json (0600) - nur, wenn die Sicherung sie traegt; ein leeres Feld hat
+ * das Modul schon durch den geltenden Wert ersetzt -, die Abodatei des Gateways
+ * nach dem zurueckgespielten Praefix (wie beim Speichern im Reiter MQTT), und
+ * der Dienst: laeuft er, wird er neu gestartet, damit er mit den
+ * zurueckgespielten Werten arbeitet; die Meldung sagt, was mit ihm geschah.
+ * Rueckgabe: die Hinweise (fertig maskiert); Fehler und Stoerungen gehen in
+ * $fehler und $stoerungen.
+ */
+function by_sicherung_nachziehen(array $neu, array $r, array $zug, array $spaet, array &$fehler, array &$stoerungen)
+{
+    $h = array();
+    if (in_array('tts', $r['fehlt_behalten'], true)) {
+        $h[] = by_t('EINST.SICH_OHNE_ANSAGE');
+    }
+    if ($spaet) {
+        $h[] = sprintf(by_t('EINST.SICH_SPAET'), by_e(implode(', ', $spaet)));
+    }
+    $ohne = 0;
+    foreach (array('benutzer', 'passwort', 'pin', 'land') as $f) {
+        if (in_array('zugang_' . $f, $r['fehlt_behalten'], true)) {
+            $ohne++;
         }
     }
-    if ($fehlend) {
-        $namen = array_merge($namen, $fehlend);
-        $mangel[] = sprintf(by_t('EINST.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
+    if ($ohne === 4) {
+        $h[] = by_t('EINST.SICH_OHNE_ZUGANG');
+    } elseif (by_zugang_speichern(isset($zug['benutzer']) && $zug['benutzer'] !== '' ? $zug['benutzer'] : null,
+            isset($zug['passwort']) ? $zug['passwort'] : '', isset($zug['pin']) ? $zug['pin'] : '',
+            isset($zug['land']) && $zug['land'] !== '' ? $zug['land'] : null)) {
+        $h[] = by_t('EINST.SICH_ZUGANG_UEBERNOMMEN');
+    } else {
+        $fehler[] = by_t('EINST.FEHLER_ZUGANG_SPEICHERN');
     }
-    /* C9: ein LEERES Token heisst "kein Token gesichert" - eingesetzt wird das
-     * geltende. Bis 0.9.19 wurde '' gespeichert, und der naechste
-     * Seitenaufruf wuerfelte still ein neues. Gibt es keines, entsteht es beim
-     * naechsten Seitenaufruf - mit Protokollzeile (by_token()). */
-    if (!$mangel && $neu['aktionstoken'] === '') {
-        $geltend = by_config(false);
-        $neu['aktionstoken'] = trim((string) (isset($geltend['aktionstoken'])
-            ? $geltend['aktionstoken'] : ''));
+    $abo = by_abodatei_nachfuehren((string) $neu['mqtt_topic']);
+    if ($abo === 'neu') {
+        $h[] = sprintf(by_t('MQTT.ABODATEI_NEU'), by_e($neu['mqtt_topic'] . '/#'));
+    } elseif ($abo === 'fehler') {
+        $stoerungen[] = by_t('MQTT.ABODATEI_FEHLER');
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? array() : $zugang, $mangel ? array() : $spaet);
+    if (by_dienst_pid() > 0) {
+        /* by_dienst() gibt array(ok, Ausgabe) zurueck - der Rueckgabewert allein sagt nichts. */
+        list($ok, $aus) = by_dienst('restart');
+        $h[] = $ok ? by_t('EINST.SICH_DIENST_NEU') : by_t('EINST.SICH_DIENST_FEHL') . ' ' . by_e($aus);
+    } else {
+        $h[] = by_t('EINST.SICH_DIENST_AUS');
+    }
+    return $h;
 }
 
 /* ==================================================================
