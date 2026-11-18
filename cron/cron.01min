@@ -15,6 +15,20 @@
 # Gruppe 42 (0.9.29): zuerst der Waechter der Befehlsbruecke (startet sie nur mit dem Haken
 # "Befehle ueber MQTT annehmen"), dann der Dienstwaechter; dessen Fehlerausgabe nach cron.err
 # (Regeln/03).
+# Upgrade-Marke (Regeln/06, Entscheidung des Hausherrn 18.11.2026, Frage 60; Bauart Renault-NG 2.1.37):
+# waehrend einer Aktualisierung ruht dieser Takt. preupgrade.sh legt die Marke neben dem Datenordner
+# mit der Unixzeit an, postinstall.sh oder postupgrade.sh entfernt sie. Ist sie juenger als 3600 s,
+# endet der Takt hier still, vor jedem Schreiben. Eine Marke, die 3600 s oder aelter ist, in der Zukunft
+# liegt oder keine Unixzeit enthaelt, gilt nicht - eine abgebrochene Aktualisierung legt den Takt nicht
+# fuer immer still. Liefert die Uhr keine Zahl, gilt die Marke (geschlossen ausfallen).
+UPGM_MARKE="REPLACELBPDATADIR.upgrade_laeuft"
+if [ -f "$UPGM_MARKE" ]; then
+    upgm_jetzt=$(date +%s 2>/dev/null); upgm_seit=$(cat "$UPGM_MARKE" 2>/dev/null)
+    case "$upgm_seit" in ''|*[!0-9]*) upgm_seit=0 ;; esac
+    case "$upgm_jetzt" in ''|*[!0-9]*|0) exit 0 ;; esac
+    if [ "$upgm_seit" -le "$upgm_jetzt" ] && [ $((upgm_jetzt - upgm_seit)) -lt 3600 ]; then exit 0; fi
+fi
+
 BBSH="REPLACELBPBINDIR/befehlsbruecke.sh"
 [ -f "$BBSH" ] && /bin/bash "$BBSH" waechter >/dev/null 2>&1
 mkdir -p "REPLACELBPLOGDIR" 2>/dev/null

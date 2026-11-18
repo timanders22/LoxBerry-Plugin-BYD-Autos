@@ -285,6 +285,19 @@
  *     Sonst '' wie ohne $LBHOMEDIR - diesen Fall kennt jeder Aufrufer. Mit einer vollstaendigen Wurzel aendert sich nichts.
  *   - Ein angegebenes $home bleibt, wie es ist ('' = keine Datenbank). Wer ansage_wurzel_gilt() selbst ruft, prueft
  *     function_exists('ansage_wurzel_gilt').
+ *
+ * 1.4.4 (18.11.2026, Entscheidung des Hausherrn 18.11.: Fragen 55, 56, 58, 59), nur ergaenzend:
+ *   - ansage_unbekannte_verwerfen(): bis hierher stand dieselbe Funktion byte-gleich als tts_unbekannte_verwerfen() in
+ *     sieben Linien (Abfahrtsassistent, Alexa-NG, AudiConnect, BYD-Autos, Beschattungswaechter, Skoda-Connect-NG,
+ *     VolkswagenID). Gleiche Bedeutung und Rueckgabe; dazu wahlfrei: ohne Pruefung der Linie gilt ansage_wert_pruefen().
+ *   - ansage_block_pruefen(): EIN Weg fuer Lesen und Laufzeit - unbekannte verwerfen, jeden uebrigen Eintrag einzeln
+ *     pruefen und JEDEN ungueltigen sammeln, den ganzen Block pruefen und vervollstaendigen. Rueckgabe in fester Form
+ *     (ansage_block_leer()): 'block' (null = ungueltig), 'roh', 'verworfen', 'ungueltig', 'grund'.
+ *   - Ein Meldeweg fuer alle: ansage_block_meldungen() (Saetze K_BLOCK_VERWORFEN, K_BLOCK_UNGUELTIG, K_BLOCK_AUS in
+ *     sprachausgabe_texte.json), ansage_block_zeile() (eine Zeile fuers Protokoll) und ansage_block_kennzeichen()
+ *     (aendert sich genau dann, wenn sich die Meldung aendert - fuer "einmal je Aenderung").
+ *   - Nichts davon wird von einer bestehenden Funktion gerufen: eine Linie, die die neuen Funktionen nicht ruft, laeuft
+ *     byte- und verhaltensgleich mit 1.4.3. Wer sie ruft, prueft function_exists('ansage_block_pruefen').
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -303,7 +316,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.4.3');
+define('ANSAGE_FASSUNG', '1.4.4');
 
 /** Ab dieser Fassung nimmt das Plugin Dashboard Ansagen an (seit 1.4.0). */
 define('ANSAGE_TAFEL_MIN', '0.9.40');
@@ -2747,7 +2760,9 @@ function ansage_sprachschluessel()
                'HOMEPOD_HINWEIS', 'L_R_HOMEPOD', 'R_HOMEPOD_HINWEIS', 'L_R_HOMEPOD_GERAET', 'M_R_HOMEPOD_GERAET', 'K_TTS_HOMEPOD_GERAET', 'K_TTS_HOMEPOD_TOKEN',
                'T_HOMEPOD_ZU', 'T_HOMEPOD_OK', 'T_HOMEPOD_FEHL', 'K_HOMEPOD_KEIN_TOKEN', 'K_HOMEPOD_KEINE_ANTWORT', 'K_HOMEPOD_ANTWORT', 'K_HOMEPOD_FEHLT', 'K_HOMEPOD_UNERWARTET',
                'K_HOMEPOD_G_TOKEN', 'K_HOMEPOD_G_KEIN_TOKEN_EINGERICHTET', 'K_HOMEPOD_G_SPRECHEN_AUS', 'K_HOMEPOD_G_DIENST_LAEUFT_NICHT', 'K_HOMEPOD_G_GERAETE_OFFLINE', 'K_HOMEPOD_G_GERAET_UNBEKANNT', 'K_HOMEPOD_G_KEIN_GERAET', 'K_HOMEPOD_G_NUR_LOKAL', 'K_HOMEPOD_G_KEINE_GERAETE', 'K_HOMEPOD_G_KOPPLUNG_NOETIG', 'K_HOMEPOD_G_BIBLIOTHEK_FEHLT', 'K_HOMEPOD_G_STUNDENGRENZE',
-               'K_TAFEL_G_TOKEN', 'K_TAFEL_G_ANSAGE_AUS', 'K_TAFEL_G_KEINE_TAFEL', 'K_TAFEL_G_AKTUALISIERUNG');
+               'K_TAFEL_G_TOKEN', 'K_TAFEL_G_ANSAGE_AUS', 'K_TAFEL_G_KEINE_TAFEL', 'K_TAFEL_G_AKTUALISIERUNG',
+               // seit 1.4.4: ein Meldeweg fuer den geprueften Block
+               'K_BLOCK_VERWORFEN', 'K_BLOCK_UNGUELTIG', 'K_BLOCK_AUS');
     foreach (ansage_modi() as $mo) { $s[] = 'O_' . strtoupper($mo); }
     foreach (array('ALEXA', 'GOOGLE') as $a) {
         foreach (array('_HINWEIS', '_GERAET_HINWEIS', '_LAUT_HINWEIS', '_TOKEN_HINWEIS') as $x) { $s[] = $a . $x; }
@@ -4927,6 +4942,101 @@ function ansage_selbsttest()
     $pruef('143 angegebene wurzel bleibt', array(ansage_lbhome(''), ansage_lbhome('/x')), array('', '/x'));
     $pruef('143 fassung', version_compare(ANSAGE_FASSUNG, '1.4.3', '>='), true);
 
+    // --- 1.4.4: unbekannte verwerfen, Block pruefen, ein Meldeweg (Fragen 55, 56, 58, 59) ---
+    $p144 = function ($t) { $g = ''; return ansage_wert_pruefen($t, $g, array('aus', 'musicserver', 'alexang', 'cc4lox')) === null ? $g : ''; };
+    // die Fassung der sieben Linien (bis 1.4.3 dort als tts_unbekannte_verwerfen()), hier als Vergleich
+    $alt144 = function ($tts, $pruefen) {
+        if (!is_array($tts)) { return array($tts, array()); }
+        $rest = $tts;
+        $namen = array();
+        foreach ($tts as $s => $w) {
+            $g = (string) call_user_func($pruefen, array($s => $w));
+            if (strpos($g, 'TTS_EINTRAG|') === 0) { unset($rest[$s]); $namen[] = 'tts.' . substr($g, strlen('TTS_EINTRAG|')); }
+        }
+        return ($namen && $rest) ? array($rest, $namen) : array($tts, array());
+    };
+    $b144 = array('mode' => 'alexang', 'alexa_token' => $TOK, 'alexa_geraet' => 'Kueche', 'port' => 7091);
+    $faelle144 = array(
+        'gueltig' => $b144,
+        'ein unbekannter' => $b144 + array('neu_x' => 1),
+        'zwei unbekannte' => $b144 + array('neu_x' => 1, 'neu|y' => array(2)),
+        'unbekannt und ungueltig' => array('port' => 0, 'neu_x' => 1) + $b144,
+        'nur unbekannte' => array('neu_x' => 1, 'neu_y' => 2),
+        'leer' => array(),
+        'kein feld' => 'x',
+        'ungueltiger modus' => array('mode' => 'boese', 'neu_x' => 1),
+    );
+    foreach ($faelle144 as $n144 => $f144) {
+        $pruef('144 wie die sieben linien: ' . $n144, ansage_unbekannte_verwerfen($f144, $p144), $alt144($f144, $p144));
+    }
+    $pruef('144 verwerfen: block ohne den unbekannten, token bleibt', ansage_unbekannte_verwerfen($b144 + array('neu_x' => 1), $p144), array($b144, array('tts.neu_x')));
+    $pruef('144 verwerfen: name ohne trennzeichen', ansage_unbekannte_verwerfen($b144 + array('neu|y' => 1), $p144)[1], array('tts.neu/y'));
+    $pruef('144 verwerfen: nur unbekannte bleiben stehen', ansage_unbekannte_verwerfen(array('neu_x' => 1), $p144), array(array('neu_x' => 1), array()));
+    $pruef('144 verwerfen ohne pruefung der linie: das modul prueft', ansage_unbekannte_verwerfen($b144 + array('neu_x' => 1, 'port' => 0)),
+           array($b144 + array('port' => 0), array('tts.neu_x')));
+
+    // Ein Fehlschlag soll eine Zeile ergeben, keinen Abbruch: Zugriffe auf den Block ueber diese beiden Helfer.
+    $feld144 = function ($b, $s) { return (is_array($b) && array_key_exists($s, $b)) ? $b[$s] : '(fehlt)'; };
+    $zahl144 = function ($b) { return is_array($b) ? count($b) : -1; };
+    $e144 = ansage_block_pruefen($b144 + array('neu_x' => 1), array('aus', 'alexang'));
+    $pruef('144 block: verworfen genannt', $e144['verworfen'], array('tts.neu_x'));
+    $pruef('144 block: gueltig, vervollstaendigt, token bleibt', array(is_array($e144['block']), $zahl144($e144['block']), $feld144($e144['block'], 'alexa_token'), $e144['ungueltig'], $e144['grund']),
+           array(true, 18, $TOK, array(), ''));
+    $pruef('144 block: roh ohne den unbekannten', $e144['roh'], $b144);
+    $pruef('144 block: zahl in normalform', $feld144(ansage_block_pruefen(array('port' => '7091'))['block'], 'port'), 7091);
+    $e144 = ansage_block_pruefen(array('mode' => 'alexang', 'port' => 0, 'volume' => 500, 'neu_x' => 1), array('aus', 'alexang'));
+    $pruef('144 block: jeder ungueltige gesammelt, nicht nur der erste', $e144['ungueltig'],
+           array('tts.port' => 'UNTER|tts.port|AUSSERHALB|1|65535', 'tts.volume' => 'UNTER|tts.volume|AUSSERHALB|1|100'));
+    $pruef('144 block: ungueltig heisst kein block, grund des ganzen', array($e144['block'], $e144['grund'], $e144['verworfen']),
+           array(null, 'UNTER|tts.port|AUSSERHALB|1|65535', array('tts.neu_x')));
+    $e144 = ansage_block_pruefen(array('mode' => 'cc4lox'), array('aus', 'alexang'));
+    $pruef('144 block: modi gelten', array($e144['block'], $e144['ungueltig']), array(null, array('tts.mode' => 'TTS_MODUS')));
+    $e144 = ansage_block_pruefen('x');
+    $pruef('144 block: kein feld', array($e144['block'], $e144['ungueltig'], $e144['grund'], $e144['roh']), array(null, array('tts' => 'KEIN_FELD'), 'KEIN_FELD', null));
+    $e144 = ansage_block_pruefen(array('neu_x' => 1));
+    $pruef('144 block: nur unbekannte - ungueltig, nicht verworfen', array($e144['block'], $e144['verworfen'], $e144['ungueltig']),
+           array(null, array(), array('tts.neu_x' => 'TTS_EINTRAG|neu_x')));
+    $pruef('144 block: leer gilt als aus', $feld144(ansage_block_pruefen(array())['block'], 'mode'), 'aus');
+    $e144 = ansage_block_pruefen(array('mode' => 'aus', 'neu_x' => 1, 'port' => 1), null, $p144);
+    $pruef('144 block mit pruefung der linie: rest unveraendert vervollstaendigt', array($e144['verworfen'], $feld144($e144['block'], 'port'), $zahl144($e144['block'])),
+           array(array('tts.neu_x'), 1, 18));
+    $zwei144 = function ($t) { return (isset($t['mode'], $t['port']) && $t['mode'] === 'aus' && $t['port'] === 1) ? 'ZWEI' : ''; };
+    $e144 = ansage_block_pruefen(array('mode' => 'aus', 'port' => 1), null, $zwei144);
+    $pruef('144 block: regel ueber zwei eintraege steht unter tts', array($e144['block'], $e144['ungueltig'], $e144['grund']), array(null, array('tts' => 'ZWEI'), 'ZWEI'));
+    $einzel144 = function ($t) { return (count($t) === 1 && isset($t['port'])) ? 'EINZELN' : ''; };
+    $e144 = ansage_block_pruefen(array('mode' => 'aus', 'port' => 1), null, $einzel144);
+    $pruef('144 block: nur der eintrag allein abgewiesen, sein grund gilt', array($e144['block'], $e144['ungueltig'], $e144['grund']),
+           array(null, array('tts.port' => 'EINZELN'), 'EINZELN'));
+
+    $t144 = array('t' => function ($s) {
+        $d = array('ANSAGE.K_BLOCK_VERWORFEN' => 'V[%s]', 'ANSAGE.K_BLOCK_UNGUELTIG' => 'U[%s|%s]', 'ANSAGE.K_BLOCK_AUS' => 'AUS',
+                   'ANSAGE.K_AUSSERHALB' => 'zwischen %s und %s', 'ANSAGE.K_TTS_MODUS' => 'modus', 'ANSAGE.K_UNTER' => '%s: %s');
+        return isset($d[$s]) ? $d[$s] : $s;
+    });
+    $pruef('144 meldung: nichts', ansage_block_meldungen(ansage_block_pruefen($b144), $t144), array());
+    $pruef('144 meldung: verworfen ein satz fuer alle', ansage_block_meldungen(array('verworfen' => array('tts.a', 'tts.b')), $t144), array('V[tts.a, tts.b]'));
+    $m144 = ansage_block_meldungen(ansage_block_pruefen(array('mode' => 'alexang', 'port' => 0, 'volume' => 500, 'neu_x' => 1)), $t144);
+    $pruef('144 meldung: verworfen, je ungueltiger ein satz ohne doppelten namen, dann aus', $m144,
+           array('V[tts.neu_x]', 'U[tts.port|zwischen 1 und 65535]', 'U[tts.volume|zwischen 1 und 100]', 'AUS'));
+    $pruef('144 meldung: aus abschaltbar', ansage_block_meldungen(ansage_block_pruefen(array('mode' => 'boese')), $t144, array('aus' => false)), array('U[tts.mode|modus]'));
+    $pruef('144 meldung: steuerzeichen im namen', ansage_block_meldungen(array('verworfen' => array("tts.a\nb")), $t144), array('V[tts.a?b]'));
+    $m144 = implode(' ', ansage_block_meldungen(ansage_block_pruefen(array('alexa_token' => 'Geheim-12', 'google_token' => 'zu!kurz', 'port' => 99999)), $t144));
+    $pruef('144 meldung: kein wert, kein token', array(strpos($m144, '99999'), strpos($m144, 'Geheim'), strpos($m144, 'kurz'), strpos($m144, 'tts.port') !== false),
+           array(false, false, false, true));
+    $pruef('144 zeile', ansage_block_zeile(array('verworfen' => array('tts.a')), $t144), 'V[tts.a]');
+    $pruef('144 zeile leer', ansage_block_zeile(array(), $t144), '');
+    $pruef('144 zeile: alle saetze, eine zeile', ansage_block_zeile(ansage_block_pruefen(array('port' => 0, 'neu_x' => 1)), $t144),
+           'V[tts.neu_x] U[tts.port|zwischen 1 und 65535] AUS');
+    $pruef('144 kennzeichen: anderer ungueltiger eintrag, anderes kennzeichen',
+           ansage_block_kennzeichen(ansage_block_pruefen(array('port' => 0))) === ansage_block_kennzeichen(ansage_block_pruefen(array('volume' => 0))), false);
+    $pruef('144 kennzeichen leer', ansage_block_kennzeichen(ansage_block_pruefen($b144)), '');
+    $kz144 = ansage_block_kennzeichen(array('verworfen' => array('tts.a')));
+    $pruef('144 kennzeichen gesetzt, aendert sich mit der lage', array(strlen($kz144), $kz144 === ansage_block_kennzeichen(array('verworfen' => array('tts.a'))),
+           $kz144 === ansage_block_kennzeichen(array('verworfen' => array('tts.b')))), array(40, true, false));
+    $pruef('144 kennzeichen unabhaengig vom wert', ansage_block_kennzeichen(ansage_block_pruefen(array('port' => 0))), ansage_block_kennzeichen(ansage_block_pruefen(array('port' => -5))));
+    $pruef('144 saetze in der schluesselliste', count(array_intersect(array('K_BLOCK_VERWORFEN', 'K_BLOCK_UNGUELTIG', 'K_BLOCK_AUS'), ansage_sprachschluessel())), 3);
+    $pruef('144 fassung', version_compare(ANSAGE_FASSUNG, '1.4.4', '>='), true);
+
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();
     $pruef('sprachschluessel eindeutig', count($sl), count(array_unique($sl)));
@@ -6903,6 +7013,157 @@ function ansage_sdk_ruf($fn)
             if (array_key_exists($g, $alt)) { $GLOBALS[$g] = $alt[$g]; } else { unset($GLOBALS[$g]); }
         }
     }
+}
+
+/* ------------------------------------------------------------------
+ * Der gepruefte Block und ein Meldeweg fuer alle Linien (seit 1.4.4)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Unbekannte Unterschluessel im Block tts verwerfen (Frage 55, Entscheidung des Hausherrn 18.11.2026). Bis 1.4.3 stand
+ * diese Funktion als tts_unbekannte_verwerfen($tts, $pruefen) byte-gleich in sieben Linien; mit $pruefen ist sie es
+ * hier in Bedeutung und Rueckgabe.
+ * $pruefen: function (array $teil) -> '' oder Kennung, fuer EINEN Eintrag allein. null (seit 1.4.4 wahlfrei):
+ * ansage_wert_pruefen($teil, $g). Eine Einschraenkung der Ausgabearten ($modi) aendert nicht, was unbekannt ist (sie macht
+ * einen bekannten Eintrag ungueltig, nie unbekannt) - deshalb hat die Funktion keinen Parameter dafuer.
+ * Unbekannt heisst: die Pruefung nennt den Eintrag allein mit TTS_EINTRAG|<name>. Ein bekannter Eintrag mit ungueltigem
+ * Wert bleibt stehen (ihn weist die Pruefung des ganzen Blocks ab). Bliebe nichts Bekanntes uebrig, bleibt der Block, wie
+ * er ist, und die Liste ist leer. Rueckgabe: array(Block, Liste der Namen 'tts.<eintrag>'); nie ein Wert.
+ */
+function ansage_unbekannte_verwerfen($tts, $pruefen = null)
+{
+    if (!is_array($tts)) { return array($tts, array()); }
+    if ($pruefen === null) {
+        $pruefen = function ($t) {
+            $g = '';
+            return ansage_wert_pruefen($t, $g) === null ? $g : '';
+        };
+    }
+    $rest = $tts;
+    $namen = array();
+    foreach ($tts as $s => $w) {
+        $g = (string) call_user_func($pruefen, array($s => $w));
+        if (strpos($g, 'TTS_EINTRAG|') === 0) {
+            unset($rest[$s]);
+            $namen[] = 'tts.' . substr($g, strlen('TTS_EINTRAG|'));
+        }
+    }
+    return ($namen && $rest) ? array($rest, $namen) : array($tts, array());
+}
+
+/** Die feste Form eines Pruefergebnisses (ansage_block_pruefen()): nichts verworfen, nichts ungueltig, kein Block. */
+function ansage_block_leer()
+{
+    return array('block' => null, 'roh' => null, 'verworfen' => array(), 'ungueltig' => array(), 'grund' => '');
+}
+
+/**
+ * Den Block tts pruefen - EIN Weg fuer Lesen und Laufzeit (Fragen 56 und 58, 18.11.2026).
+ *   1. unbekannte Unterschluessel verwerfen (ansage_unbekannte_verwerfen(), mit $pruefen bzw. ansage_wert_pruefen()),
+ *   2. jeden uebrigen Eintrag einzeln pruefen und JEDEN ungueltigen sammeln, nicht nur den ersten,
+ *   3. den ganzen Rest pruefen und mit 'aus' vervollstaendigen.
+ * Rueckgabe (Form wie ansage_block_leer()):
+ *   'block'      der gepruefte, vervollstaendigte Block; null, wenn er ungueltig ist. Was dann gilt, entscheidet die
+ *                Linie (Stamm-Regel seit 1.3.0: ein ungueltiger gilt als 'aus', ansage_block_oder_aus()).
+ *   'roh'        der Block ohne die verworfenen Eintraege, sonst unveraendert (null, wenn kein Feld)
+ *   'verworfen'  Namen 'tts.<eintrag>' der verworfenen unbekannten Eintraege
+ *   'ungueltig'  Name => Kennung (ohne Wert) jedes abgewiesenen Eintrags; 'tts' => 'KEIN_FELD', wenn kein Feld
+ *   'grund'      '' oder die Kennung der Pruefung des ganzen Blocks
+ * $pruefen wie bei ansage_unbekannte_verwerfen(); mit ihr wird der Rest unveraendert vervollstaendigt (die Linie
+ * normalisiert selbst), ohne sie in der Form von ansage_wert_pruefen(). Schreibt nichts, fragt kein Netz.
+ */
+function ansage_block_pruefen($tts, $modi = null, $pruefen = null)
+{
+    $e = ansage_block_leer();
+    if (!is_array($tts)) {
+        $e['ungueltig'] = array('tts' => 'KEIN_FELD');
+        $e['grund'] = 'KEIN_FELD';
+        return $e;
+    }
+    $mit_linie = ($pruefen !== null);
+    if (!$mit_linie) {
+        $pruefen = function ($t) use ($modi) {
+            $g = '';
+            return ansage_wert_pruefen($t, $g, $modi) === null ? $g : '';
+        };
+    }
+    list($rest, $e['verworfen']) = ansage_unbekannte_verwerfen($tts, $pruefen);
+    $e['roh'] = $rest;
+    foreach ($rest as $s => $w) {
+        $g = (string) call_user_func($pruefen, array($s => $w));
+        if ($g !== '') { $e['ungueltig']['tts.' . ansage_kuerzen((string) $s, 40)] = $g; }
+    }
+    if ($mit_linie) {
+        $e['grund'] = (string) call_user_func($pruefen, $rest);
+        $p = $e['grund'] === '' ? $rest : null;
+    } else {
+        $g = '';
+        $p = ansage_wert_pruefen($rest, $g, $modi);
+        $e['grund'] = $p === null ? $g : '';
+    }
+    if ($p !== null && !$e['ungueltig']) {
+        list($e['block']) = ansage_vervollstaendigen($p, 'aus');
+        return $e;
+    }
+    /* Ungueltig. Jede Beanstandung hat einen Namen: weist nur die Pruefung des ganzen Blocks ab (eine Regel ueber zwei
+     * Eintraege), steht sie unter 'tts'; weist nur ein Eintrag allein ab, ist sein Grund auch der des Blocks. */
+    if (!$e['ungueltig']) { $e['ungueltig']['tts'] = $e['grund']; }
+    if ($e['grund'] === '') { $e['grund'] = (string) reset($e['ungueltig']); }
+    return $e;
+}
+
+/** Ein Name fuer einen Satz: ohne Steuerzeichen (eine Zeile im Protokoll bleibt eine Zeile). */
+function ansage_block_name($n)
+{
+    return (string) preg_replace('/[\x00-\x1F\x7F]/', '?', (string) $n);
+}
+
+/**
+ * Die Saetze zu einem Ergebnis von ansage_block_pruefen() (Frage 59): Klartext in der Sprache der Oberflaeche ($k['t']),
+ * UNMASKIERT - im HTML durch die Maskierfunktion der Linie, im Protokoll so. Nie ein Wert, nie ein Token.
+ *   - ein Satz fuer alle verworfenen Eintraege (K_BLOCK_VERWORFEN),
+ *   - ein Satz je ungueltigem Eintrag (K_BLOCK_UNGUELTIG: Name und Grund aus ansage_kennung_text(); ein UNTER|feld|
+ *     am Anfang der Kennung faellt weg, der Name steht schon im Satz),
+ *   - ist der Block ungueltig ('block' null) und $opt['aus'] nicht false: K_BLOCK_AUS (die Stamm-Regel: er gilt als aus).
+ * $e darf ein Teil der festen Form sein (z. B. nur 'verworfen'); fehlende Teile gelten als leer. Leeres Feld = nichts.
+ */
+function ansage_block_meldungen(array $e, array $k = array(), array $opt = array())
+{
+    $e += ansage_block_leer();
+    $m = array();
+    $v = is_array($e['verworfen']) ? $e['verworfen'] : array();
+    if ($v) {
+        $m[] = sprintf(ansage_t('K_BLOCK_VERWORFEN', $k), implode(', ', array_map('ansage_block_name', $v)));
+    }
+    $u = is_array($e['ungueltig']) ? $e['ungueltig'] : array();
+    foreach ($u as $n => $kennung) {
+        $t = explode('|', (string) $kennung);
+        if (count($t) >= 3 && $t[0] === 'UNTER') { $kennung = implode('|', array_slice($t, 2)); }
+        $m[] = sprintf(ansage_t('K_BLOCK_UNGUELTIG', $k), ansage_block_name($n), ansage_block_name(ansage_kennung_text($kennung, $k)));
+    }
+    if ($u && $e['block'] === null && !(isset($opt['aus']) && $opt['aus'] === false)) {
+        $m[] = ansage_t('K_BLOCK_AUS', $k);
+    }
+    return $m;
+}
+
+/** Eine Zeile fuers Protokoll der Linie: alle Saetze hintereinander, '' = nichts zu melden. */
+function ansage_block_zeile(array $e, array $k = array(), array $opt = array())
+{
+    return implode(' ', ansage_block_meldungen($e, $k, $opt));
+}
+
+/**
+ * Kennzeichen der Lage: '' ohne Meldung, sonst ein Pruefwert ueber Namen und Kennungen (keine Werte, keine Saetze -
+ * unabhaengig von der Sprache). Die Linie schreibt die Zeile ins Protokoll, wenn sich das Kennzeichen geaendert hat.
+ */
+function ansage_block_kennzeichen(array $e)
+{
+    $e += ansage_block_leer();
+    $v = is_array($e['verworfen']) ? array_values($e['verworfen']) : array();
+    $u = is_array($e['ungueltig']) ? $e['ungueltig'] : array();
+    if (!$v && !$u) { return ''; }
+    return sha1(json_encode(array($v, $u, $e['block'] === null), JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
 }
 
 }   // Ende des Blocks "noch keine Abschrift geladen"

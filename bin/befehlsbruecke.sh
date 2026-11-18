@@ -20,6 +20,7 @@
 # Ausgaben im Fehlerfall enthalten die Woerter "gestartet" und "laeuft" nicht (postinstall.sh prueft
 # auf *gestartet*|*laeuft*, Gedaechtnis "Dienststart").
 #
+# 1.0.3 (18.11.2026): start fragt die Upgrade-Marke vor jedem Anlegen (Frage 70).
 # 1.0.1 (Pflegewelle 22, 25.10.2026), rein ergaenzend:
 # - Wurzel geprueft (B1): nur wo config/plugins, data/plugins und config/system/general.json liegen
 #   (Regeln/06); Ordnername aus LBPPLUGINDIR gegen die Ausschlussliste. Sonst nichts angelegt, Rueckgabe 1.
@@ -139,11 +140,8 @@ fi
 
 # start (1.0.1: root vor dem Anlegen pruefen - als root entsteht nichts)
 if [ "$(id -u)" = "0" ]; then echo "Nicht als root starten." >&2; exit 1; fi
-mkdir -p "$LDIR" 2>/dev/null
-mkdir -p -m 0700 "$DDIR" 2>/dev/null
-chmod 0700 "$DDIR" 2>/dev/null
-exec 8>"$DDIR/dienst.lock" || { echo "Sperrdatei nicht anlegbar ($DDIR)."; exit 1; }
-if ! flock -n 8; then echo "Ein anderer Start oder Halt haelt die Sperre."; exit 3; fi
+# 1.0.3 (Frage 70, Entscheidung des Hausherrn 18.11.2026): die Upgrade-Marke VOR jedem Anlegen fragen.
+# Bis 1.0.2 entstanden log/, befehle/ und dienst.lock, bevor die Marke den Start abwies.
 if [ -f "$MARKE" ]; then
     jetzt=$(date +%s 2>/dev/null); seit=$(cat "$MARKE" 2>/dev/null)
     case "$seit" in ''|*[!0-9]*) seit=0 ;; esac
@@ -155,6 +153,11 @@ if [ -f "$MARKE" ]; then
         echo "Aktualisierung im Gang - die Befehlsbruecke startet danach."; exit 0
     fi
 fi
+mkdir -p "$LDIR" 2>/dev/null
+mkdir -p -m 0700 "$DDIR" 2>/dev/null
+chmod 0700 "$DDIR" 2>/dev/null
+exec 8>"$DDIR/dienst.lock" || { echo "Sperrdatei nicht anlegbar ($DDIR)."; exit 1; }
+if ! flock -n 8; then echo "Ein anderer Start oder Halt haelt die Sperre."; exit 3; fi
 if laeuft; then echo "Befehlsbruecke laeuft bereits (PID $(alle_pids | tr '\n' ' '))."; exit 0; fi
 [ -n "$PHP" ] || { echo "php nicht gefunden."; exit 1; }
 SOLL=$("$PHP" "$SKRIPT" --soll 2>&1); RC=$?

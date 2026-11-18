@@ -55,9 +55,13 @@
  * 1.0.2 (Gruppe 36, Fensterbilanz 0.12.20, 28.10.2026), nur Zeilenenden, Tabellenfassung bleibt 1:
  * - bb_vorlage() verbindet mit CRLF wie die _Test.xml-Ausfuhren der Loxone Config (Regeln/07);
  *   Inhalt sonst byte-gleich. Selbsttest: Schlussprobe auf CRLF, Zahl der Faelle unveraendert.
+ *
+ * 1.0.3 (Frage 70, Entscheidung des Hausherrn 18.11.2026), Tabellenfassung bleibt 1:
+ * - bb_waechter() fragt die Upgrade-Marke vor jedem Anlegen (bb_waechter_mit()); bei frischer Marke
+ *   entsteht weder befehle/ noch waechter.lock. befehlsbruecke.sh start ebenso. Selbsttest: ein Fall mehr.
  */
 
-define('BB_FASSUNG', '1.0.2');
+define('BB_FASSUNG', '1.0.3');
 define('BB_ZUORDNUNG_FASSUNG', 1);
 define('BB_SPERRE_VORGABE', 60);
 define('BB_SPERRE_MAX', 3600);
@@ -1126,6 +1130,20 @@ function bb_waechter()
 {
     $p = bb_pfade();
     if (!$p) { return array(null, 'keine LoxBerry-Installation erkannt'); }
+    return bb_waechter_mit($p);
+}
+
+/**
+ * Ein Waechterlauf fuer die Pfade $p (getrennt von bb_waechter() fuer den Selbsttest, 1.0.3).
+ * 1.0.3 (Frage 70, Entscheidung des Hausherrn 18.11.2026): die Upgrade-Marke wird VOR jedem Anlegen
+ * gefragt. Bis 1.0.2 legte der Waechter befehle/ und waechter.lock an und fragte die Marke erst danach;
+ * in der Luecke zwischen purge_installation und postinstall.sh entstanden so befehle/, die Optionsdateien
+ * und waechter.lock, bei fehlender Konfiguration dazu waechter.json (in WSL nachgestellt 18.11.2026,
+ * 22 Linien mit Befehlsbruecke, Pruefung-Upgrade-Marke-Gruppe2/gruppe1_nachstellung_wsl.txt).
+ */
+function bb_waechter_mit(array $p)
+{
+    if (bb_marke_liegt($p)) { return array(null, 'Aktualisierung im Gang - nichts angelegt'); }
     // Zwei Takte in derselben Sekunde (Boot): der zweite Waechterlauf geht still. Die Sperre haelt nur
     // dieser PHP-Prozess; befehlsbruecke.sh schliesst geerbte Deskriptoren, der Dienst erbt sie nicht.
     if (!is_dir($p['daten'])) { @mkdir($p['daten'], 0700, true); }
@@ -1742,6 +1760,12 @@ function bb_selbsttest()
     @file_put_contents($mk['marke'], "kaputt\n");
     $pruef(!bb_marke_liegt($mk, 2000000000), 'Marke unlesbar: gilt nicht');
     $pruef(bb_marke_liegt($mk, false), 'Marke unlesbar, Uhr ungueltig: gilt (geschlossen)');
+    // 1.0.3: der Waechter legt bei frischer Marke nichts an (befehle/, waechter.lock)
+    @file_put_contents($mk['marke'], time() . "
+");
+    $w3 = isset($pe['daten']) ? bb_waechter_mit($pe) : array(false, '');
+    $pruef($w3[0] === null && !is_dir($pe['daten']) && !file_exists($pe['daten'] . '/waechter.lock'),
+        'Waechter bei frischer Marke: nichts angelegt (1.0.3)');
     // aufraeumen (nur der eigene Wegwerfbaum)
     $weg = function ($d) use (&$weg) {
         foreach ((array) @scandir($d) as $e) {
