@@ -202,6 +202,49 @@
  *      keine Linie setzt in 'vorbehandeln' einen Pflichtschluessel oben.
  *      'vorgabe' bleibt im Block ein Mangel (Regel 18). Ohne 'vorbehandeln',
  *      das einen fehlenden Pflichtschluessel oben setzt, wie in 1.2.8.
+ *  20. Seit 1.2.10 (Entscheidung des Hausherrn 18.11.2026: "Ich folge deinen
+ *      Empfehlungen", Frage 5 der Nacht 18.11.2026; Anlass Govee 0.9.42, das
+ *      die Regel in seiner Teilfunktion selbst nachbaute): Regel 3 gilt auch
+ *      fuer einen Teil, der nur ein einzelner Wert ist (ohne Knoten in
+ *      'schluessel'), wenn die Linie seinen geltenden Stand in 'teile_jetzt'
+ *      nennt. Ist der Wert in der Datei '' und der geltende nicht leer, wird
+ *      die Teilfunktion nicht gerufen; $r['teile'][Name] traegt den geltenden
+ *      Wert, und der Name steht in 'leer_behalten'. Beidseits leer und jeder
+ *      andere Wert: wie bis 1.2.9. Ohne Eintrag in 'teile_jetzt' wie bis 1.2.9.
+ *      Gemessen vorher (18.11.2026, Quelltext der hoechsten Ordner aller 59
+ *      Linien): 'teile_jetzt' in 17 Linien; die Teile darin ohne Knoten in
+ *      'schluessel' (Alexa-NG amazon, BLE-Scanner bindkeys und irk, BYD-Autos
+ *      zugang, Kodi-NG addon, WaermepumpeCloud geheim) liefern ein Feld oder
+ *      null - Regel 20 greift dort nie, ihr Verhalten bleibt.
+ *  21. Seit 1.2.11 (Entscheidung des Hausherrn 18.11.2026: "ins Modul",
+ *      Fragen 52 und 53 der Nacht 18.11.2026): umgewandelte Textsicherungen.
+ *      Eine Linie, die eine alte Textsicherung vor dem Modul in JSON umwandelt,
+ *      setzt den Kopf _aus_textsicherung (ihre erkannte Kopfzeile) und traegt
+ *      jede Stelle, die sich nicht lesen liess, mit
+ *      sicherung_text_mangel_eintragen() in den Kopf _text_mangel ein: eine
+ *      Liste von array(Stelle, Kennung), die Kennung nur aus der festen Menge
+ *      sicherung_text_mangel_arten() (ZEILE, DOPPELT, KOPF, WERT, ABSCHNITT).
+ *      Nimmt der Uebersetzer eine solche Datei an ('eigen' = 'uebersetzt'):
+ *      (a) traegt sie _text_mangel, wird sie abgewiesen - je Eintrag ein Satz
+ *      K_TEXT_<Kennung> mit der Stelle, nie mit einem Wert, gesammelt mit allen
+ *      uebrigen Beanstandungen; eine unbekannte Kennung, ein Eintrag anderer
+ *      Form und ein _text_mangel, das keine nicht leere Liste ist, fallen
+ *      geschlossen aus (K_TEXT_UNBEKANNT); (b) traegt sie _aus_textsicherung
+ *      (nicht leerer Text), sagt die Meldung nach dem Zurueckspielen mit
+ *      K_AUS_TEXT, dass sie umgewandelt wurde ($r['aus_textsicherung']), und
+ *      die Protokollzeile nennt es. Eine Datei mit Kennzeichen: beide Koepfe
+ *      werden wie jeder Kopf uebergangen, wie bis 1.2.10; ohne die beiden Koepfe
+ *      wie bis 1.2.10. Gemessen vorher (18.11.2026, Quelltext aller 222
+ *      Plugin-Ordner des Arbeitsordners): die Koepfe schreiben nur Kodi-NG
+ *      1.2.29, Smartmeter-classic 2.8.23 und WOLF-ISM-NG 3.1.22 (alle
+ *      unveroeffentlicht), mit drei verschiedenen Kennungssaetzen (Kodi ZEILE,
+ *      KOPF, DOPPELT, WERT; Smartmeter ZEILE, DOPPELT, KOPF_OHNE_NAME, ANSAGE;
+ *      WOLF zeile, doppelt, json), je eigenen Saetzen in ihrer Querpruefung
+ *      ('quer') und je einem eigenen Hinweis nach der Umwandlung. Die feste
+ *      Menge deckt alle elf ab: ZEILE (Kodi ZEILE, Smartmeter ZEILE, WOLF zeile
+ *      bei mehr als zwei Feldern), DOPPELT (alle drei), KOPF (Kodi KOPF, WOLF
+ *      zeile bei _ am Anfang), WERT (Kodi WERT, Smartmeter ANSAGE, WOLF json),
+ *      ABSCHNITT (Smartmeter KOPF_OHNE_NAME).
  *
  * Die Funktionen tragen das neutrale Kuerzel 'sicherung_' (wie 'ansage_' in
  * sprachausgabe.php). Laufen zwei Abschriften in einem PHP-Prozess, laedt sich
@@ -309,12 +352,17 @@
  *                  $r['teile'][Name]. Steht der Name auch in 'schluessel'
  *                  (als block), gelten Regel 2 und 3 auch dort; der geltende
  *                  Stand kommt aus 'teile_jetzt'[Name] (Wert oder Funktion).
+ *                  Seit 1.2.10 gilt Regel 3 auch fuer einen Teil ohne Knoten,
+ *                  dessen Stand 'teile_jetzt' nennt (Regel 20 im Kopf).
  *   'pruefen'      function ($schluessel, $wert, $neu, $roh) -> '' | Text | Liste.
  *   'quer'         function ($neu, $r, $daten) -> Liste von array(Name, Text);
  *                  $daten (seit 1.2.0) die Datei vor Regel 2 und 3.
  *   'uebersetzer'  function ($daten) -> array|null: nur fuer eine Datei OHNE
  *                  Kennzeichen. Eine alte eigene Sicherung kommt (gegebenenfalls
- *                  umgeschrieben) zurueck, alles andere null.
+ *                  umgeschrieben) zurueck, alles andere null. Seit 1.2.11 wertet
+ *                  das Modul in der angenommenen Datei die Koepfe
+ *                  _aus_textsicherung und _text_mangel aus (Regel 21 im Kopf;
+ *                  eintragen mit sicherung_text_mangel_eintragen()).
  *   'vorbehandeln' function ($daten, $jetzt, $roh) -> $daten: nach Regel 2
  *                  und 3, vor der Pruefung (Bloecke vervollstaendigen ...).
  *                  Seit 1.2.2: ein Wert, den sie fuer einen in der Datei
@@ -365,6 +413,8 @@
  *                   sicherung_zurueckspielen() nach 'vorbereiten' gebildet; leer, wenn nicht
  *                   zurueckgespielt oder nicht gespeichert wurde; seit 1.2.5 ohne
  *                   die Namen, die schon in 'verworfen' stehen (Regel 15)
+ *   'aus_textsicherung' (1.2.11) true: der Uebersetzer nahm eine Datei mit dem
+ *                   Kopf _aus_textsicherung an (Regel 21); sonst false
  * Ein Ergebnis von sicherung_zurueckspielen() traegt seit 1.2.0 dazu
  *   'vorbedingung'  Saetze der Vorbedingung (leer = erfuellt oder nicht gefragt)
  * und seit 1.2.7, nur wenn 'zweitschrift' eine Liste von Paaren lieferte,
@@ -394,7 +444,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('SICHERUNG_FASSUNG')) {
 
-define('SICHERUNG_FASSUNG', '1.2.9');
+define('SICHERUNG_FASSUNG', '1.2.11');
 /** Groesste Sicherungsdatei, die gelesen wird (Byte). */
 define('SICHERUNG_MAX_BYTE', 262144);
 /** Feldname des Hakens "Zurueckspielen bestaetigen" (seit 1.1.0; Wert 1). */
@@ -922,6 +972,72 @@ function sicherung_selbstpruefung(array $b, array $daten, $jetzt = null)
 }
 
 /* ==================================================================
+ * 1.2.11: umgewandelte Textsicherungen (Regel 21 im Kopf)
+ * ================================================================== */
+
+/**
+ * 1.2.11: die feste Menge der Kennungen im Kopf _text_mangel, je mit der Kennung ihres Satzes. Eine Linie fuehrt keine
+ * eigene. Bedeutung:
+ *   ZEILE      eine Zeile laesst sich keinem Schluessel und Wert zuordnen (falsche Zahl der Felder, kein =, ein Name,
+ *              der kein UTF-8 ist). Stelle: der Schluessel, mit dem die Zeile beginnt, oder "Zeile N".
+ *   DOPPELT    ein Schluessel steht mehrfach da; welcher Wert gelten soll, ist nicht zu entscheiden. Stelle: der Name.
+ *   KOPF       ein Schluessel beginnt mit _; so heissen in der JSON-Datei nur die Kopfangaben, die das Modul still
+ *              uebergeht. Stelle: der Name.
+ *   WERT       der Wert eines bekannten Schluessels laesst sich nicht in seine Form bringen (beschaedigt kodiert, kein
+ *              UTF-8, kein JSON-Objekt, wo eines stehen muss). Stelle: der Name.
+ *   ABSCHNITT  ein Abschnitt [..] laesst sich keinem Teil der Einstellungen zuordnen (etwa ohne Namen). Stelle:
+ *              "Zeile N".
+ * Abgeleitet am 18.11.2026 aus den drei Linien, die Textsicherungen umwandeln (Regel 21 im Kopf).
+ */
+function sicherung_text_mangel_arten()
+{
+    return array('ZEILE' => 'K_TEXT_ZEILE', 'DOPPELT' => 'K_TEXT_DOPPELT', 'KOPF' => 'K_TEXT_KOPF',
+                 'WERT' => 'K_TEXT_WERT', 'ABSCHNITT' => 'K_TEXT_ABSCHNITT');
+}
+
+/**
+ * 1.2.11: einen Mangel in den Kopf _text_mangel der umgewandelten Datei $d eintragen, als array(Stelle, Kennung).
+ * Rueckgabe true; false bei einer Kennung ausserhalb von sicherung_text_mangel_arten(). Der Eintrag steht auch dann in
+ * der Datei, und das Modul weist sie ab (K_TEXT_UNBEKANNT) - eine falsche Kennung faellt geschlossen aus, nie offen.
+ * Steht unter _text_mangel keine Liste, wird sie durch die Liste ersetzt (abgewiesen wird die Datei ohnehin).
+ */
+function sicherung_text_mangel_eintragen(array &$d, $stelle, $kennung)
+{
+    if (!isset($d['_text_mangel']) || !is_array($d['_text_mangel'])) { $d['_text_mangel'] = array(); }
+    $d['_text_mangel'][] = array(is_scalar($stelle) ? (string) $stelle : '?', is_scalar($kennung) ? (string) $kennung : '?');
+    return is_string($kennung) && array_key_exists($kennung, sicherung_text_mangel_arten());
+}
+
+/** 1.2.11: eine Stelle aus _text_mangel fuer den Satz - Namenszeichen und Leerzeichen ("Zeile 12"), hoechstens 64. */
+function sicherung_stelle($s)
+{
+    $s = trim((string) preg_replace('/[^A-Za-z0-9_.\-\[\] ]/', '?', (string) $s));
+    if ($s === '') { $s = '?'; }
+    return strlen($s) > 64 ? substr($s, 0, 64) . '...' : $s;
+}
+
+/**
+ * 1.2.11: den Kopf _text_mangel einer vom Uebersetzer angenommenen Datei beurteilen (Regel 21 (a) im Kopf): je Eintrag
+ * eine Beanstandung mit dem Satz seiner Kennung und der Stelle, nie mit einem Wert. Ein Eintrag, der nicht
+ * array(Stelle, feste Kennung) ist, und ein Kopf, der keine nicht leere Liste ist, werden mit K_TEXT_UNBEKANNT
+ * beanstandet, nie uebergangen.
+ */
+function sicherung_text_mangel_pruefen(array $b, $tm, array &$r)
+{
+    $arten = sicherung_text_mangel_arten();
+    if (!is_array($tm) || !$tm || array_keys($tm) !== range(0, count($tm) - 1)) {
+        sicherung_beanstanden($r, '_text_mangel', sprintf(sicherung_t('K_TEXT_UNBEKANNT', $b), sicherung_e('_text_mangel', $b)));
+        return;
+    }
+    foreach ($tm as $e) {
+        $form = is_array($e) && count($e) === 2 && isset($e[0], $e[1]) && is_string($e[0]) && is_string($e[1]);
+        $n = sicherung_stelle($form ? $e[0] : '_text_mangel');
+        $id = ($form && isset($arten[$e[1]])) ? $arten[$e[1]] : 'K_TEXT_UNBEKANNT';
+        sicherung_beanstanden($r, $n, sprintf(sicherung_t($id, $b), sicherung_e($n, $b)));
+    }
+}
+
+/* ==================================================================
  * Lesen und pruefen
  * ================================================================== */
 
@@ -932,7 +1048,7 @@ function sicherung_ergebnis()
                  'kennzeichen_datei' => '', 'fassung_datei' => '', 'beanstandet' => array(),
                  'verworfen' => array(), 'leer_behalten' => array(), 'fehlt_behalten' => array(),
                  'fehlt_vorgabe' => array(), 'teile' => array(), 'teile_hinweise' => array(),
-                 'fehlt_uebergang' => array(), 'jetzt_entfernt' => array());
+                 'fehlt_uebergang' => array(), 'jetzt_entfernt' => array(), 'aus_textsicherung' => false);
 }
 
 /** Eine Beanstandung aufnehmen ($text: '' | Text | Liste). */
@@ -1183,6 +1299,13 @@ function sicherung_lesen(array $b, $roh, $jetzt = null)
         }
         $daten = $ue;
         $r['eigen'] = 'uebersetzt';
+        /* 1.2.11 (Regel 21 im Kopf): eine umgewandelte Textsicherung - der Hinweis in der Meldung; was die Umwandlung
+         * nicht lesen konnte, weist die Datei ab, gesammelt mit allen uebrigen Beanstandungen. */
+        if (isset($daten['_aus_textsicherung']) && is_string($daten['_aus_textsicherung'])
+            && $daten['_aus_textsicherung'] !== '') {
+            $r['aus_textsicherung'] = true;
+        }
+        if (array_key_exists('_text_mangel', $daten)) { sicherung_text_mangel_pruefen($b, $daten['_text_mangel'], $r); }
     }
     if (isset($daten['_fassung']) && sicherung_namensform($daten['_fassung'])) { $r['fassung_datei'] = $daten['_fassung']; }
     /* 1.2.5: eine eigene Datei mit Huelle ('huelle') auspacken - nach Regel 1, vor allen anderen Regeln; danach ist sie
@@ -1239,6 +1362,19 @@ function sicherung_lesen(array $b, $roh, $jetzt = null)
                 $w = isset($flach[$k])      // 1.2.0: Namen eines flachen Teils wie in der Datei (zugang_benutzer)
                     ? sicherung_knoten_reinigen($b['schluessel'][$k], $w, $tj, '', $r, (string) $flach[$k])
                     : sicherung_knoten_reinigen($b['schluessel'][$k], $w, $tj, $k, $r);
+            } elseif ($w === '' && isset($b['teile_jetzt']) && is_array($b['teile_jetzt'])
+                      && array_key_exists($k, $b['teile_jetzt'])) {
+                /* 1.2.10: ein Teil, der nur ein einzelner Wert ist, folgt Regel 3 wie ein Schluessel oben (Regel 20 im
+                 * Kopf). Der Stand kommt wie beim Teil mit Knoten aus 'teile_jetzt' (Wert, Funktion oder Name einer
+                 * Funktion - so nennen ihn die Linien). */
+                $tj = $b['teile_jetzt'][$k];
+                if (is_callable($tj)) { $tj = call_user_func($tj); }
+                if (sicherung_leer_bleibt($w, $tj)) {
+                    $r['leer_behalten'][] = $k;
+                    $r['teile'][$k] = $tj;
+                    $r['anzahl']++;
+                    continue;
+                }
             }
             $tw = call_user_func($teile[$k], $w, $jetzt);
             $tw = is_array($tw) ? array_pad($tw, 3, array()) : array(null, array(), array());
@@ -1522,6 +1658,7 @@ function sicherung_protokollzeile(array $r)
     }
     $z = 'Sicherung zurueckgespielt: ' . (int) $r['anzahl'] . ' Werte'
        . ($r['eigen'] === 'uebersetzt' ? ', aeltere Sicherung ohne Kennzeichen' : '')
+       . (!empty($r['aus_textsicherung']) ? ', aus einer Textdatei umgewandelt' : '')      // 1.2.11, Regel 21 (b)
        . ($r['fassung_datei'] !== '' ? ', aus Fassung ' . $r['fassung_datei'] : '');
     foreach (array('verworfen' => 'verworfen',
                    'jetzt_entfernt' => 'unbekannt, aus der geltenden Konfiguration entfernt',
@@ -1573,6 +1710,7 @@ function sicherung_meldungen(array $b, array $r)
     }
     $h[] = sprintf(sicherung_t('K_UEBERNOMMEN', $b), (int) $r['anzahl']);
     if ($r['eigen'] === 'uebersetzt') { $h[] = sicherung_t('K_ALT_ERKANNT', $b); }
+    if (!empty($r['aus_textsicherung'])) { $h[] = sicherung_t('K_AUS_TEXT', $b); }     // 1.2.11, Regel 21 (b)
     if (!empty($r['teile_hinweise']) && is_array($r['teile_hinweise'])) {
         foreach ($r['teile_hinweise'] as $s) { $h[] = (string) $s; }     // 1.2.0: Hinweise der Teile, fertige Saetze
     }
@@ -1681,7 +1819,8 @@ function sicherung_sprachschluessel()
                  'K_SCHREIBFEHLER', 'K_UEBERNOMMEN', 'K_ALT_ERKANNT', 'K_VERWORFEN', 'K_LEER_BEHALTEN',
                  'K_FEHLT_BEHALTEN', 'K_ZWEITSCHRIFT', 'K_HAKEN', 'K_HAKEN_FEHLT', 'K_KEINE_DATEI', 'K_FEHLT_VORGABE',
                  'K_FEHLT_UEBERGANG', 'K_JETZT_ENTFERNT', 'K_HUELLE_GEMISCHT', 'K_HUELLE_KEIN_OBJEKT', 'K_HUELLE_LEER',
-                 'K_HUELLE_KOPF', 'K_HUELLE_DOPPELT');
+                 'K_HUELLE_KOPF', 'K_HUELLE_DOPPELT', 'K_AUS_TEXT', 'K_TEXT_ZEILE', 'K_TEXT_DOPPELT', 'K_TEXT_KOPF',
+                 'K_TEXT_WERT', 'K_TEXT_ABSCHNITT', 'K_TEXT_UNBEKANNT');
 }
 
 /* ==================================================================
@@ -1798,6 +1937,45 @@ function sicherung_selbsttest()
     $pruef('r2 im teil verworfen', $r['verworfen'], array('zugang.zz_teil'));
     $pruef('r3 im teil: bisheriges kennwort bleibt', array($r['teile']['zugang']['kennwort'], $r['leer_behalten']),
            array($GEHEIM, array('zugang.kennwort')));
+
+    // --- 1.2.10, Regel 20: Teil aus einem einzelnen Wert ---
+    $t20 = array();
+    $b20 = $b;
+    $b20['teile']['schl'] = function ($w) use (&$t20) {
+        $t20[] = $w;
+        return is_string($w) ? array($w, array()) : array(null, array('schl ungueltig'));
+    };
+    $b20['teile_jetzt']['schl'] = function () { return 'Schluessel-alt-42'; };
+    $d20 = $daten;
+    $d20['schl'] = '';
+    $r = sicherung_lesen($b20, json_encode($d20), $jetzt);
+    $pruef('r20 leer: geltender Wert bleibt, genannt, Teilfunktion nicht gerufen',
+           array($r['ok'], $r['teile']['schl'], $r['leer_behalten'], $t20), array(true, 'Schluessel-alt-42', array('schl'), array()));
+    $d20['schl'] = 'Schluessel-neu-7';
+    $r = sicherung_lesen($b20, json_encode($d20), $jetzt);
+    $pruef('r20 gefuellt: neuer Wert ueber die Teilfunktion', array($r['ok'], $r['teile']['schl'], $r['leer_behalten'], $t20),
+           array(true, 'Schluessel-neu-7', array(), array('Schluessel-neu-7')));
+    $t20 = array();
+    $b20['teile_jetzt']['schl'] = '';
+    $d20['schl'] = '';
+    $r = sicherung_lesen($b20, json_encode($d20), $jetzt);
+    $pruef('r20 beidseits leer: keine Meldung, Teilfunktion bekommt den leeren Wert',
+           array($r['ok'], $r['teile']['schl'], $r['leer_behalten'], $t20), array(true, '', array(), array('')));
+    $t20 = array();
+    $b20['teile_jetzt']['schl'] = 'phpversion';
+    $r = sicherung_lesen($b20, json_encode($d20), $jetzt);
+    $pruef('r20 Name einer Funktion in teile_jetzt wird gerufen (wie beim Teil mit Knoten)',
+           array($r['teile']['schl'], $r['leer_behalten'], $t20), array(phpversion(), array('schl'), array()));
+    $t20 = array();
+    $b20['teile_jetzt']['schl'] = function () { return array('a' => 'x'); };
+    $r = sicherung_lesen($b20, json_encode($d20), $jetzt);
+    $pruef('r20 geltender Stand ist ein Feld: wie 1.2.9, der leere Wert geht an die Teilfunktion',
+           array($r['ok'], $r['teile']['schl'], $r['leer_behalten'], $t20), array(true, '', array(), array('')));
+    $t20 = array();
+    unset($b20['teile_jetzt']['schl']);
+    $r = sicherung_lesen($b20, json_encode($d20), $jetzt);
+    $pruef('r20 ohne teile_jetzt: wie 1.2.9, der leere Wert geht an die Teilfunktion',
+           array($r['ok'], $r['teile']['schl'], $r['leer_behalten'], $t20), array(true, '', array(), array('')));
     $d2b = $daten;
     $d2b["zz\nZEILE;X=1"] = 1;
     $r = sicherung_lesen($b, json_encode($d2b), $jetzt);
@@ -1920,8 +2098,9 @@ function sicherung_selbsttest()
     $pruef('beschreibung ohne kennzeichen', sicherung_beschreibung_mangel(array('vorgaben' => array('a' => 1))), array('kennzeichen'));
     $pruef('fassung ohne quelle', sicherung_fassung_lesen(array()), '');
     $pruef('namensform', array(sicherung_namensform('a.b-c_1'), sicherung_namensform("a\n"), sicherung_namensform('')), array(true, false, false));
-    $pruef('schluessel zahl', count(sicherung_sprachschluessel()), 30);     // 1.2.6: K_HUELLE_DOPPELT (bis 1.2.5: 29)
-    $pruef('schluessel eindeutig', count(array_unique(sicherung_sprachschluessel())), 30);
+    // 1.2.11: K_AUS_TEXT und die sechs Saetze K_TEXT_* (bis 1.2.10: 30; 1.2.6: K_HUELLE_DOPPELT, bis 1.2.5: 29)
+    $pruef('schluessel zahl', count(sicherung_sprachschluessel()), 37);
+    $pruef('schluessel eindeutig', count(array_unique(sicherung_sprachschluessel())), 37);
 
     // --- 1.2.0 (a) Rohwert an 'pruefen' und 'quer' ---
     $gesehen = array();
@@ -3066,6 +3245,111 @@ function sicherung_selbsttest()
            array(false, 'form', true, true));
     $pruef('pflicht block: Mangel - bauen warnt, statt still zu sichern', array_key_exists('_warnung', sicherung_bauen($bm, $jp)),
            true);
+
+    // ---- 1.2.11: umgewandelte Textsicherungen, Kopf _aus_textsicherung und _text_mangel (Regel 21 im Kopf) ----
+    $arten = sicherung_text_mangel_arten();
+    $pruef('text: die feste Menge der Kennungen', array_keys($arten), array('ZEILE', 'DOPPELT', 'KOPF', 'WERT', 'ABSCHNITT'));
+    $pruef('text: jeder Satz steht in sicherung_sprachschluessel()', array_values(array_diff(
+           array_merge(array_values($arten), array('K_AUS_TEXT', 'K_TEXT_UNBEKANNT')), sicherung_sprachschluessel())), array());
+    $x = array('_aus_textsicherung' => '# Kopf');
+    $pruef('text: eintragen mit fester Kennung', array(sicherung_text_mangel_eintragen($x, 'a', 'ZEILE'), $x['_text_mangel']),
+           array(true, array(array('a', 'ZEILE'))));
+    $pruef('text: eintragen mit unbekannter Kennung - false, der Eintrag steht trotzdem da',
+           array(sicherung_text_mangel_eintragen($x, 'b', 'zeile'), $x['_text_mangel'][1]), array(false, array('b', 'zeile')));
+    $x = array('_text_mangel' => 'kaputt');
+    sicherung_text_mangel_eintragen($x, 'c', 'WERT');
+    $pruef('text: eintragen ersetzt einen Kopf, der keine Liste ist', $x['_text_mangel'], array(array('c', 'WERT')));
+    $pruef('text: eintragen mit Feld als Kennung - false', sicherung_text_mangel_eintragen($x, 'd', array('ZEILE')), false);
+
+    $b21 = $b;
+    $prot21 = array();
+    $gesp21 = 0;
+    $b21['log'] = function ($z) use (&$prot21) { $prot21[] = $z; };
+    $b21['speichern'] = function () use (&$gesp21) { $gesp21++; return true; };
+    $d21 = $daten;
+    unset($d21['_plugin']);
+    $d21['_hinweis'] = 'Selbsttest-Sicherung von frueher';     // der Uebersetzer des Selbsttests nimmt sie an
+    $d21['_aus_textsicherung'] = '# Selbsttest - Sicherung der Einstellungen';
+    $r = sicherung_lesen($b21, json_encode($d21), $jetzt);
+    $pruef('text: mit Kopf angenommen, aus_textsicherung', array($r['ok'], $r['eigen'], $r['aus_textsicherung']),
+           array(true, 'uebersetzt', true));
+    $r = sicherung_zurueckspielen($b21, json_encode($d21));
+    $m = sicherung_meldungen($b21, $r);
+    $pruef('text: Meldung sagt K_AUS_TEXT, gleich nach K_ALT_ERKANNT',
+           array_slice($m['hinweise'], 1, 2), array('SICHERUNG.K_ALT_ERKANNT [%s]', 'SICHERUNG.K_AUS_TEXT [%s]'));
+    $pruef('text: Protokollzeile nennt die Umwandlung',
+           strpos(end($prot21), 'aeltere Sicherung ohne Kennzeichen, aus einer Textdatei umgewandelt') !== false, true);
+    $pruef('text: Kopfwert nicht in Meldung und Protokoll', strpos(implode("\n", array_merge($m['hinweise'], $prot21)),
+           'Selbsttest - Sicherung'), false);
+    $d21o = $d21;
+    unset($d21o['_aus_textsicherung']);
+    $r = sicherung_zurueckspielen($b21, json_encode($d21o));
+    $m = sicherung_meldungen($b21, $r);
+    $pruef('text: ohne Kopf kein K_AUS_TEXT, aeltere Sicherung trotzdem erkannt', array($r['ok'], $r['aus_textsicherung'],
+           in_array('SICHERUNG.K_AUS_TEXT [%s]', $m['hinweise'], true), in_array('SICHERUNG.K_ALT_ERKANNT [%s]', $m['hinweise'], true)),
+           array(true, false, false, true));
+    $pruef('text: ohne Kopf nennt die Protokollzeile keine Umwandlung', strpos(end($prot21), 'Textdatei'), false);
+    foreach (array('leer' => '', 'Zahl' => 1, 'Feld' => array('x')) as $was => $w) {
+        $d21o['_aus_textsicherung'] = $w;
+        $r = sicherung_lesen($b21, json_encode($d21o), $jetzt);
+        $pruef('text: Kopf ' . $was . ' zaehlt nicht', array($r['ok'], $r['aus_textsicherung']), array(true, false));
+    }
+    $d21k = $daten + array('_aus_textsicherung' => '# Kopf', '_text_mangel' => array(array('a', 'ZEILE')));
+    $r = sicherung_zurueckspielen($b21, json_encode($d21k));
+    $m = sicherung_meldungen($b21, $r);
+    $pruef('text: Datei mit Kennzeichen - beide Koepfe uebergangen wie bis 1.2.10',
+           array($r['ok'], $r['eigen'], $r['aus_textsicherung'], in_array('SICHERUNG.K_AUS_TEXT [%s]', $m['hinweise'], true)),
+           array(true, 'kennzeichen', false, false));
+
+    $vor = $gesp21;
+    $d21m = $d21;
+    $d21m['takt'] = 1;      // dazu ein unzulaessiger Wert: alle Beanstandungen gesammelt
+    sicherung_text_mangel_eintragen($d21m, 'kodi_user', 'ZEILE');
+    sicherung_text_mangel_eintragen($d21m, 'Zeile 12', 'DOPPELT');
+    $r = sicherung_zurueckspielen($b21, json_encode($d21m));
+    $namen = array();
+    foreach ($r['beanstandet'] as $x) { $namen[] = $x['name']; }
+    $pruef('text: Mangel weist ab, nichts gespeichert', array($r['ok'], $r['gespeichert'], $gesp21 - $vor), array(false, false, 0));
+    $pruef('text: alle Beanstandungen gesammelt, Stellen in Reihenfolge', $namen, array('kodi_user', 'Zeile 12', 'takt'));
+    $pruef('text: Saetze je Kennung mit der Stelle', array($r['beanstandet'][0]['text'], $r['beanstandet'][1]['text']),
+           array('SICHERUNG.K_TEXT_ZEILE [kodi_user]', 'SICHERUNG.K_TEXT_DOPPELT [Zeile 12]'));
+    $m = sicherung_meldungen($b21, $r);
+    $pruef('text: abgewiesen - kein K_AUS_TEXT, Saetze in der Meldung', array($m['hinweise'],
+           strpos($m['fehler'][0], 'SICHERUNG.K_TEXT_DOPPELT [Zeile 12]') !== false), array(array(), true));
+    foreach ($arten as $kenn => $satz) {
+        $d21e = $d21;
+        sicherung_text_mangel_eintragen($d21e, 'st', $kenn);
+        $r = sicherung_lesen($b21, json_encode($d21e), $jetzt);
+        $pruef('text: Kennung ' . $kenn . ' -> ' . $satz, array($r['ok'], $r['beanstandet'][0]['text']),
+               array(false, 'SICHERUNG.' . $satz . ' [st]'));
+    }
+    $unbekannt = array(
+        'unbekannte Kennung' => array(array('st', 'zeile')),
+        'Kennung KOPF_OHNE_NAME' => array(array('st', 'KOPF_OHNE_NAME')),
+        'Eintrag mit drei Feldern' => array(array('st', 'ZEILE', 'x')),
+        'Eintrag ohne Text' => array(array(1, 'ZEILE')),
+        'Eintrag ist Text' => array('ZEILE'),
+    );
+    foreach ($unbekannt as $was => $tm) {
+        $d21e = $d21;
+        $d21e['_text_mangel'] = $tm;
+        $r = sicherung_lesen($b21, json_encode($d21e), $jetzt);
+        $pruef('text: geschlossen - ' . $was, array($r['ok'], count($r['beanstandet']),
+               strpos($r['beanstandet'][0]['text'], 'SICHERUNG.K_TEXT_UNBEKANNT') === 0), array(false, 1, true));
+    }
+    foreach (array('Text' => 'kaputt', 'leere Liste' => array(), 'Feld mit Namen' => array('a' => array('st', 'ZEILE')),
+                   'Zahl' => 0, 'null' => null) as $was => $tm) {
+        $d21e = $d21;
+        $d21e['_text_mangel'] = $tm;
+        $r = sicherung_lesen($b21, json_encode($d21e), $jetzt);
+        $pruef('text: geschlossen - Kopf ' . $was, array($r['ok'], $r['beanstandet'][0]['name'], $r['beanstandet'][0]['text']),
+               array(false, '_text_mangel', 'SICHERUNG.K_TEXT_UNBEKANNT [_text_mangel]'));
+    }
+    $d21e = $d21;
+    $d21e['_text_mangel'] = array(array("a;b\nc<script>" . str_repeat('x', 80), 'ZEILE'));
+    $r = sicherung_lesen($b21, json_encode($d21e), $jetzt);
+    $pruef('text: Stelle bereinigt (keine Steuerzeichen, kein <, hoechstens 64)', $r['beanstandet'][0]['name'],
+           'a?b?c?script?' . str_repeat('x', 51) . '...');
     return array($faelle, $fehl, $zeilen);
 }
 

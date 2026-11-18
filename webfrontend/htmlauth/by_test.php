@@ -958,6 +958,12 @@ function by_ansage_zeile($offen)
     $html .= ' ' . sprintf(by_t('TEST.A_ANSAGE_ANLAESSE'), count($an),
                            $an ? implode('; ', $an) : by_e(by_t('TEST.A_ANSAGE_KEINE')));
     // -2 (aus, nicht gefragt) ist hier ein Hinweis, kein Haken.
+    /* Frage 46 (18.11.2026): ein verworfener unbekannter Eintrag im Block tts - nur der Name, nie der Wert. */
+    by_tts(false);
+    if (by_tts_verworfen()) {
+        $html .= ' ' . sprintf(by_t('TEST.CFG_EINTRAG_VERWORFEN'), by_e(implode(', ', by_tts_verworfen())));
+        $st = 0;
+    }
     return by_pruefzeile($st === -2 ? -1 : $st, by_t('TEST.F_ANSAGE'), $html);
 }
 

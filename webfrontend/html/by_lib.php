@@ -3187,13 +3187,56 @@ function by_tts($heilen = true)
 {
     $c = by_config($heilen);
     $t = isset($c['tts']) && is_array($c['tts']) ? $c['tts'] : array();
+    /* Frage 46 (Entscheidung des Hausherrn 18.11.2026): ein unbekannter Unterschluessel wird vorher verworfen und
+     * genannt (by_tts_verworfen(), Reiter Test - nur der Name); der Block bleibt samt Sprechtoken. Bis 0.9.44 galt
+     * dann der ganze Block als "aus", ohne Meldung, und beim Zurueckspielen waren die Sprechtoken leer
+     * (by_sicherung_vorbereiten() nimmt sie von hier). tts_unbekannte_verwerfen() steht wortgleich in sieben Linien. */
+    list($t, $unb) = tts_unbekannte_verwerfen($t, function ($e) {
+        $g = '';
+        return ansage_wert_pruefen($e, $g, by_ansage_modi()) === null ? $g : '';
+    });
     $g = '';
     if (ansage_wert_pruefen($t, $g, by_ansage_modi()) === null) {
         $t = array();
+        $unb = array();
     }
+    by_tts_verworfen($unb);
     list($t) = ansage_vervollstaendigen($t, 'aus');
     return $t;
 }
+
+/** Frage 46: die Namen, die by_tts() zuletzt im Block tts verworfen hat - nur Namen, nie Werte. */
+function by_tts_verworfen($neu = null)
+{
+    static $n = array();
+    if ($neu !== null) { $n = $neu; }
+    return $n;
+}
+
+/**
+ * Frage 46 (Entscheidung des Hausherrn 18.11.2026). Diese Funktion steht wortgleich in sieben Linien:
+ * Abfahrtsassistent, Alexa-NG, AudiConnect, BYD-Autos, Beschattungswaechter, Skoda-Connect-NG und VolkswagenID.
+ * Ein unbekannter Unterschluessel im Block tts wird verworfen und mit Namen genannt, nie mit Wert; die uebrigen
+ * Eintraege bleiben samt Sprechtoken. Unbekannt heisst: die Pruefung der Linie ($pruefen, ein Eintrag allein,
+ * Rueckgabe der Grund oder '') nennt ihn mit TTS_EINTRAG. Ein bekannter Eintrag mit ungueltigem Wert bleibt stehen;
+ * ihn weist die Pruefung des ganzen Blocks ab, wie bisher. Bliebe nichts Bekanntes uebrig, bleibt der Block, wie er
+ * ist. Rueckgabe: array(Block, Liste der Namen 'tts.<eintrag>').
+ */
+function tts_unbekannte_verwerfen($tts, $pruefen)
+{
+    if (!is_array($tts)) { return array($tts, array()); }
+    $rest = $tts;
+    $namen = array();
+    foreach ($tts as $s => $w) {
+        $g = (string) call_user_func($pruefen, array($s => $w));
+        if (strpos($g, 'TTS_EINTRAG|') === 0) {
+            unset($rest[$s]);
+            $namen[] = 'tts.' . substr($g, strlen('TTS_EINTRAG|'));
+        }
+    }
+    return ($namen && $rest) ? array($rest, $namen) : array($tts, array());
+}
+
 
 /** Der Kontext des Moduls: Webport, Kopfzeile, Ordner fuer <art>_letzte.json, Texte. */
 /** Der Block tts aus einer schon gelesenen Konfiguration (Stamm 1.3.2): Ein gespeicherter bleibt, auch 'aus'; ein nie gespeicherter kommt aus den Vorgaben, also ab Werk an. */
