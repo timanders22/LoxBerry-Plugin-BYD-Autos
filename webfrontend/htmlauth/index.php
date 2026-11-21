@@ -97,7 +97,8 @@ if ($by_home !== '' && is_file($by_home . '/libs/phplib/loxberry_system.php')) {
 if (by_upgrade_laeuft()) {
     $by_rahmen_marke = class_exists('LBWeb', false);
     if ($by_rahmen_marke) {
-        LBWeb::lbheader('BYD Autos', 'https://wiki.loxberry.de/', 'help.html');
+        require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+        LBWeb::lbheader(plugin_kopftitel('BYD Autos', __DIR__), 'https://wiki.loxberry.de/', 'help.html');
     }
     echo '<div style="max-width:980px;margin:0 auto;'
        . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
@@ -1049,7 +1050,8 @@ $by_bilanz = by_pruefbilanz($by_pruefungen);
 $by_rahmen = class_exists('LBWeb', false);
 
 if ($by_rahmen) {
-    LBWeb::lbheader('BYD Autos', 'https://wiki.loxberry.de/', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel('BYD Autos', __DIR__), 'https://wiki.loxberry.de/', 'help.html');
 }
 /* U5: die Seite wird gepuffert, damit die Pruefzeile "Traegt jedes Formular
  * ein Merkmal mit Wert?" am GERENDERTEN HTML zaehlen kann; by_merkmal_einsetzen()
