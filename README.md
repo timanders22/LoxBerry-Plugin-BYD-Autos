@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.46
+Version 0.9.47
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,10 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.47
+
+- **Geändert – Fahrzeugname unter `haus/fahrzeug/` nach der gemeinsamen Namensregel (Entscheidung des Hausherrn 22.11.2026):** Der Name entsteht jetzt wie in allen Plugins: klein, Umlaute ausgeschrieben, jede Folge anderer Zeichen außer a–z, 0–9, `_` und `-` wird ein einziges `_`, ein `_` am Anfang und am Ende fällt weg, höchstens 40 Zeichen. Bisher wurde jedes Zeichen einzeln ersetzt. **Ein Fahrzeugname mit mehreren Leer- oder Sonderzeichen hintereinander oder mit solchen Zeichen am Anfang oder Ende ändert sich deshalb** (Beispiel: „Mein Auto (2)“ war `mein_auto__2_`, ist jetzt `mein_auto_2`); ein `-` bleibt wie bisher stehen. Nach dem Update leert das Plugin einmal die zurückbehaltenen Themen unter dem alten Namen (nicht, wenn dort der Zähler einer anderen Linie läuft). Wer den Namen in einem anderen Plugin (Abfahrts-Assistent, Marstek Venus, Dashboard) oder in Loxone eingetragen hat, trägt den neuen ein. Gemessen auf dem Arbeitsrechner; am Gerät nicht gemessen.
 
 ## Neu in 0.9.46
 

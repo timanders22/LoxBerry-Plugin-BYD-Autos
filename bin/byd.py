@@ -3639,7 +3639,24 @@ _HAUS_FZ = {"zaehler": -1, "letzt": 0.0, "lausch": 0.0, "eigene": {}}
 
 
 def haus_fz_name(name, nr) -> str:
-    """<name> nach der Namensregel von Regeln/07; reserviert: zaehler, anbieter. Sonst by<n>. Rein."""
+    """<name> nach der gemeinsamen Namensregel (Regeln/07 Nr. 15, Entscheidung des Hausherrn 22.11.2026), wie
+    ew_haus_name() (Ecowitt-Weiche), hausName() (Zigbee2MqttNG) und klima_name() (BLE-Scanner NG): klein, ae/oe/ue/ss,
+    jede Folge anderer Zeichen ausser a-z, 0-9, _ und - wird ein _, _ am Rand faellt weg, hoechstens 40 Zeichen
+    (danach rechts kein _);
+    reserviert: zaehler, anbieter. Sonst by<n>. Rein. Bis 0.9.46: haus_fz_name_alt()."""
+    s = str(name or "")
+    for a, b in (("\u00c4", "ae"), ("\u00d6", "oe"), ("\u00dc", "ue"), ("\u00e4", "ae"), ("\u00f6", "oe"),
+                 ("\u00fc", "ue"), ("\u00df", "ss")):
+        s = s.replace(a, b)
+    s = re.sub(r"[^a-z0-9_-]+", "_", s.lower()).strip("_")[:40].rstrip("_")
+    if s == "" or s in ("zaehler", "anbieter"):
+        return "by%s" % nr
+    return s
+
+
+def haus_fz_name_alt(name, nr) -> str:
+    """Der <name> nach der Regel bis 0.9.46 (jedes Zeichen einzeln zu _, am Rand nichts entfernt) - nur fuer
+    haus_fz_altstaemme(), um nach dem Update die Themen unter dem alten Namen einmal abzuraeumen. Rein."""
     s = str(name or "")
     for a, b in (("\u00c4", "ae"), ("\u00d6", "oe"), ("\u00dc", "ue"), ("\u00e4", "ae"), ("\u00f6", "oe"),
                  ("\u00fc", "ue"), ("\u00df", "ss")):
@@ -3650,13 +3667,30 @@ def haus_fz_name(name, nr) -> str:
     return s
 
 
+def haus_fz_altstaemme(fahrzeuge: dict, alt: dict, aktuell: list, fremd) -> list:
+    """22.11.2026 (gemeinsame Namensregel): die Staemme, unter denen dieses Plugin bis 0.9.46 ein Fahrzeug gemeldet
+    haben kann, das noch keinen Merkereintrag hat (der Merker liegt im Datenordner und faellt beim Update weg) -
+    nur, wenn der alte Name anders lautet, kein aktueller Stamm und nicht fremd ist. Rein."""
+    namen: dict = {}
+    for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
+        f = fahrzeuge.get(nr) if isinstance(fahrzeuge.get(nr), dict) else {}
+        n = haus_fz_name_alt(f.get("name") or f.get("modell"), nr)
+        namen[str(nr)] = "%s_%s" % (n[:36], nr) if n in namen.values() else n
+    aus: list = []
+    for nr, n in namen.items():
+        s = "haus/fahrzeug/" + n
+        if nr not in (alt or {}) and s not in aktuell and s not in fremd and s not in aus:
+            aus.append(s)
+    return aus
+
+
 def haus_fz_namen(fahrzeuge: dict) -> dict:
     """Nummer -> <name>, je Fahrzeug eindeutig (ein doppelter Name bekommt _<n>). Rein."""
     aus: dict = {}
     for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
         f = fahrzeuge.get(nr) if isinstance(fahrzeuge.get(nr), dict) else {}
         n = haus_fz_name(f.get("name") or f.get("modell"), nr)
-        aus[str(nr)] = "%s_%s" % (n[:36], nr) if n in aus.values() else n
+        aus[str(nr)] = "%s_%s" % (n[:36].rstrip("_"), nr) if n in aus.values() else n
     return aus
 
 
@@ -3892,6 +3926,8 @@ def haus_fz_takt(cfg: dict, stand: dict, jetzt: float) -> int:
     alt = merker.get("fahrzeuge") if isinstance(merker.get("fahrzeuge"), dict) else {}
     aktuell = ["haus/fahrzeug/" + n for n in namen.values()]
     weg = [s for s in haus_fz_staemme(merker) if s not in aktuell and s not in fremd]
+    # 22.11.2026 (gemeinsame Namensregel): ohne Merkereintrag einmal die Themen unter dem Namen bis 0.9.46 leeren.
+    weg += [s for s in haus_fz_altstaemme(fahrzeuge, alt, aktuell, fremd) if s not in weg]
     nachrichten = [(s + "/" + n, "", True) for s in weg for n in HAUS_FZ_FELDER]
     _HAUS_FZ["zaehler"] = (_HAUS_FZ["zaehler"] + 1) % 1000
     neu: dict = {}
