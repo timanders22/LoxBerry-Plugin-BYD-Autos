@@ -285,6 +285,7 @@ function by_pruefungen()
     $libv = by_bibliothek_fassung();
     $zeilen[] = by_pruefzeile($libv !== '' ? 1 : 0, by_t('TEST.F_LIB'),
         $libv !== '' ? 'pybyd ' . by_e($libv) : by_t('TEST.A_LIB_FEHLT'));
+    $zeilen[] = by_lib_soll_zeile($libv, by_json_lesen($p['datadir'] . '/bibliothek_soll.json'), $cfg);
 
     /* ---- 3. Dienst ---- */
     $pid = by_dienst_pid();
@@ -967,6 +968,34 @@ function by_ansage_zeile($offen)
         $st = 0;
     }
     return by_pruefzeile($st === -2 ? -1 : $st, by_t('TEST.F_ANSAGE'), $html);
+}
+
+/**
+ * 0.9.48 (Issue #2): die installierte pybyd gegen die festgelegte Fassung. Die Zahl steht nicht hier, sondern
+ * in bibliothek_soll.json (postinstall.sh hinterlegt sie). Gleich: Haken. Neuer: gelb - mit der Einstellung
+ * pybyd_neueste gewollt, ohne sie Ersatzweg der Installation oder von Hand; beides ungeprueft. Aelter: Kreuz.
+ * Ohne Datei oder ohne pybyd: grau, und die Zeile sagt, warum nicht verglichen wurde. Rein, ohne Dateizugriff.
+ */
+function by_lib_soll_zeile($libv, $soll, $cfg)
+{
+    $frage = by_t('TEST.F_LIB_SOLL');
+    $sv = (is_array($soll) && isset($soll['pybyd']) && is_string($soll['pybyd'])
+           && preg_match('/^\d+(\.\d+)*\z/', $soll['pybyd'])) ? $soll['pybyd'] : '';
+    if ($sv === '') {
+        return by_pruefzeile(-1, $frage, by_t('TEST.A_LIB_SOLL_FEHLT'));
+    }
+    if ((string) $libv === '') {
+        return by_pruefzeile(-1, $frage, by_t('TEST.A_LIB_SOLL_OHNE'));
+    }
+    if (version_compare($libv, $sv, '==')) {
+        return by_pruefzeile(1, $frage, sprintf(by_t('TEST.A_LIB_SOLL_GLEICH'), by_e($libv)));
+    }
+    if (version_compare($libv, $sv, '>')) {
+        return by_pruefzeile(2, $frage, sprintf(by_t(!empty($cfg['pybyd_neueste']) ? 'TEST.A_LIB_SOLL_NEUER_GEWOLLT'
+                                                                                  : 'TEST.A_LIB_SOLL_NEUER'),
+            by_e($libv), by_e($sv)));
+    }
+    return by_pruefzeile(0, $frage, sprintf(by_t('TEST.A_LIB_SOLL_ALT'), by_e($libv), by_e($sv)));
 }
 
 /**

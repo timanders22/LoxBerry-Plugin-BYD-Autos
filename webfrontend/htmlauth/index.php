@@ -358,6 +358,7 @@ if ($by_post && $by_formular === 'einstellungen') {
     $by_cfg['gefahr_ein'] = isset($_POST['gefahr_ein']) ? 1 : 0;
     $by_cfg['gps_ein'] = isset($_POST['gps_ein']) ? 1 : 0;
     $by_cfg['mqtt_bibliothek'] = isset($_POST['mqtt_bibliothek']) ? 1 : 0;
+    $by_cfg['pybyd_neueste'] = isset($_POST['pybyd_neueste']) ? 1 : 0;   // 0.9.48
     $by_cfg['abfahrt_ein'] = isset($_POST['abfahrt_ein']) ? 1 : 0;
     $by_cfg['ladeempf_ein'] = isset($_POST['ladeempf_ein']) ? 1 : 0;
     $by_cfg['ladeempf_unter'] = isset($_POST['ladeempf_unter']) ? 1 : 0;
@@ -1376,6 +1377,14 @@ ob_start();
     <?= by_e(by_t('EINST.L_MQTT_BIBLIOTHEK')) ?>
   </label>
   <div class="sm-hilfe"><?= by_t('EINST.H_MQTT_BIBLIOTHEK') ?></div>
+</div>
+<?php /* 0.9.48 (Issue #2): beim Update die neueste pybyd holen - ab Werk aus. */ ?>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="pybyd_neueste" value="1" <?= by_eingabe_an('einstellungen', 'pybyd_neueste', !empty($by_cfg['pybyd_neueste'])) ? 'checked' : '' ?>>
+    <?= by_e(by_t('EINST.L_PYBYD_NEUESTE')) ?>
+  </label>
+  <div class="sm-hilfe"><?= by_t('EINST.H_PYBYD_NEUESTE') ?></div>
 </div>
 
 <h2><?= by_e(by_t('EINST.H_STEUERUNG')) ?></h2>

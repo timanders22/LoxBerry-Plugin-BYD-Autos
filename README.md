@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.47
+Version 0.9.48
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,18 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.48
+
+- **Geändert – pybyd 0.0.88 statt 0.0.73 (Issue #2):** Jede Installation und jedes Update installiert jetzt pybyd 0.0.88 (PyPI, 21.11.2026). Laut Meldung hat BYD seine Server geändert, und mit 0.0.73 kam danach außer dem Kilometerstand nichts mehr an; das ist nicht gemessen, es gibt hier kein BYD-Fahrzeug. Vorher wurde die Schnittstelle verglichen, die das Plugin nutzt, am Quelltext beider Fassungen von PyPI: die 17 Methoden des Clients, die das Plugin aufruft (Fahrzeugliste, Echtzeitwerte, Standort, Freischaltung und die zehn Befehle), haben dieselbe Signatur; die fünf Felder der Konfiguration, die das Plugin setzt (Benutzer, Passwort, Steuer-PIN, Land, MQTT), heißen gleich – neu ist nur `identifier_type` mit der Vorgabe `"0"`; alle 33 Felder des Plugins finden ihren Namen in beiden Fassungen unter demselben Kandidaten; die Ausnahmen `BydAuthenticationError`, `BydRemoteControlError` und `BydApiError` haben dieselbe Basis; die Abhängigkeiten und die Voraussetzung Python 3.11 sind gleich. Geändert hat sich unter anderem die App-Fassung, mit der sich die Bibliothek bei BYD meldet (3.2.2 → 3.6.0), und Zeitabweichungen bei der Anmeldung meldet sie jetzt als eigenen Fehler statt als abgewiesene Anmeldung. Neu sind Abrufe, die das Plugin nicht nutzt (etwa Standby-Pläne, Benachrichtigungen, Softwarestand).
+- **Neu – Einstellung „Beim Update die neueste pybyd holen“, ab Werk aus:** Im Reiter *Einstellungen* unter dem Haken für den MQTT-Weg der Bibliothek. Mit dem Haken installiert die nächste Installation und jedes Update die neueste Fassung von pybyd; lässt sie sich nicht installieren, wird die festgelegte installiert. Ohne den Haken bleibt es bei der festgelegten Fassung. Der Haken wirkt erst bei der nächsten Installation oder dem nächsten Update, nicht beim Speichern. Eine neuere Fassung ist mit dem Plugin nicht geprüft. Das Installationsprotokoll sagt, welcher Weg gegangen wurde. Eine Sicherung aus 0.9.47 oder früher kennt die Einstellung nicht; beim Zurückspielen bleibt dann der geltende Wert.
+- **Neu – Reiter Test vergleicht pybyd mit der festgelegten Fassung:** `postinstall.sh` legt die festgelegte Fassung in `bibliothek_soll.json` im Datenordner ab (wie bei VolkswagenID). Die neue Zeile *Entspricht pybyd der festgelegten Fassung?* zeigt einen Haken bei Gleichheit, einen gelben Punkt bei einer neueren Fassung (mit dem Haken gewollt, ohne ihn Ersatzweg der Installation oder von Hand installiert; beides ungeprüft) und ein Kreuz bei einer älteren; ohne die Datei sagt sie, dass nicht verglichen wurde.
+- **Berichtigt – irreführende Meldung bei einer abgewiesenen Anmeldung:** Bis 0.9.47 hieß es „Anmeldung abgewiesen: Benutzername oder Passwort stimmen nicht“, sobald pybyd `BydAuthenticationError` meldete. pybyd wirft diesen Fehler aber für jeden Anmeldecode ungleich 0 und für unvollständige Antworten (nachgelesen im Quelltext, `_api/login.py`). Die Meldung sagt jetzt „Anmeldung bei BYD abgewiesen oder nicht abgeschlossen“, nennt Code und Meldung von BYD aus dem Text der Bibliothek (E-Mail-Adressen als `x@x`, Adressteile hinter `?` entfernt, höchstens 200 Zeichen) und führt ein falsches Passwort nur als einen möglichen Grund. Die Anmeldesperre nach wiederholten Abweisungen bleibt unverändert. Gemessen mit nachgebauten Ausnahmen, vier Stellen einzeln zurückgebaut, jede ergab mindestens einen roten Fall.
+- Gemessen auf dem Arbeitsrechner: der Installationsblock aus `postinstall.sh` in WSL mit einer nachgebauten Umgebung, die jeden pip-Aufruf mitschreibt (zehn Fälle, darunter Haken an, aus, fehlend, unlesbar, neueste nicht installierbar, festgelegte nicht installierbar), die Prüfzeile, Vorgaben, Sicherungsregel und Formular unter PHP 7.4 und 8.4; jede der elf Stellen einzeln zurückgebaut, jede ergab mindestens einen roten Fall. **Nicht gemessen:** ob mit 0.0.88 wieder alle Werte ankommen – dafür fehlt ein BYD-Konto; am Gerät nicht gemessen.
+- Gemeinsames Sprachmodul 1.5.0 (Entscheidung des Hausherrn 22.11.2026): Die Nachtruhe der Ansagen kann an Nicht-Schultagen (Samstag, Sonntag, Feiertage, Ferien) später enden. Neues Feld „Nachtruhe an Nicht-Schultagen bis“ bei „Wann gesprochen wird“, ab Werk leer: Dann gilt die Zeit, die im Plugin Ferien und Feiertage eingestellt ist (MQTT-Thema `haus/ansage/nachtruhe_frei_bis`); ohne sie endet die Nachtruhe wie an Schultagen. Ob heute ein Schultag ist, sagt `haus/kalender/heute/frei` (nur bei `haus/kalender/datum` = heute); ohne diese Aussage zählen nur Samstag und Sonntag. Dringende Ansagen übergehen die Nachtruhe wie bisher. Ohne Vorgabe und ohne eigene Zeit ändert sich nichts.
+- Reiter Test: neue Zeile zum Ende der Nachtruhe an Nicht-Schultagen (Quelle der Zeit, Art des heutigen Tages).
+- Die Warnung „Kabel vergessen“ am Morgen kommt an Nicht-Schultagen erst nach dem späteren Ende der Nachtruhe und wird bis dahin nicht verbraucht. Die Regeln für heute fragt das Plugin nur am Vormittag und nur, wenn es sonst warnen würde (über die Brücke bin/by_ansage.php und das Sprachmodul).
+- Nach einer Beanstandung zeigt das Formular auch das neue Feld mit dem eingegebenen Wert wieder an.
 
 ## Neu in 0.9.47
 
@@ -1056,8 +1068,8 @@ Zwei freie Arbeiten, beide öffentlich:
 
 * **[pybyd](https://github.com/jkaberg/pyBYD)** — ein asynchroner Python-Client
   für die BYD-Fahrzeugschnittstelle, MIT-Lizenz. Dieses Plugin benutzt ihn als
-  Bibliothek; installiert wird die Fassung **0.0.73** (die neueste zum
-  Bauzeitpunkt). Der Autor kennzeichnet sie ausdrücklich als **Alpha**: „API
+  Bibliothek; installiert wird die Fassung **0.0.88** (seit 0.9.48, bis 0.9.47
+  0.0.73; auf Wunsch die neueste, siehe „Neu in 0.9.48“). Der Autor kennzeichnet sie ausdrücklich als **Alpha**: „API
   may evolve before 1.0". Voraussetzung ist **Python 3.11 oder neuer**.
 * **[ioBroker.byd](https://github.com/TA2k/ioBroker.byd)** — ein
   ioBroker-Adapter für dieselbe Schnittstelle. Aus seinem Quelltext stammen die

@@ -263,6 +263,9 @@ VORGABEN = {
     "verlauf_tage": 8,
     "gps_ein": 1,
     "mqtt_bibliothek": 1,
+    # 0.9.48 (Issue #2): beim Update die neueste pybyd holen - ab Werk AUS. Der Dienst liest den Schluessel
+    # nicht; er wirkt nur in postinstall.sh. Gleich in by_vorgaben().
+    "pybyd_neueste": 0,
     # --- Vorklimatisierung am Abfahrtsassistenten (ab Werk AUS) ---
     #
     # Eine neue Funktion, die schaltet, steht ab Werk aus: ein Vorgabewert, der
@@ -2602,16 +2605,29 @@ def zahl_vorn(wert):
 # ---------------------------------------------------------------------------
 # Fehlermeldungen, die sagen, wer geantwortet hat
 # ---------------------------------------------------------------------------
+def fehler_ausschnitt(text: str) -> str:
+    """Text einer Ausnahme fuer Protokoll und Status (0.9.48): E-Mail-Adressen werden x@x, alles hinter ? oder #
+    einer Adresse faellt weg, eine Zeile, hoechstens 200 Zeichen."""
+    t = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "x@x", str(text))
+    t = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://[^\s?#'\"]*)[?#][^\s'\"]*", r"\1?...", t)
+    return " ".join(t.split())[:200]
+
+
 def fehlertext(err: BaseException) -> str:
     name = type(err).__name__
     inhalt = str(err) or name
     klein = inhalt.lower()
 
     if name in ("BydAuthenticationError",):
-        return ("Anmeldung abgewiesen: Benutzername oder Passwort stimmen nicht. Es sind "
-                "die Zugangsdaten des BYD-Kontos aus der BYD-App, nicht die eines "
-                "Haendlerportals. Wenn beides stimmt: manche Konten verlangen eine "
-                "Bestaetigung in der App, die sich hier nicht automatisieren laesst.")
+        # 0.9.48 (Nachtrag 22.11.2026, wie Skoda-Connect-NG 0.9.53): bis hierher hiess es "Benutzername oder
+        # Passwort stimmen nicht". pybyd 0.0.88 wirft diesen Fehler aber fuer JEDEN Anmeldecode ungleich 0 (ausser
+        # einer Zeitabweichung), fuer eine Antwort ohne respondData und ohne Tokenfelder (_api/login.py). Was BYD
+        # sagt, steht im Text der Bibliothek ("code=... message=...") - der kommt jetzt mit.
+        return ("Anmeldung bei BYD abgewiesen oder nicht abgeschlossen (BydAuthenticationError: %s). "
+                "Moegliche Gruende: falscher Benutzername oder falsches Passwort des BYD-Kontos aus der "
+                "BYD-App (nicht eines Haendlerportals), eine Bestaetigung, die das Konto in der App "
+                "verlangt, oder eine Aenderung bei BYD. Aus dem Fehler allein laesst sich das nicht "
+                "unterscheiden; Code und Meldung von BYD stehen in der Klammer." % fehler_ausschnitt(inhalt))
     if name in ("BydRemoteControlError",):
         return ("Der Befehl wurde nicht angenommen: %s. Haeufigste Ursache ist eine "
                 "falsche Steuer-PIN oder ein Fahrzeug, das diesen Befehl nicht "
@@ -3969,7 +3985,26 @@ def kabel_nacht(cfg: dict, hm: str) -> bool:
     return (v <= hm < b) if v < b else (hm >= v or hm < b)
 
 
-def kabel_entscheiden(f: dict, m: dict, cfg: dict, abfahrt_in, jetzt: float, alter) -> tuple:
+def kabel_regeln_heute():
+    """0.9.48 (Entscheidung des Hausherrn 22.11.2026, Sprachmodul 1.5.0): die Nachtruhe fuer heute aus der Bruecke by_ansage.php
+    (Frage regeln_heute; an Nicht-Schultagen mit dem spaeteren Ende) - der gemeinsame Weg ueber das Sprachmodul, kein
+    Nachbau hier. Rueckgabe (an, von, bis, nacht) oder None (dann gelten die Regeln, wie sie sind)."""
+    try:
+        e = subprocess.run(["php", str(SKRIPT_ANSAGE), PNAME], input=b'{"frage": "regeln_heute"}',
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ANSAGE_FRIST_S, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        melde_gebremst("kabel_regeln", "Kabel vergessen: die Bruecke by_ansage.php war nicht aufrufbar (%s)." % type(err).__name__, 3600)
+        return None
+    for z in e.stdout.decode("ascii", "replace").splitlines():
+        if z.startswith("REGELN;"):
+            f = dict(t.split("=", 1) for t in z.strip().split(";")[1:] if "=" in t)
+            v, b = f.get("VON", ""), f.get("BIS", "")
+            if f.get("AN") in ("0", "1") and f.get("NACHT") in ("0", "1") and len(v) == 5 and v[2] == ":" and len(b) == 5 and b[2] == ":":
+                return (f["AN"] == "1", v, b, f["NACHT"] == "1")
+    return None
+
+
+def kabel_entscheiden(f: dict, m: dict, cfg: dict, abfahrt_in, jetzt: float, alter, heute=None) -> tuple:
     """Die Warnung "Kabel vergessen" (Form mg_kabel_entscheiden()): zu Hause, Kabel nicht gesteckt, Akku unter der
     Schwelle, Stand bis 12 h; abends (ab kabel_uhr), am Morgen nach der Nachtruhe oder wenn die Abfahrt naht.
     Unbekannt heisst nie warnen. Hoechstens einmal je Standzeit und Tag. In der Nachtruhe wird nichts verbraucht.
@@ -3990,11 +4025,18 @@ def kabel_entscheiden(f: dict, m: dict, cfg: dict, abfahrt_in, jetzt: float, alt
     hm, tag = time.strftime("%H:%M", z), time.strftime("%Y%m%d", z)
     if m.get("gesagt") or kabel_nacht(cfg, hm) or str(m.get("tag")) == tag:
         return (False, m)
+    an, _v, bis = kabel_regeln(cfg)
+    # 0.9.48: an Nicht-Schultagen endet die Nachtruhe spaeter. Am Vormittag fragt der Takt die Bruecke nach den Regeln
+    # fuer heute (heute(), hoechstens einmal je Takt); ohne Antwort gelten die Regeln, wie sie sind.
+    r = heute() if (heute is not None and an and hm < "12:00") else None
+    if r is not None:
+        if r[3]:
+            return (False, m)        # Nachtruhe nach den Regeln fuer heute: nichts verbraucht
+        bis = r[2]
     uhr = str(cfg.get("kabel_uhr") or "")
     if len(uhr) != 5 or uhr[2] != ":":
         uhr = "20:00"
     abends = hm >= uhr
-    an, _v, bis = kabel_regeln(cfg)
     morgen = an and hm < "12:00" and int(m["seit"]) < time.mktime(time.strptime(tag + " " + bis, "%Y%m%d %H:%M"))
     grenze = ganz(cfg.get("kabel_abfahrt_min"), 0)
     abfahrt = grenze > 0 and abfahrt_in is not None and 1 <= int(abfahrt_in) <= grenze
@@ -4015,11 +4057,18 @@ def kabel_takt(horcher, cfg: dict, stand: dict, jetzt: float) -> list:
     if ganz(cfg.get("kabel_abfahrt_min"), 0) > 0 and cfg.get("abfahrt_ein") and horcher is not None:
         in_min, _h = vorklima_minuten(horcher, cfg, jetzt)
     gewarnt = []
+    merk: dict = {}
+
+    def heute():
+        # 0.9.48: die Regeln fuer heute hoechstens einmal je Takt, erst wenn ein Fahrzeug sie braucht
+        if "r" not in merk:
+            merk["r"] = kabel_regeln_heute()
+        return merk["r"]
     for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
         f = fahrzeuge[nr]
         if not isinstance(f, dict):
             continue
-        faellig, m = kabel_entscheiden(f, alt.get(str(nr)) or {}, cfg, in_min, jetzt, haus_fz_alter(f, stand, jetzt))
+        faellig, m = kabel_entscheiden(f, alt.get(str(nr)) or {}, cfg, in_min, jetzt, haus_fz_alter(f, stand, jetzt), heute)
         neu[str(nr)] = m
         if faellig:
             gewarnt.append(str(nr))

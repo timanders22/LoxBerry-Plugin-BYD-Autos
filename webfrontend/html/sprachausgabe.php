@@ -298,6 +298,28 @@
  *     (aendert sich genau dann, wenn sich die Meldung aendert - fuer "einmal je Aenderung").
  *   - Nichts davon wird von einer bestehenden Funktion gerufen: eine Linie, die die neuen Funktionen nicht ruft, laeuft
  *     byte- und verhaltensgleich mit 1.4.3. Wer sie ruft, prueft function_exists('ansage_block_pruefen').
+ *
+ * 1.5.0 (22.11.2026, Entscheidung des Hausherrn 22.11.: Nachtruhe am Wochenende), nur ergaenzend:
+ *   - An Nicht-Schultagen (Samstag, Sonntag, Feiertag, Ferien) darf die Nachtruhe spaeter enden. Neuer Schluessel 'bis_frei'
+ *     in den Regeln ('frei' wie haus/kalender/heute/frei): '' (ab Werk) = die Vorgabe aus dem Plugin Ferien und Feiertage,
+ *     retained Thema haus/ansage/nachtruhe_frei_bis (HH:MM); ohne Vorgabe wie an Schultagen. Eine Zeit HH:MM ist die eigene
+ *     Einstellung der Linie und geht der Vorgabe vor.
+ *   - Das Ende an Nicht-Schultagen verlaengert die Nachtruhe nur (liegt zwischen 'bis' und 'von'); eine eigene Zeit, die das
+ *     nicht tut, weist ansage_regeln_wert() ab (M_R_BIS_FREI), eine solche Vorgabe wird nicht verwendet und im
+ *     Reiter Test genannt. Dringendes uebergeht die Nachtruhe wie bisher; der Schalter haus/ansage/ruhe bleibt, wie er ist.
+ *   - Ob heute ein Schultag ist, sagt das Plugin Ferien und Feiertage: haus/kalender/heute/frei (1/0), nur bei
+ *     haus/kalender/datum = heute (kein Zaehler: eine kurze Sitzung kann ihn nicht messen, das Datum genuegt fuer einen
+ *     Tageswert). Ohne diese Aussage: Samstag und Sonntag nach der Uhr des LoxBerry, jeder andere Tag ist ein Schultag.
+ *   - ansage_regel_sprechen() liest Schalter, Vorgabe und Kalender in EINER kurzen Sitzung (ansage_haus_lesen()), nur wenn
+ *     es sonst etwas sagen wuerde - wie bisher den Schalter. ansage_regel_lage() nennt das Ende an Nicht-Schultagen.
+ *   - ansage_nachtruhe() bleibt unveraendert; das Ende fuer heute rechnet ansage_regeln_heute() (rein). Eine Linie, die
+ *     ansage_nachtruhe() oder 'bis' selbst benutzt (Morgenfenster, Kabelwarnung), nimmt dafuer ansage_regeln_heute_lesen()
+ *     (fragt den Broker nur, wenn es etwas aendern kann).
+ *   - Ab Werk aendert sich nichts, solange das Haus keine Zeit vorgibt und die Linie keine eigene eintraegt.
+ *   - Neue Felder: ansage_ruhe_bis_frei im Formular (ansage_regeln_x2_felder() nennt es), 'bis_frei' in
+ *     ansage_regeln_vorgaben() (die Sicherung nimmt dessen Schluessel). Eine zuerst geladene aeltere Abschrift weist einen
+ *     Block mit 'bis_frei' ab und nimmt dann die Vorgaben (22-7 Uhr): Linien, die in einem Prozess zusammen laufen, gemeinsam
+ *     verteilen. Wer die neuen Funktionen ruft, prueft function_exists('ansage_regeln_heute').
  */
 
 /* Kein Endpunkt (Regeln/03): die Datei liegt meist im unangemeldeten Baum
@@ -316,7 +338,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('ANSAGE_FASSUNG')) {
 
-define('ANSAGE_FASSUNG', '1.4.4');
+define('ANSAGE_FASSUNG', '1.5.0');
 
 /** Ab dieser Fassung nimmt das Plugin Dashboard Ansagen an (seit 1.4.0). */
 define('ANSAGE_TAFEL_MIN', '0.9.40');
@@ -2750,6 +2772,10 @@ function ansage_sprachschluessel()
                'M_R_BLOCK', 'M_R_NACHTRUHE', 'M_R_VON', 'M_R_BIS', 'M_R_SPERRE', 'M_R_GLEICH',
                'T_R_BEREIT', 'T_R_OFFEN', 'T_R_KEIN_ZIEL', 'T_R_NACHT', 'T_R_TAG', 'T_R_OHNE_RUHE',
                'T_R_SCHALTER_AUS', 'T_R_SCHALTER_FREI', 'T_R_SCHALTER_NIE',
+               // seit 1.5.0: Ende der Nachtruhe an Nicht-Schultagen
+               'L_R_BIS_FREI', 'R_BIS_FREI_HINWEIS', 'M_R_BIS_FREI', 'T_R_FREI_LINIE', 'T_R_FREI_HAUS', 'T_R_FREI_KEINE',
+               'T_R_FREI_UNGUELTIG', 'T_R_HEUTE_SCHULTAG', 'T_R_HEUTE_SAMSTAG', 'T_R_HEUTE_SONNTAG', 'T_R_HEUTE_FREI',
+               'T_R_HEUTE_OHNE_KALENDER',
                'T_R_G_KEINE_ADRESSE', 'T_R_G_KEIN_ORT', 'T_R_G_KEIN_TOKEN', 'T_R_G_PLUGIN_FEHLT', 'T_R_G_SPRECHEN_AUS',
                'T_R_G_KEIN_GERAET', 'T_R_G_EINSTELLUNG',
                // seit 1.4.0: das Ziel Tafel (O_TAFEL kommt ueber die Modusschleife)
@@ -4177,7 +4203,7 @@ function ansage_selbsttest()
     // --- 1.3.0: wann gesprochen wird ---
     $p130 = function ($z) { return mktime((int) substr($z, 0, 2), (int) substr($z, 3, 2), 0, 6, 15, 2026); };
     $r130 = ansage_regeln_vorgaben();
-    $pruef('130 vorgaben', $r130, array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => ''));
+    $pruef('130 vorgaben', $r130, array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => '', 'bis_frei' => ''));
     foreach (array('21:59' => false, '22:00' => true, '23:30' => true, '00:00' => true, '06:59' => true, '07:00' => false, '12:00' => false) as $z130 => $s130) {
         $pruef('130 nacht ' . $z130, ansage_nachtruhe($r130, $p130($z130)), $s130);
     }
@@ -4423,7 +4449,7 @@ function ansage_selbsttest()
     $be130 = array();
     list($r2130, $h130) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_von' => '21:30', 'ansage_ruhe_bis' => '06:00', 'ansage_sperre_min' => '60', 'ansage_anlass_a' => '1'),
                                                  $r130, array('a' => 'A', 'b' => 'B'), $mg130, $be130);
-    $pruef('130 formular regeln', array($r2130, $h130, $mg130), array(array('nachtruhe' => 1, 'von' => '21:30', 'bis' => '06:00', 'sperre_min' => 60, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => ''), array('a' => 1, 'b' => 0), array()));
+    $pruef('130 formular regeln', array($r2130, $h130, $mg130), array(array('nachtruhe' => 1, 'von' => '21:30', 'bis' => '06:00', 'sperre_min' => 60, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => '', 'bis_frei' => ''), array('a' => 1, 'b' => 0), array()));
     $mg130 = array();
     $be130 = array();
     list($r2130) = ansage_regeln_formular(array('ansage_ruhe_von' => '25:00', 'ansage_sperre_min' => '1'), $r130, array(), $mg130, $be130);
@@ -5036,6 +5062,239 @@ function ansage_selbsttest()
     $pruef('144 kennzeichen unabhaengig vom wert', ansage_block_kennzeichen(ansage_block_pruefen(array('port' => 0))), ansage_block_kennzeichen(ansage_block_pruefen(array('port' => -5))));
     $pruef('144 saetze in der schluesselliste', count(array_intersect(array('K_BLOCK_VERWORFEN', 'K_BLOCK_UNGUELTIG', 'K_BLOCK_AUS'), ansage_sprachschluessel())), 3);
     $pruef('144 fassung', version_compare(ANSAGE_FASSUNG, '1.4.4', '>='), true);
+
+    // --- 1.5.0: Ende der Nachtruhe an Nicht-Schultagen (Entscheidungen des Hausherrn 22.11.2026) ---
+    $tz150 = date_default_timezone_get();
+    date_default_timezone_set('Europe/Berlin');
+    $t150 = function ($ymd, $hm) { return mktime((int) substr($hm, 0, 2), (int) substr($hm, 3, 2), (int) substr($hm . ':00', 6, 2), (int) substr($ymd, 4, 2), (int) substr($ymd, 6, 2), (int) substr($ymd, 0, 4)); };
+    $rw150 = array('von' => '21:00') + ansage_regeln_vorgaben();         // wie Weatherdata am Geraet: 21:00 bis 07:00
+    /* Kalender wie Ferien und Feiertage: ohne Angabe Samstag/Sonntag schulfrei, sonst Schultag. */
+    $hs150 = function ($v, $ymd, $f = null) use ($t150) {
+        if ($f === null) { $f = ((int) date('N', $t150($ymd, '12:00')) >= 6) ? '1' : '0'; }
+        return array('vorgabe' => $v, 'datum' => $ymd, 'frei' => $f);
+    };
+    $nr150 = function ($rg, $ymd, $hm, $haus) use ($t150) {
+        list($r) = ansage_regeln_heute($rg, $t150($ymd, $hm), $haus);
+        return ansage_nachtruhe($r, $t150($ymd, $hm));
+    };
+    $pruef('150 vorgaben mit bis_frei leer', array(ansage_regeln_vorgaben()['bis_frei'], count(ansage_regeln_vorgaben())), array('', 9));
+    $pruef('150 wochentage der faelle', array(date('N', $t150('20261121', '12:00')), date('N', $t150('20261122', '12:00')), date('N', $t150('20261123', '12:00')),
+                                              date('N', $t150('20261225', '12:00')), date('N', $t150('20270328', '12:00')), date('N', $t150('20271031', '12:00'))),
+           array('6', '7', '1', '5', '7', '7'));
+    // Der Anlass: Sonntag 22.11.2026 07:00:08, Vorgabe des Hauses 08:00
+    $h150 = $hs150('08:00', '20261122');
+    foreach (array('07:00:08' => true, '07:59' => true, '08:00' => false, '06:59' => true, '12:00' => false, '20:59' => false, '21:00' => true, '23:59' => true) as $z150 => $s150) {
+        $pruef('150 sonntag ' . $z150, $nr150($rw150, '20261122', $z150, $h150), $s150);
+    }
+    foreach (array('07:59' => true, '08:00' => false, '00:30' => true) as $z150 => $s150) {
+        $pruef('150 samstag ' . $z150, $nr150($rw150, '20261121', $z150, $hs150('08:00', '20261121')), $s150);
+    }
+    foreach (array('06:59' => true, '07:00' => false, '07:30' => false, '00:00' => true) as $z150 => $s150) {
+        $pruef('150 montag ' . $z150, $nr150($rw150, '20261123', $z150, $hs150('08:00', '20261123')), $s150);
+    }
+    // Feiertag (Freitag 25.12.2026) und Ferien (Mittwoch 23.12.2026): nur mit Aussage fuer heute (haus/kalender/heute/frei)
+    $pruef('150 feiertag 07:30', $nr150($rw150, '20261225', '07:30', $hs150('08:00', '20261225', '1')), true);
+    $pruef('150 feiertag 08:00', $nr150($rw150, '20261225', '08:00', $hs150('08:00', '20261225', '1')), false);
+    $pruef('150 feiertag datum von gestern', $nr150($rw150, '20261225', '07:30', $hs150('08:00', '20261224', '1')), false);
+    $pruef('150 feiertag ohne aussage', array($nr150($rw150, '20261225', '07:30', $hs150('08:00', '20261225', '-1')),
+                                              $nr150($rw150, '20261225', '07:30', $hs150('08:00', '20261225', '')),
+                                              $nr150($rw150, '20261225', '07:30', array('vorgabe' => '08:00', 'frei' => '1'))), array(false, false, false));
+    $pruef('150 ferien mittwoch', array($nr150($rw150, '20261223', '07:59', $hs150('08:00', '20261223', '1')), $nr150($rw150, '20261223', '08:00', $hs150('08:00', '20261223', '1'))),
+           array(true, false));
+    $pruef('150 kalender geht der uhr vor', array($nr150($rw150, '20261121', '07:30', $hs150('08:00', '20261121', '0')),
+                                                 $nr150($rw150, '20261121', '07:30', $hs150('08:00', '20261121', '-1')),
+                                                 $nr150($rw150, '20261121', '07:30', $hs150('08:00', '20261120', '0'))), array(false, true, true));
+    $pruef('150 werktag mit kalender', $nr150($rw150, '20261127', '07:30', $hs150('08:00', '20261127', '0')), false);
+    $pruef('150 tag art', array(ansage_tag_art($t150('20261121', '07:00')), ansage_tag_art($t150('20261122', '07:00')),
+                                ansage_tag_art($t150('20261225', '07:00'), $hs150('', '20261225', '1')), ansage_tag_art($t150('20261127', '07:00'), $hs150('', '20261127', '0')),
+                                ansage_tag_art($t150('20261127', '07:00')), ansage_tag_art($t150('20261122', '07:00'), $hs150('', '20261122'))),
+           array('SAMSTAG', 'SONNTAG', 'FREI', 'SCHULTAG', 'OHNE_KALENDER', 'FREI'));
+    // Mitternacht: der Abend vor einem freien Tag beginnt wie immer, der Morgen danach endet nach dem Tag des Morgens
+    $pruef('150 freitag abend', array($nr150($rw150, '20261127', '20:59', $hs150('08:00', '20261127')), $nr150($rw150, '20261127', '21:00', $hs150('08:00', '20261127')),
+                                      $nr150($rw150, '20261127', '23:59', $hs150('08:00', '20261127'))), array(false, true, true));
+    $pruef('150 sonntag nacht auf montag', array($nr150($rw150, '20261123', '00:00', $hs150('08:00', '20261122')), $nr150($rw150, '20261123', '07:00', $hs150('08:00', '20261123'))),
+           array(true, false));
+    // Sommerzeit: Umstellung jeweils an einem Sonntag (28.03.2027 auf MESZ, 31.10.2027 auf MEZ)
+    foreach (array('20270328', '20271031') as $d150) {
+        $pruef('150 umstellung ' . $d150, array($nr150($rw150, $d150, '01:30', $hs150('08:00', $d150)), $nr150($rw150, $d150, '03:30', $hs150('08:00', $d150)),
+                                                $nr150($rw150, $d150, '07:59', $hs150('08:00', $d150)), $nr150($rw150, $d150, '08:00', $hs150('08:00', $d150))),
+               array(true, true, true, false));
+    }
+    $pruef('150 umstellung uhr', array(date('H:i T', $t150('20270328', '08:00')), date('H:i T', $t150('20271031', '07:59'))), array('08:00 CEST', '07:59 CET'));
+    // Ab Werk: ohne Vorgabe und ohne eigene Zeit aendert sich an keinem Tag eine Minute
+    $ab150 = 0;
+    foreach (array('20261121', '20261122', '20261123', '20261225', '20270328') as $d150) {
+        for ($m150 = 0; $m150 < 1440; $m150 += 1) {
+            $tt150 = $t150($d150, sprintf('%02d:%02d', intdiv($m150, 60), $m150 % 60));
+            list($rr150) = ansage_regeln_heute(ansage_regeln_vorgaben(), $tt150, $hs150('', $d150, '1'));
+            if (ansage_nachtruhe($rr150, $tt150) !== ansage_nachtruhe(ansage_regeln_vorgaben(), $tt150)) { $ab150++; }
+        }
+    }
+    $pruef('150 ab werk keine minute anders', $ab150, 0);
+    $pruef('150 vorgabe fehlt oder strich', array($nr150($rw150, '20261122', '07:30', $hs150('', '20261122')), $nr150($rw150, '20261122', '07:30', $hs150('-', '20261122')),
+                                                 $nr150($rw150, '20261122', '07:30', array())), array(false, false, false));
+    $pruef('150 vorgabe strich und leer heissen keine', array(ansage_regeln_heute($rw150, $t150('20261122', '07:30'), $hs150('-', '20261122'))[1]['quelle'],
+                                                             ansage_regeln_heute($rw150, $t150('20261122', '07:30'), $hs150('', '20261122'))[1]['quelle']), array('KEINE', 'KEINE'));
+    foreach (array('8:00', '25:00', '08:00x', 'acht', '06:00', '21:00', '21:30') as $i150 => $v150) {
+        list($rr150, $lg150) = ansage_regeln_heute($rw150, $t150('20261122', '07:30'), $hs150($v150, '20261122'));
+        $pruef('150 vorgabe unbrauchbar ' . $v150, array($rr150['bis'], $lg150['quelle'], ansage_nachtruhe($rr150, $t150('20261122', '07:30'))),
+               array('07:00', 'HAUS_UNGUELTIG', false));
+    }
+    list($rr150, $lg150) = ansage_regeln_heute($rw150, $t150('20261122', '07:30'), $hs150('20:58', '20261122'));
+    $pruef('150 vorgabe knapp vor beginn', array($rr150['bis'], $lg150['quelle']), array('20:58', 'HAUS'));
+    list($rr150, $lg150) = ansage_regeln_heute($rw150, $t150('20261122', '07:30'), $hs150('07:00', '20261122'));
+    $pruef('150 vorgabe gleich bis', array($rr150['bis'], $lg150['quelle'], ansage_nachtruhe($rr150, $t150('20261122', '07:30'))), array('07:00', 'HAUS', false));
+    // Eigene Zeit der Linie geht vor; nachtruhe aus bleibt aus
+    $pruef('150 eigene zeit vor haus', array($nr150(array('bis_frei' => '09:00') + $rw150, '20261122', '08:30', $h150),
+                                             $nr150(array('bis_frei' => '09:00') + $rw150, '20261122', '09:00', $h150),
+                                             $nr150(array('bis_frei' => '07:00') + $rw150, '20261122', '07:30', $h150),
+                                             $nr150(array('bis_frei' => '09:00') + $rw150, '20261122', '08:30', array())), array(true, false, false, true));
+    $pruef('150 eigene zeit werktags nicht', $nr150(array('bis_frei' => '09:00') + $rw150, '20261123', '08:30', $hs150('08:00', '20261123')), false);
+    $pruef('150 nachtruhe aus', $nr150(array('nachtruhe' => 0) + $rw150, '20261122', '07:30', $h150), false);
+    $pruef('150 nachtruhe am tag', array($nr150(array('von' => '09:00', 'bis' => '17:00') + $rw150, '20261122', '17:30', $hs150('18:00', '20261122')),
+                                         $nr150(array('von' => '09:00', 'bis' => '17:00') + $rw150, '20261122', '18:00', $hs150('18:00', '20261122'))), array(true, false));
+    // Wertpruefung
+    $g150 = '';
+    $pruef('150 wert eigene zeit', ansage_regeln_wert(array('bis_frei' => '08:00'), $g150)['bis_frei'], '08:00');
+    $pruef('150 wert leer', ansage_regeln_wert(array('bis_frei' => ''), $g150)['bis_frei'], '');
+    $pruef('150 wert gleich bis', ansage_regeln_wert(array('bis_frei' => '07:00'), $g150)['bis_frei'], '07:00');
+    foreach (array('8:00', '24:00', 8, null, array('08:00'), '22:00', '06:59', '23:00') as $i150 => $v150) {
+        $g150 = '';
+        $pruef('150 wert abgewiesen ' . $i150, array(ansage_regeln_wert(array('bis_frei' => $v150), $g150), $g150), array(null, 'M_R_BIS_FREI'));
+    }
+    $pruef('150 wert passt zu von', ansage_regeln_wert(array('von' => '23:30', 'bis_frei' => '23:00'), $g150)['bis_frei'], '23:00');
+    $pruef('150 wert alte bloecke', ansage_regeln_wert(array('nachtruhe' => 1, 'von' => '21:00', 'bis' => '07:00', 'sperre_min' => 30, 'tafel' => 1, 'tafel_namen' => '',
+                                                             'homepod' => 1, 'homepod_geraet' => ''), $g150)['bis_frei'], '');
+    // Formular
+    $mg150 = array();
+    $be150 = array();
+    list($rf150) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_von' => '21:00', 'ansage_ruhe_bis' => '07:00', 'ansage_ruhe_bis_frei' => '08:00'),
+                                          $rw150, array(), $mg150, $be150);
+    $pruef('150 formular zeit', array($rf150['bis_frei'], $mg150, $be150), array('08:00', array(), array()));
+    list($rf150) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_bis_frei' => ' '), array('bis_frei' => '08:00') + $rw150, array(), $mg150, $be150);
+    $pruef('150 formular leer heisst haus', array($rf150['bis_frei'], $be150), array('', array()));
+    list($rf150) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1'), array('bis_frei' => '08:00') + $rw150, array(), $mg150, $be150);
+    $pruef('150 formular ohne feld behaelt', array($rf150['bis_frei'], $be150), array('08:00', array()));
+    list($rf150) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_bis_frei' => '25:00'), array('bis_frei' => '08:00') + $rw150, array(), $mg150, $be150);
+    $pruef('150 formular kaputt', array($rf150['bis_frei'], $be150, $mg150[0]['kennung']), array('08:00', array('ansage_ruhe_bis_frei'), 'M_R_BIS_FREI'));
+    $mg150 = array();
+    $be150 = array();
+    list($rf150) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_bis_frei' => '06:00'), $rw150, array(), $mg150, $be150);
+    $pruef('150 formular verkuerzt', array($rf150['bis_frei'], $be150), array('', array('ansage_ruhe_bis_frei')));
+    $mg150 = array();
+    $be150 = array();
+    list($rf150) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_bis' => '09:00'), array('bis_frei' => '08:00') + $rw150, array(), $mg150, $be150);
+    $pruef('150 formular neues bis passt nicht mehr', array($rf150['bis'], $be150), array('09:00', array('ansage_ruhe_bis_frei')));
+    $mg150 = array();
+    $be150 = array();
+    list($rf150) = ansage_regeln_formular(array('ansage_ruhe_ein' => '1', 'ansage_ruhe_bis' => '09:00', 'ansage_ruhe_bis_frei' => '10:00'), array('bis_frei' => '08:00') + $rw150, array(), $mg150, $be150);
+    $pruef('150 formular beides neu', array($rf150['bis'], $rf150['bis_frei'], $be150), array('09:00', '10:00', array()));
+    $pruef('150 x2 feld', in_array('ansage_ruhe_bis_frei', ansage_regeln_x2_felder(), true), true);
+    $hx150 = ansage_regeln_html(array('bis_frei' => '08:30') + $rw150, array(), array());
+    $pruef('150 html feld', array(strpos($hx150, 'name="ansage_ruhe_bis_frei" value="08:30"') !== false, strpos($hx150, 'ANSAGE.L_R_BIS_FREI') !== false,
+                                  strpos($hx150, 'ANSAGE.R_BIS_FREI_HINWEIS') !== false), array(true, true, true));
+    $pruef('150 html feld leer', strpos(ansage_regeln_html(array(), array(), array()), 'name="ansage_ruhe_bis_frei" value=""') !== false, true);
+    // Sprechen nach den Regeln: eine Sitzung, nur wenn sonst gesprochen wuerde
+    $nb130['alexang'] = array('token' => $TOK, 'standard' => true, 'ein' => true);
+    $nb130['cc4lox'] = array('token' => '', 'standard' => null, 'ein' => null);
+    $hn150 = $h150;
+    $hz150 = 0;
+    $k150 = array('haus_nacht' => function () use (&$hn150, &$hz150) { $hz150++; return $hn150; }) + $kr130;
+    $sch130 = '0';
+    $ok150 = array('code' => 200, 'rumpf' => "SPRECHEN;OK=1\n");
+    $lauf150 = function ($rg, $ymd, $hm, $ein = null) use (&$mem130, &$log, &$antworten, &$jz130, $t150, $ein130, $w130, &$k150, $ok150) {
+        $mem130 = array();
+        $log = array();
+        $antworten = array($ok150);
+        $jz130 = $t150($ymd, $hm);
+        $a = ansage_regel_sprechen($ein === null ? $ein130 : $ein, $w130, $rg, $k150);
+        return array($a['regel'], isset($a['einzeln']['a:1']) ? $a['einzeln']['a:1'] : null, count($log));
+    };
+    $pruef('150 regel sonntag 07:00:08 still', array($lauf150($rw150, '20261122', '07:00:08'), $hz150), array(array('ANLASS', 'NACHTRUHE', 0), 1));
+    $pruef('150 regel sonntag 08:00 spricht', $lauf150($rw150, '20261122', '08:00'), array('', '', 1));
+    $hn150 = $hs150('08:00', '20261123');
+    $pruef('150 regel montag 07:30 spricht', $lauf150($rw150, '20261123', '07:30'), array('', '', 1));
+    $hn150 = $h150;
+    $pruef('150 regel dringend sonntags', $lauf150($rw150, '20261122', '07:30', array(array('schluessel' => 'a:1', 'text' => 'Satz eins.', 'dringend' => true))), array('', '', 1));
+    $hz150 = 0;
+    $pruef('150 regel nachts kein broker', array($lauf150($rw150, '20261122', '23:00'), $hz150), array(array('ANLASS', 'NACHTRUHE', 0), 0));
+    $pruef('150 regel ohne nachtruhe kein nachtteil', array($lauf150(array('nachtruhe' => 0) + $rw150, '20261122', '07:30'), $hz150), array(array('', '', 1), 0));
+    $sch130 = '1';
+    $pruef('150 regel schalter bleibt', $lauf150($rw150, '20261122', '08:30'), array('SCHALTER', 'SCHALTER', 0));
+    $sch130 = '0';
+    $k150 = $kr130;         // ohne Haken und ohne Wurzel: keine Aussage, wie bisher
+    $pruef('150 regel ohne broker wie bisher', $lauf150($rw150, '20261122', '07:30'), array('', '', 1));
+    $k150 = array('haus_nacht' => function () use (&$hn150, &$hz150) { $hz150++; return $hn150; }) + $kr130;
+    $hn150 = $hs150('6:00', '20261122');
+    $pruef('150 regel kaputte vorgabe wie bisher', $lauf150($rw150, '20261122', '07:30'), array('', '', 1));
+    $hn150 = $hs150('08:00', '20261223', '1');
+    $pruef('150 regel ferien still', $lauf150($rw150, '20261223', '07:30'), array('ANLASS', 'NACHTRUHE', 0));
+    $hn150 = $h150;
+    $pruef('150 regel eigene zeit', array($lauf150(array('bis_frei' => '09:00') + $rw150, '20261122', '08:30'),
+                                          $lauf150(array('bis_frei' => '07:00') + $rw150, '20261122', '07:30')), array(array('ANLASS', 'NACHTRUHE', 0), array('', '', 1)));
+    // Reiter Test
+    $jz130 = $t150('20261122', '07:30');
+    $lg150 = ansage_regel_lage($w130, $rw150, $k150, true);
+    $pruef('150 lage zeilen', array(count($lg150), $lg150[1][1], $lg150[2][1], $lg150[3][0], strpos($lg150[3][1], 'ANSAGE.T_R_FREI_HAUS') === 0,
+                                    strpos($lg150[3][1], 'ANSAGE.T_R_HEUTE_FREI') !== false),
+           array(4, 'ANSAGE.T_R_NACHT', 'ANSAGE.T_R_SCHALTER_FREI', 1, true, true));
+    $lg150 = ansage_regel_lage($w130, $rw150, $k150, false);
+    $pruef('150 lage geschlossen ohne broker', array(count($lg150), $lg150[1][1]), array(2, 'ANSAGE.T_R_TAG'));
+    $lg150 = ansage_regel_lage($w130, array('bis_frei' => '08:00') + $rw150, $k150, false);
+    $pruef('150 lage eigene zeit ohne broker', $lg150[1][1], 'ANSAGE.T_R_NACHT');
+    $hn150 = $hs150('8:00', '20261122');
+    $lg150 = ansage_regel_lage($w130, $rw150, $k150, true);
+    $pruef('150 lage vorgabe kaputt gelb', array($lg150[3][0], strpos($lg150[3][1], 'ANSAGE.T_R_FREI_UNGUELTIG') === 0, $lg150[1][1]), array(0, true, 'ANSAGE.T_R_TAG'));
+    $hn150 = $hs150('08:00', '');
+    $jz130 = $t150('20261123', '07:30');
+    $lg150 = ansage_regel_lage($w130, $rw150, $k150, true);
+    $pruef('150 lage ohne kalender gelb', array($lg150[3][0], strpos($lg150[3][1], 'ANSAGE.T_R_HEUTE_OHNE_KALENDER') !== false), array(0, true));
+    $hn150 = $hs150('', '');
+    $lg150 = ansage_regel_lage($w130, $rw150, $k150, true);
+    $pruef('150 lage ab werk gruen', array($lg150[3][0], strpos($lg150[3][1], 'ANSAGE.T_R_FREI_KEINE') === 0), array(1, true));
+    $lg150 = ansage_regel_lage($w130, array('nachtruhe' => 0) + $rw150, $k150, true);
+    $pruef('150 lage ohne nachtruhe keine zeile', count($lg150), 3);
+    // Haus lesen
+    $pruef('150 haus lesen haken', ansage_haus_lesen(array('schalter' => function () { return '1'; }, 'haus_nacht' => function () { return array('vorgabe' => ' 08:00 ', 'datum' => 20261122, 'frei' => array(1)); })),
+           array('ruhe' => '1', 'vorgabe' => '08:00', 'datum' => '20261122', 'frei' => ''));
+    $pruef('150 haus lesen ohne wurzel', ansage_haus_lesen(array('home' => '')), array('ruhe' => '', 'vorgabe' => '', 'datum' => '', 'frei' => ''));
+    $hz150 = 0;
+    ansage_haus_lesen($k150, false);
+    $pruef('150 haus lesen nur schalter', $hz150, 0);
+    $pruef('150 viele ohne themen', ansage_mqtt_retained_viele('127.0.0.1', 1, '', '', array(), 1), array());
+    $pruef('150 verlaengert', array(ansage_ruhe_verlaengert('22:00', '07:00', '08:00'), ansage_ruhe_verlaengert('22:00', '07:00', '07:00'), ansage_ruhe_verlaengert('22:00', '07:00', '22:00'),
+                                    ansage_ruhe_verlaengert('22:00', '07:00', '06:59'), ansage_ruhe_verlaengert('22:00', '07:00', 'x'), ansage_ruhe_verlaengert('01:00', '06:00', '00:59')),
+           array(true, true, false, false, false, true));
+    $pruef('150 saetze in der schluesselliste', count(array_intersect(array('L_R_BIS_FREI', 'R_BIS_FREI_HINWEIS', 'M_R_BIS_FREI', 'T_R_FREI_LINIE', 'T_R_FREI_HAUS',
+                                                                            'T_R_FREI_KEINE', 'T_R_FREI_UNGUELTIG', 'T_R_HEUTE_SCHULTAG', 'T_R_HEUTE_SAMSTAG',
+                                                                            'T_R_HEUTE_SONNTAG', 'T_R_HEUTE_FREI', 'T_R_HEUTE_OHNE_KALENDER'), ansage_sprachschluessel())), 12);
+    $pruef('150 thema', array(ANSAGE_FREI_THEMA, ANSAGE_KALENDER_DATUM, ANSAGE_KALENDER_FREI), array('haus/ansage/nachtruhe_frei_bis', 'haus/kalender/datum', 'haus/kalender/heute/frei'));
+    // Hilfsfunktion fuer Linien mit eigenem Morgenfenster
+    $hz150 = 0;
+    $hn150 = $h150;
+    $kh150 = array('haus_nacht' => function () use (&$hn150, &$hz150) { $hz150++; return $hn150; }, 'schalter' => function () { return '0'; },
+                   'jetzt' => function () use (&$jz130) { return $jz130; });
+    $jz130 = $t150('20261122', '07:30');
+    list($rh150, $lh150) = ansage_regeln_heute_lesen($rw150, $kh150);
+    $pruef('150 heute lesen sonntag', array($rh150['bis'], $lh150['quelle'], $lh150['tag'], $hz150, ansage_nachtruhe($rh150, $jz130)), array('08:00', 'HAUS', 'FREI', 1, true));
+    $jz130 = $t150('20261122', '23:00');
+    ansage_regeln_heute_lesen($rw150, $kh150);
+    $pruef('150 heute lesen nachts ohne broker', $hz150, 1);
+    $jz130 = $t150('20261122', '07:30');
+    ansage_regeln_heute_lesen(array('nachtruhe' => 0) + $rw150, $kh150);
+    $pruef('150 heute lesen ohne nachtruhe ohne broker', $hz150, 1);
+    $jz130 = $t150('20261122', '09:30');
+    list($rh150) = ansage_regeln_heute_lesen(array('bis_frei' => '09:00') + $rw150, $kh150);
+    $pruef('150 heute lesen eigene zeit erreicht ohne broker', array($hz150, $rh150['bis']), array(1, '09:00'));
+    $jz130 = $t150('20261122', '08:30');
+    list($rh150) = ansage_regeln_heute_lesen(array('bis_frei' => '09:00') + $rw150, $kh150);
+    $pruef('150 heute lesen eigene zeit vorher mit broker', array($hz150, $rh150['bis']), array(2, '09:00'));
+    list($rh150, $lh150) = ansage_regeln_heute_lesen($rw150, array('haus' => $hs150('08:00', '20261122')) + $kh150);
+    $pruef('150 heute lesen mit gelesenem haus', array($hz150, $rh150['bis'], $lh150['quelle']), array(2, '08:00', 'HAUS'));
+    list($rh150) = ansage_regeln_heute_lesen(array('bis' => 'x') + $rw150, array('haus' => $hs150('08:00', '20261122')) + $kh150);
+    $pruef('150 heute lesen kaputte regeln = vorgaben', array($rh150['von'], $rh150['bis']), array('22:00', '08:00'));
+    $pruef('150 fassung', version_compare(ANSAGE_FASSUNG, '1.5.0', '>='), true);
+    date_default_timezone_set($tz150);
 
     // --- Sprachschluessel: eindeutig ---
     $sl = ansage_sprachschluessel();
@@ -6053,10 +6312,14 @@ function ansage_block_oder_aus($tts, $modi = null)
     return $b;
 }
 
-/** Die Regeln ab Werk (Entscheidungen 01.11.2026): Nachtruhe 22-7 Uhr, dieselbe Ansage hoechstens einmal in 30 Minuten. */
+/**
+ * Die Regeln ab Werk (Entscheidungen 01.11.2026): Nachtruhe 22-7 Uhr, dieselbe Ansage hoechstens einmal in 30 Minuten.
+ * Seit 1.5.0 'bis_frei' => '': an Nicht-Schultagen die Vorgabe aus Ferien und Feiertage, ohne sie wie an Schultagen (22.11.2026).
+ */
 function ansage_regeln_vorgaben()
 {
-    return array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => '');
+    return array('nachtruhe' => 1, 'von' => '22:00', 'bis' => '07:00', 'sperre_min' => 30, 'tafel' => 1, 'tafel_namen' => '', 'homepod' => 1, 'homepod_geraet' => '',
+                 'bis_frei' => '');
 }
 
 /**
@@ -6089,6 +6352,10 @@ function ansage_regeln_wert($r, &$grund = '')
                 }
                 $aus['sperre_min'] = (int) $w;
                 break;
+            case 'bis_frei':    // seit 1.5.0: '' = Vorgabe aus Ferien und Feiertage, sonst die eigene Zeit an Nicht-Schultagen
+                if (!is_string($w)) { $grund = 'M_R_BIS_FREI'; return null; }      // die Form prueft ansage_ruhe_verlaengert() unten
+                $aus['bis_frei'] = $w;
+                break;
             case 'homepod':     // seit 1.4.0
                 if (!in_array($w, array(0, 1, '0', '1'), true)) { $grund = 'M_R_BLOCK'; return null; }
                 $aus['homepod'] = (int) $w;
@@ -6111,6 +6378,7 @@ function ansage_regeln_wert($r, &$grund = '')
         }
     }
     if ($aus['von'] === $aus['bis']) { $grund = 'M_R_GLEICH'; return null; }
+    if ($aus['bis_frei'] !== '' && !ansage_ruhe_verlaengert($aus['von'], $aus['bis'], $aus['bis_frei'])) { $grund = 'M_R_BIS_FREI'; return null; }
     return $aus;
 }
 
@@ -6123,6 +6391,250 @@ function ansage_nachtruhe(array $regeln, $jetzt)
     $v = $min($regeln['von']);
     $b = $min($regeln['bis']);
     return $v < $b ? ($n >= $v && $n < $b) : ($n >= $v || $n < $b);
+}
+
+/* ------------------------------------------------------------------
+ * Seit 1.5.0: das Ende der Nachtruhe an Nicht-Schultagen (Entscheidungen des Hausherrn 22.11.2026)
+ * ------------------------------------------------------------------ */
+
+/** Die Vorgabe, Anbieter Ferien und Feiertage: HH:MM, retained; fehlt sie oder kommt '-', endet die Nachtruhe wie an Schultagen. */
+define('ANSAGE_FREI_THEMA', 'haus/ansage/nachtruhe_frei_bis');
+/** Vom Plugin Ferien und Feiertage (Regeln/07): JJJJMMTT des Tages, zu dem die Werte gehoeren, und schulfrei 1/0/-1. */
+define('ANSAGE_KALENDER_DATUM', 'haus/kalender/datum');
+define('ANSAGE_KALENDER_FREI', 'haus/kalender/heute/frei');
+
+/** Eine Uhrzeit HH:MM (00:00 bis 23:59)? */
+function ansage_hm_ok($w)
+{
+    return is_string($w) && preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w) === 1;
+}
+
+/**
+ * Verlaengert $ende die Nachtruhe von $von bis $bis, ohne sie zu verkuerzen? Rechnet im Kreis der Minuten eines Tages:
+ * $ende liegt in [bis, von). $ende = $bis heisst "wie an Schultagen", $ende = $von hiesse "den ganzen Tag" und wird abgewiesen.
+ */
+function ansage_ruhe_verlaengert($von, $bis, $ende)
+{
+    if (!ansage_hm_ok($von) || !ansage_hm_ok($bis) || !ansage_hm_ok($ende)) { return false; }
+    $m = function ($hm) { return ((int) substr($hm, 0, 2)) * 60 + (int) substr($hm, 3, 2); };
+    return (($m($ende) - $m($bis) + 1440) % 1440) < (($m($von) - $m($bis) + 1440) % 1440);
+}
+
+/**
+ * Welcher Tag ist $jetzt fuer die Nachtruhe? Mit einer Aussage des Plugins Ferien und Feiertage fuer heute
+ * (haus/kalender/datum = heute, haus/kalender/heute/frei 1 oder 0) entscheidet sie: FREI (kein Schultag - Wochenende, Feiertag,
+ * Ferien, eigene Termine) oder SCHULTAG. Ohne sie nach der Uhr des LoxBerry: SAMSTAG, SONNTAG oder OHNE_KALENDER (zaehlt als
+ * Schultag). $haus wie ansage_haus_lesen(). Rein.
+ */
+function ansage_tag_art($jetzt, array $haus = array())
+{
+    $d = (isset($haus['datum']) && is_scalar($haus['datum'])) ? trim((string) $haus['datum']) : '';
+    $f = (isset($haus['frei']) && is_scalar($haus['frei'])) ? trim((string) $haus['frei']) : '';
+    if ($d === date('Ymd', (int) $jetzt) && ($f === '1' || $f === '0')) { return $f === '1' ? 'FREI' : 'SCHULTAG'; }
+    $n = (int) date('N', (int) $jetzt);
+    if ($n === 6) { return 'SAMSTAG'; }
+    if ($n === 7) { return 'SONNTAG'; }
+    return 'OHNE_KALENDER';
+}
+
+/**
+ * Die Regeln fuer heute: array(Regeln, Lage). An einem Nicht-Schultag steht in 'bis' das Ende an Nicht-Schultagen; sonst bleiben
+ * die Regeln, wie sie sind. Rein: keine Datei, kein Netz. $rg geprueft (ansage_regeln_wert()), $haus wie ansage_haus_lesen()
+ * oder array() (dann nur die Uhr und die eigene Einstellung der Linie).
+ * Lage: 'tag' (ansage_tag_art()), 'quelle' (LINIE eigene Zeit, HAUS Vorgabe aus Ferien und Feiertage, KEINE wie an Schultagen,
+ * HAUS_UNGUELTIG eine Vorgabe, die keine Zeit ist oder die Nachtruhe dieser Linie verkuerzte - sie wird nicht verwendet), 'ende'
+ * (das Ende an Nicht-Schultagen, HH:MM). Die Nachtruhe am Abend eines Nicht-Schultags beginnt wie immer um 'von'.
+ */
+function ansage_regeln_heute(array $rg, $jetzt, array $haus = array())
+{
+    $lage = array('tag' => ansage_tag_art($jetzt, $haus), 'quelle' => 'KEINE', 'ende' => isset($rg['bis']) ? (string) $rg['bis'] : '');
+    $von = isset($rg['von']) ? (string) $rg['von'] : '';
+    $eigen = (isset($rg['bis_frei']) && is_string($rg['bis_frei'])) ? $rg['bis_frei'] : '';
+    $hv = (isset($haus['vorgabe']) && is_scalar($haus['vorgabe'])) ? trim((string) $haus['vorgabe']) : '';
+    if ($eigen !== '' && ansage_ruhe_verlaengert($von, $lage['ende'], $eigen)) {
+        $lage['quelle'] = 'LINIE';
+        $lage['ende'] = $eigen;
+    } elseif ($eigen === '' && $hv !== '' && $hv !== '-') {
+        if (ansage_ruhe_verlaengert($von, $lage['ende'], $hv)) {
+            $lage['quelle'] = 'HAUS';
+            $lage['ende'] = $hv;
+        } else {
+            $lage['quelle'] = 'HAUS_UNGUELTIG';
+        }
+    }
+    if (in_array($lage['tag'], array('FREI', 'SAMSTAG', 'SONNTAG'), true)) {      // ohne Nachtruhe wirkt 'bis' nicht
+        $rg['bis'] = $lage['ende'];
+    }
+    return array($rg, $lage);
+}
+
+/**
+ * Die Haus-Themen der Regeln in EINER kurzen Sitzung am Broker: array('ruhe' => '1'|'0'|'', 'vorgabe', 'datum', 'frei'),
+ * jeweils '' ohne Aussage. $mit_nacht = false liest nur den Schalter. $k['schalter'] ersetzt den Schalter wie in
+ * ansage_schalter_lesen(), $k['haus_nacht'] (gibt array('vorgabe' =>, 'datum' =>, 'frei' =>)) die drei uebrigen
+ * (Selbsttest, Linien mit eigenem Broker). Sendet nichts ausser Anmeldung und Abo.
+ */
+function ansage_haus_lesen(array $k = array(), $mit_nacht = true)
+{
+    $aus = array('ruhe' => '', 'vorgabe' => '', 'datum' => '', 'frei' => '');
+    $themen = array();
+    if (isset($k['schalter']) && is_callable($k['schalter'])) {
+        $aus['ruhe'] = ansage_schalter_lesen($k);
+    } else {
+        $themen['ruhe'] = ANSAGE_SCHALTER_THEMA;
+    }
+    if ($mit_nacht) {
+        if (isset($k['haus_nacht']) && is_callable($k['haus_nacht'])) {
+            $h = call_user_func($k['haus_nacht']);
+            foreach (array('vorgabe', 'datum', 'frei') as $s) {
+                if (is_array($h) && isset($h[$s]) && is_scalar($h[$s])) { $aus[$s] = trim((string) $h[$s]); }
+            }
+        } else {
+            $themen['vorgabe'] = ANSAGE_FREI_THEMA;
+            $themen['datum'] = ANSAGE_KALENDER_DATUM;
+            $themen['frei'] = ANSAGE_KALENDER_FREI;
+        }
+    }
+    if ($themen) {
+        $h = ansage_lbhome(ansage_k_home($k));
+        $g = ($h === '') ? null : ansage_json_datei($h . '/config/system/general.json');
+        $m = (is_array($g) && isset($g['Mqtt']) && is_array($g['Mqtt'])) ? $g['Mqtt'] : null;
+        if ($m !== null && isset($m['Brokerhost']) && is_string($m['Brokerhost']) && $m['Brokerhost'] !== '') {
+            $w = ansage_mqtt_retained_viele($m['Brokerhost'], isset($m['Brokerport']) ? (int) $m['Brokerport'] : 1883,
+                                            isset($m['Brokeruser']) ? (string) $m['Brokeruser'] : '',
+                                            isset($m['Brokerpass']) ? (string) $m['Brokerpass'] : '', array_values($themen), ANSAGE_SCHALTER_FRIST);
+            foreach ($themen as $s => $t) { if (isset($w[$t])) { $aus[$s] = $w[$t]; } }
+        }
+    }
+    if ($aus['ruhe'] !== '1' && $aus['ruhe'] !== '0') { $aus['ruhe'] = ''; }
+    return $aus;
+}
+
+/**
+ * Wie ansage_mqtt_retained(), aber fuer mehrere Themen in einem Abo: array(Thema => Nutzlast) fuer jedes Thema, das einen
+ * retained Wert hat; die Sitzung endet, sobald alle da sind, sonst 0,3 s nach der Abo-Bestaetigung. Nur genaue Themen, kein #.
+ */
+function ansage_mqtt_retained_viele($host, $port, $user, $pass, array $themen, $frist)
+{
+    $s16 = function ($x) { return pack('n', strlen($x)) . $x; };
+    $werte = array();
+    $themen = array_values(array_unique(array_filter($themen, 'is_string')));
+    if (!$themen) { return $werte; }
+    $bis = microtime(true) + max(1, (int) $frist);
+    set_error_handler(function () { return true; });
+    $h = stream_socket_client('tcp://' . (strpos($host, ':') !== false ? '[' . $host . ']' : $host) . ':' . (int) $port, $en, $es,
+                              max(1, (int) $frist), STREAM_CLIENT_CONNECT);
+    restore_error_handler();
+    if ($h === false) { return $werte; }
+    stream_set_blocking($h, false);
+    $flaggen = 2 | ($user !== '' ? 128 : 0) | ($pass !== '' ? 64 : 0);
+    $rumpf = $s16('MQTT') . chr(4) . chr($flaggen) . pack('n', 30) . $s16('ansage-' . getmypid() . '-' . mt_rand(1000, 9999))
+           . ($user !== '' ? $s16($user) : '') . ($pass !== '' ? $s16($pass) : '');
+    $abo = pack('n', 1);
+    foreach ($themen as $t) { $abo .= $s16($t) . chr(0); }
+    $senden = function ($d) use ($h, $bis) {
+        while ($d !== '') {
+            set_error_handler(function () { return true; });
+            $n = fwrite($h, $d);
+            restore_error_handler();
+            if ($n === false || microtime(true) > $bis) { return false; }
+            $d = (string) substr($d, (int) $n);
+        }
+        return true;
+    };
+    $puffer = '';
+    $angemeldet = false;
+    $abo_bis = 0.0;
+    if ($senden(ansage_mqtt_bauen(0x10, $rumpf))) {
+        while (microtime(true) < ($abo_bis > 0 ? min($bis, $abo_bis) : $bis)) {
+            $r = array($h);
+            $w = null;
+            $x = null;
+            set_error_handler(function () { return true; });
+            $c = stream_select($r, $w, $x, 0, 50000);
+            $teil = ($c > 0) ? fread($h, 4096) : '';
+            restore_error_handler();
+            if ($c > 0 && ($teil === false || $teil === '') && feof($h)) { break; }
+            $puffer .= (string) $teil;
+            if (strlen($puffer) > 65536) { break; }
+            while (($p = ansage_mqtt_paket($puffer)) !== null) {
+                $puffer = $p[2];
+                if ($p[0] === 2 && !$angemeldet) {
+                    if (strlen($p[1]) < 2 || ord($p[1][1]) !== 0) { $bis = 0.0; break; }    // abgelehnt
+                    $angemeldet = true;
+                    if (!$senden(ansage_mqtt_bauen(0x82, $abo))) { $bis = 0.0; break; }
+                } elseif ($p[0] === 9) {
+                    $abo_bis = microtime(true) + 0.3;
+                } elseif ($p[0] === 3) {
+                    $pub = ansage_mqtt_publish($p[1]);
+                    if ($pub !== null && in_array($pub[0], $themen, true) && !isset($werte[$pub[0]])) { $werte[$pub[0]] = trim($pub[1]); }
+                    if (count($werte) === count($themen)) { $bis = 0.0; break; }
+                }
+            }
+        }
+        set_error_handler(function () { return true; });
+        fwrite($h, ansage_mqtt_bauen(0xE0, ''));
+        restore_error_handler();
+    }
+    fclose($h);
+    return $werte;
+}
+
+/**
+ * Die Regeln fuer heute fuer eine Linie mit eigenem Morgenfenster oder eigener Nachtruhe-Abfrage (Weatherdata, Kabelwarnung,
+ * Beschattungswaechter, Bewaesserung): dieselbe Rechnung wie in ansage_regel_sprechen() - array(Regeln, Lage) wie
+ * ansage_regeln_heute(). $regeln ungeprueft (ungueltig = Vorgaben). Der Broker wird nur gefragt, wenn die Antwort etwas
+ * aendern kann: Nachtruhe an, nach den Regeln fuer Schultage gerade keine Nachtruhe, und bei einer eigenen Zeit der Linie nur,
+ * solange diese Zeit noch nicht erreicht ist. Die Linie ruft es nur dort, wo sie es braucht (im Morgenfenster), nicht in jedem
+ * Lauf. $k['haus'] (wie ansage_haus_lesen()) ersetzt die Sitzung, wenn die Linie schon gelesen hat; $k['jetzt'] die Uhr.
+ * Hoechstens eine kurze Sitzung, schreibt nichts.
+ */
+function ansage_regeln_heute_lesen($regeln, array $k = array())
+{
+    $g = '';
+    $rg = ansage_regeln_wert(is_array($regeln) ? $regeln : array(), $g);
+    if ($rg === null) { $rg = ansage_regeln_vorgaben(); }
+    $jetzt = (isset($k['jetzt']) && is_callable($k['jetzt'])) ? (int) call_user_func($k['jetzt']) : time();
+    $haus = array();
+    if (isset($k['haus']) && is_array($k['haus'])) {
+        $haus = $k['haus'];
+    } elseif (!empty($rg['nachtruhe']) && !ansage_nachtruhe($rg, $jetzt)) {
+        $frag = true;
+        if ($rg['bis_frei'] !== '') {
+            $eigen = $rg;
+            $eigen['bis'] = $rg['bis_frei'];
+            $frag = ansage_nachtruhe($eigen, $jetzt);       // die eigene Zeit ist schon erreicht: nichts zu fragen
+        }
+        if ($frag) { $haus = ansage_haus_lesen($k, true); }
+    }
+    return ansage_regeln_heute($rg, $jetzt, $haus);
+}
+
+/** Die Zeile "Ende der Nachtruhe an Nicht-Schultagen" im Reiter Test: array(Stand wie ansage_pruefzeile(), Klartext). */
+function ansage_frei_zeile(array $rg, array $lage, array $k)
+{
+    $t = function ($id) use ($k) { return ansage_t($id, $k); };
+    $bis = isset($rg['bis']) ? (string) $rg['bis'] : '';
+    if ($lage['quelle'] === 'LINIE') {
+        $s = 1;
+        $x = sprintf($t('T_R_FREI_LINIE'), $lage['ende']);
+    } elseif ($lage['quelle'] === 'HAUS') {
+        $s = 1;
+        $x = sprintf($t('T_R_FREI_HAUS'), $lage['ende'], ANSAGE_FREI_THEMA);
+    } elseif ($lage['quelle'] === 'HAUS_UNGUELTIG') {
+        $s = 0;
+        $x = sprintf($t('T_R_FREI_UNGUELTIG'), ANSAGE_FREI_THEMA, $bis);
+    } else {
+        $s = 1;
+        $x = sprintf($t('T_R_FREI_KEINE'), $bis, ANSAGE_FREI_THEMA);
+    }
+    if ($lage['tag'] === 'OHNE_KALENDER') {
+        $x .= ' ' . sprintf($t('T_R_HEUTE_OHNE_KALENDER'), 'haus/kalender');
+        if ($lage['ende'] !== $bis) { $s = min($s, 0); }      // eingeschaltet, aber Schultage unbekannt
+    } else {
+        $x .= ' ' . $t('T_R_HEUTE_' . $lage['tag']);
+    }
+    return array($s, $x);
 }
 
 /**
@@ -6507,11 +7019,15 @@ function ansage_regel_sprechen(array $eintraege, array $tts, array $regeln, arra
         $aus['regel'] = 'STAND';
         return $aus;
     }
-    if ($vorab[0] && ansage_schalter_lesen($k) === '1') {
+    /* Seit 1.5.0 in EINER Sitzung mit dem Schalter: das Ende der Nachtruhe an Nicht-Schultagen (Vorgabe, Kalender).
+     * Es verlaengert die Nachtruhe nur; der Blick ohne Sperre oben bleibt deshalb ein gueltiges Tor. */
+    $haus = $vorab[0] ? ansage_haus_lesen($k, !empty($rg['nachtruhe'])) : null;
+    if ($haus !== null && $haus['ruhe'] === '1') {
         foreach ($gueltig as $e) { $aus['einzeln'][$e['schluessel']] = 'SCHALTER'; }
         $aus['regel'] = 'SCHALTER';
         return $aus;
     }
+    if ($haus !== null) { list($rg) = ansage_regeln_heute($rg, $jetzt, $haus); }
     $erg = ansage_stand_aendern(function ($stand) use ($gueltig, $rg, $jetzt) {
         $einzeln = array();
         $text = array();
@@ -6581,12 +7097,16 @@ function ansage_regel_lage(array $tts, array $regeln, array $k, $offen)
     $rg = ansage_regeln_wert($regeln, $g);
     if ($rg === null) { $rg = ansage_regeln_vorgaben(); }
     $jetzt = (isset($k['jetzt']) && is_callable($k['jetzt'])) ? (int) call_user_func($k['jetzt']) : time();
-    $z[] = array(1, empty($rg['nachtruhe']) ? sprintf($t('T_R_OHNE_RUHE'), $rg['sperre_min'])
-        : sprintf(ansage_nachtruhe($rg, $jetzt) ? ((isset($k['nacht_lage']) && is_string($k['nacht_lage'])) ? $k['nacht_lage'] : $t('T_R_NACHT')) : $t('T_R_TAG'), $rg['von'], $rg['bis'], $rg['sperre_min']));
+    /* Seit 1.5.0: die Nachtruhe fuer heute; ohne $offen nur nach der Uhr und der eigenen Einstellung (kein Broker). */
+    $hl = $offen ? ansage_haus_lesen($k, !empty($rg['nachtruhe'])) : null;
+    list($rh, $lage) = ansage_regeln_heute($rg, $jetzt, $hl === null ? array() : $hl);
+    $z[] = array(1, empty($rh['nachtruhe']) ? sprintf($t('T_R_OHNE_RUHE'), $rh['sperre_min'])
+        : sprintf(ansage_nachtruhe($rh, $jetzt) ? ((isset($k['nacht_lage']) && is_string($k['nacht_lage'])) ? $k['nacht_lage'] : $t('T_R_NACHT')) : $t('T_R_TAG'), $rh['von'], $rh['bis'], $rh['sperre_min']));
     if ($offen) {
-        $w = ansage_schalter_lesen($k);
+        $w = $hl['ruhe'];
         $z[] = array($w === '1' ? -1 : 1, sprintf($t($w === '1' ? 'T_R_SCHALTER_AUS' : ($w === '0' ? 'T_R_SCHALTER_FREI' : 'T_R_SCHALTER_NIE')),
                                                  ANSAGE_SCHALTER_THEMA));
+        if (!empty($rg['nachtruhe'])) { $z[] = ansage_frei_zeile($rg, $lage, $k); }
     }
     return $z;
 }
@@ -6598,7 +7118,7 @@ function ansage_regel_lage(array $tts, array $regeln, array $k, $offen)
 /** Die Felder des Blocks fuer die Einmalmeldung (X-2). Tafel und HomePod stehen nicht darin: Wer $h['w'] und $h['c'] an ansage_regeln_html() gibt, fuehrt deren vier Felder selbst (seit 1.4.1). */
 function ansage_regeln_x2_felder(array $anlaesse = array())
 {
-    $f = array('ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min');
+    $f = array('ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_ruhe_bis_frei');    // bis_frei seit 1.5.0
     foreach (array_keys($anlaesse) as $a) { $f[] = 'ansage_anlass_' . $a; }
     return $f;
 }
@@ -6630,6 +7150,23 @@ function ansage_regeln_formular(array $post, array $alt, array $anlaesse, array 
         $mangel[] = array('kennung' => 'M_R_GLEICH', 'text' => ansage_t('M_R_GLEICH', $k));
         $bean[] = 'ansage_ruhe_von';
         $bean[] = 'ansage_ruhe_bis';
+    }
+    /* Seit 1.5.0: das Ende an Nicht-Schultagen. Fehlt das Feld (aelteres Formular), bleibt der alte Wert; leer = Vorgabe.
+     * Eine Zeit, die die Nachtruhe nicht verlaengert, wird beanstandet; der Rueckgabewert traegt dann den alten Wert. */
+    if (array_key_exists('ansage_ruhe_bis_frei', $post)) {
+        $w = is_string($post['ansage_ruhe_bis_frei']) ? trim($post['ansage_ruhe_bis_frei']) : null;
+        $ok = ($w === '') || ($w !== null && ansage_hm_ok($w) && (in_array('ansage_ruhe_von', $bean, true) || in_array('ansage_ruhe_bis', $bean, true)
+                                                                   || ansage_ruhe_verlaengert($neu['von'], $neu['bis'], $w)));
+        if ($ok) {
+            $neu['bis_frei'] = $w;
+        } else {
+            $mangel[] = array('kennung' => 'M_R_BIS_FREI', 'text' => ansage_t('M_R_BIS_FREI', $k));
+            $bean[] = 'ansage_ruhe_bis_frei';
+        }
+    } elseif ($neu['bis_frei'] !== '' && !in_array('ansage_ruhe_von', $bean, true) && !in_array('ansage_ruhe_bis', $bean, true)
+              && !ansage_ruhe_verlaengert($neu['von'], $neu['bis'], $neu['bis_frei'])) {
+        $mangel[] = array('kennung' => 'M_R_BIS_FREI', 'text' => ansage_t('M_R_BIS_FREI', $k));
+        $bean[] = 'ansage_ruhe_bis_frei';
     }
     /* Seit 1.4.0. Das Merkmal ansage_tafel_da sagt: dieses Formular trug den Haken. Fehlt es, bleibt der alte Wert; sonst schaltete
      * jede fremde Eingabe die Tafel ab. */
@@ -6700,6 +7237,13 @@ function ansage_regeln_html(array $regeln, array $haken, array $anlaesse, array 
              . call_user_func($m, $f) . '>';
         $o[] = '</div>';
     }
+    /* Seit 1.5.0: leer = Vorgabe aus Ferien und Feiertage (haus/ansage/nachtruhe_frei_bis), ohne sie wie an Schultagen. */
+    $o[] = '<div class="sm-feld">';
+    $o[] = '    <label for="ansage_ruhe_bis_frei">' . $e($t('L_R_BIS_FREI')) . '</label>';
+    $o[] = '    <input data-role="none" type="time" id="ansage_ruhe_bis_frei" name="ansage_ruhe_bis_frei" value="'
+         . $e((string) call_user_func($w, 'ansage_ruhe_bis_frei', $r['bis_frei'])) . '"' . call_user_func($m, 'ansage_ruhe_bis_frei') . '>';
+    $o[] = '    <div class="sm-hilfe">' . $e(sprintf($t('R_BIS_FREI_HINWEIS'), ANSAGE_FREI_THEMA)) . '</div>';
+    $o[] = '</div>';
     $o[] = '<div class="sm-feld">';
     $o[] = '    <label for="ansage_sperre_min">' . $e($t('L_R_SPERRE')) . '</label>';
     $o[] = '    <input data-role="none" type="number" min="5" max="240" id="ansage_sperre_min" name="ansage_sperre_min" value="'

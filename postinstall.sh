@@ -101,13 +101,37 @@ trap by_marke_bei_abbruch EXIT
 # Das Plugin ist darauf vorbereitet: es fragt die installierte Fassung nach
 # ihren Feld- und Methodennamen, statt sie zu raten (siehe bin/byd.py). Der
 # Reiter Test zeigt, was gefunden wurde.
-PYBYD="0.0.73"
+#
+# 0.9.48 (Issue #2, 22.11.2026): von 0.0.73 auf 0.0.88 angehoben. BYD hat nach
+# Angabe des Melders seine Server geaendert; mit 0.0.73 kam danach ausser dem
+# Kilometerstand nichts mehr an (nicht gemessen, kein BYD im Haus). Vorher die
+# Schnittstelle verglichen, die bin/byd.py nutzt (Quelltext beider Fassungen von
+# PyPI, statisch): 17 Methoden des Clients mit gleicher Signatur, die 5 Felder
+# von BydConfig gleich (neu nur identifier_type mit Vorgabe "0"), alle 33 Felder
+# mit demselben ersten Kandidaten, die Ausnahmen BydAuthenticationError,
+# BydRemoteControlError, BydApiError mit derselben Basis, Abhaengigkeiten gleich.
+# Geaendert hat sich unter anderem app_version 3.2.2 -> 3.6.0 in BydConfig.
+# Die Einstellung pybyd_neueste (unten) holt auf Wunsch die neueste Fassung.
+PYBYD="0.0.88"
 
 mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten" || {
     echo "<FAIL> Ordner konnten nicht angelegt werden."
     exit 1
 }
 chmod 755 "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
+
+# 0.9.48: die festgelegte pybyd-Fassung fuer den Reiter Test hinterlegen (wie
+# VolkswagenID 0.9.50). Er vergleicht die installierte Fassung damit, ohne die
+# Zahl selbst zu kennen; postinstall.sh liegt nach der Installation nicht mehr
+# auf dem Geraet. Ein Fehlschlag bricht nichts ab; der Reiter Test sagt dann
+# "nicht verglichen".
+if printf '{"pybyd":"%s"}\n' "$PYBYD" > "$PDATA/bibliothek_soll.json.tmp" 2>/dev/null \
+   && mv -f "$PDATA/bibliothek_soll.json.tmp" "$PDATA/bibliothek_soll.json" 2>/dev/null; then
+    chmod 644 "$PDATA/bibliothek_soll.json" 2>/dev/null
+else
+    rm -f "$PDATA/bibliothek_soll.json.tmp" 2>/dev/null
+    echo "<INFO> Die festgelegte pybyd-Fassung liess sich nicht hinterlegen; der Reiter Test vergleicht dann nicht."
+fi
 
 # ---------- Konfiguration ----------
 [ -f "$PCONFIG/byd.json" ] || echo '{}' > "$PCONFIG/byd.json"
@@ -265,7 +289,7 @@ if [ -f "$DSICHERUNG" ] && [ ! -L "$DSICHERUNG" ] && [ -s "$DSICHERUNG" ]; then
 fi
 
 # ---------- Python suchen ----------
-# pybyd verlangt Python 3.11 oder neuer (Metadaten von pybyd 0.0.73:
+# pybyd verlangt Python 3.11 oder neuer (Metadaten von pybyd 0.0.73 und 0.0.88:
 # "Requires-Python >=3.11"). Debian 12 liefert 3.11, Debian 13 liefert 3.13;
 # Debian 11 (LoxBerry 3.0.0) liefert 3.9 - deshalb steht LB_MINIMUM auf 3.0.1.
 PY=""
@@ -315,6 +339,34 @@ fi
 timeout 900 "$VENV/bin/python3" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null 2>&1 || \
     echo "<INFO> pip liess sich nicht aktualisieren - es wird mit der vorhandenen Fassung versucht."
 
+# 0.9.48 (Issue #2, Entscheidung des Hausherrn 22.11.2026): Einstellung "Beim
+# Update die neueste pybyd holen" (pybyd_neueste, ab Werk 0). Gelesen aus
+# byd.json, die oben schon aus der Zweitschrift zurueckgespielt ist. Nur 1, "1"
+# oder true schaltet ein; fehlt der Schluessel oder ist die Datei unlesbar, gilt
+# aus. An: zuerst die neueste Fassung; gelingt das nicht, die festgelegte wie
+# bisher. Aus: die festgelegte wie bisher.
+BY_NEUESTE=$("$VENV/bin/python3" -I -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        d = json.load(f)
+except Exception:
+    d = {}
+w = d.get("pybyd_neueste") if isinstance(d, dict) else None
+print(1 if (w is True or (w == 1 and w is not False) or w == "1") else 0)
+' "$PCONFIG/byd.json" 2>/dev/null)
+[ "$BY_NEUESTE" = 1 ] || BY_NEUESTE=0
+BY_GEHOLT=0
+if [ "$BY_NEUESTE" = 1 ]; then
+    echo "<INFO> Die Einstellung 'Beim Update die neueste pybyd holen' ist an: es wird die neueste Fassung"
+    echo "<INFO> installiert. Festgelegt und mit dem Plugin geprueft ist $PYBYD; eine neuere ist ungeprueft."
+    if timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir --upgrade "pybyd"; then
+        BY_GEHOLT=1
+    else
+        echo "<WARNING> Die neueste Fassung liess sich nicht installieren - es wird die festgelegte $PYBYD versucht."
+    fi
+fi
+if [ "$BY_GEHOLT" = 0 ]; then
 echo "<INFO> Installiere pybyd $PYBYD (benoetigt eine Internetverbindung) ..."
 if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir "pybyd==$PYBYD"; then
     echo "<INFO> Die feste Fassung ist nicht installierbar - es wird die neueste versucht."
@@ -332,6 +384,7 @@ if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check
     echo "<INFO> 'Feldzuordnung vorschlagen' aufrufen - er zeigt, wie die Felder in"
     echo "<INFO> DIESER Fassung heissen."
 fi
+fi
 
 # Der Rueckgabewert allein genuegt nicht - es wird nachgesehen, ob sich das
 # Paket auch laden laesst.
@@ -342,6 +395,7 @@ if ! "$VENV/bin/python3" -c 'from pybyd import BydClient, BydConfig' 2>/dev/null
 fi
 IST=$("$VENV/bin/python3" -c 'import importlib.metadata as m; print(m.version("pybyd"))' 2>/dev/null || echo "unbekannt")
 echo "<OK> pybyd geladen, Fassung: $IST"
+[ "$IST" = "$PYBYD" ] || echo "<INFO> Festgelegt ist $PYBYD; installiert ist $IST (Reiter Test, Zeile zur festgelegten Fassung)."
 
 # ---------- Rechte ----------
 chmod 755 "$PBIN/byd.py" 2>/dev/null

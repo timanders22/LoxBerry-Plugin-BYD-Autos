@@ -258,6 +258,9 @@ function by_vorgaben()
         'verlauf_tage'    => 8,
         'gps_ein'         => 1,
         'mqtt_bibliothek' => 1,
+        // 0.9.48 (Issue #2): beim Update die neueste pybyd holen - ab Werk AUS, wirkt nur in postinstall.sh.
+        // Gleich in VORGABEN, bin/byd.py.
+        'pybyd_neueste'   => 0,
         'aktionstoken'    => '',
         'wartezeit'       => 8,
         // Vorklimatisierung am Abfahrtsassistenten - ab Werk AUS.
@@ -946,7 +949,7 @@ function by_eingabe_felder($form)
                              'ladeempf_thema', 'ladeempf_grenze', 'ladeempf_alter',
                              'preisempf_quelle', 'preisempf_praefix', 'preisempf_stunden',
                              'kapazitaet', 'heim_breite', 'heim_laenge', 'heim_radius'),
-            'haken' => array('gps_ein', 'mqtt_bibliothek', 'steuerung_ein', 'gefahr_ein', 'abfahrt_ein',
+            'haken' => array('gps_ein', 'mqtt_bibliothek', 'pybyd_neueste', 'steuerung_ein', 'gefahr_ein', 'abfahrt_ein',
                              'ladeempf_ein', 'ladeempf_unter', 'preisempf_ein'),
         ),
         'mqtt' => array(
@@ -964,7 +967,7 @@ function by_eingabe_felder($form)
      * (ansage_x2_felder() nennt sie nicht; markiert werden koennen sie). */
     $by_th = array('tts_alexa_token_loeschen', 'tts_google_token_loeschen');
     $felder['einstellungen']['text'] = array_merge($felder['einstellungen']['text'],
-        array_values(array_diff(ansage_x2_felder(by_ansage_opt()), $by_th)), array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_tafel_namen', 'ansage_homepod_geraet'));     // 0.9.34: Tafel und HomePod dazu: ansage_regeln_formular() beanstandet sie, ohne Eintrag hier ging die Beanstandung samt Eingaben verloren.
+        array_values(array_diff(ansage_x2_felder(by_ansage_opt()), $by_th)), array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_ruhe_bis_frei' /* 0.9.48, Stamm 1.5.0 */, 'ansage_sperre_min', 'ansage_tafel_namen', 'ansage_homepod_geraet'));     // 0.9.34: Tafel und HomePod dazu: ansage_regeln_formular() beanstandet sie, ohne Eintrag hier ging die Beanstandung samt Eingaben verloren.
     $felder['einstellungen']['haken'] = array_merge($felder['einstellungen']['haken'], $by_th,
         array('ansage_laden_fertig', 'ansage_ausfall', 'ansage_kabel_vergessen', 'ansage_ruhe_ein', 'ansage_tafel_ein', 'ansage_homepod_ein'));
     /* Welle Mehrfach-Ziele (0.9.29): die Tabelle der weiteren Ziele (Felder name[N], N = 2..6) - nur, wenn die
@@ -1809,8 +1812,9 @@ function by_sicherung_spaeter()
     // Nr. 36 b (seit 0.9.23): eine Sicherung von 0.9.22 oder frueher kennt die Sprachausgabe nicht.
     // Gruppe 42 (0.9.29): eine Sicherung von 0.9.28 oder frueher kennt die Schluessel der Hausform nicht -
     // die Anlage behaelt ihren jetzigen Wert (auch endpunkt_ein).
+    // 0.9.48: eine Sicherung von 0.9.47 oder frueher kennt pybyd_neueste nicht.
     return array_merge(array('preisempf_ein', 'preisempf_quelle', 'preisempf_praefix',
-                             'preisempf_stunden'), by_ansage_neue_schluessel(), by_neue_schluessel_0929());
+                             'preisempf_stunden', 'pybyd_neueste'), by_ansage_neue_schluessel(), by_neue_schluessel_0929());
 }
 
 function by_horcher_themen($cfg = null)
@@ -2901,6 +2905,7 @@ function by_sicherung_regeln()
         'gefahr_ein'      => 'schalter',   // Welle Bild 17 (0.9.26): zweiter Haken
         'gps_ein'         => 'schalter',
         'mqtt_bibliothek' => 'schalter',
+        'pybyd_neueste'   => 'schalter',   // 0.9.48
         'abfahrt_ein'     => 'schalter',
         'ladeempf_ein'    => 'schalter',
         'ladeempf_unter'  => 'schalter',
