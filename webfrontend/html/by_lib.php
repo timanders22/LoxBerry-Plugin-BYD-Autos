@@ -29,11 +29,13 @@ if (!function_exists('by_e')) {
  * 0.9.23; seit 0.9.29 Stamm 1.2.1 mit weiteren Ausgabezielen, by_mit_zielen(), Welle Mehrfach-Ziele).
  * Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+require_once __DIR__ . '/meldung.php';     // Statusmeldungen an SignalBot (seit 0.9.49)
 /* 0.9.42: Das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des
  * Hausherrn 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den
  * anderen Linien. Die Beschreibung dieser Linie steht in by_sicherung_beschreibung(). Die Datei tut beim
  * Laden nichts ausser Funktionen anzulegen und antwortet bei direktem Aufruf mit 403. */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 0.9.49, Regeln/07)
 
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
@@ -3621,7 +3623,14 @@ function by_sicherung_beschreibung()
             continue;
         }
         $schluessel[$k] = array(
-            'pruefen' => function ($w) use ($k) { $e = by_sicherung_wert($k, $w); return $e[1]; },
+            'pruefen' => function ($w) use ($k) {
+                /* 0.9.49: kein Praefix auf einem gemeinsamen Bereich unter haus/ (Regeln/07) - wie im Formular. */
+                if ($k === 'mqtt_topic' && is_string($w) && hb_bereich($w) !== '') {
+                    return sprintf(by_t('HAUSBEREICH.SICH_W'), hb_bereich($w));
+                }
+                $e = by_sicherung_wert($k, $w);
+                return $e[1];
+            },
             'wandeln' => function ($w) use ($k) { $e = by_sicherung_wert($k, $w); return $e[0]; },
         );
     }
@@ -4523,6 +4532,19 @@ function by_signal_test_lesen(array $zeilen)
 }
 
 /** Testmeldung an SignalBot ueber byd.py --signal-test (ab Werk wirkungslos). array(Ergebnis, Satz). */
+/** 0.9.49: der Block 'meldung' des gemeinsamen Moduls aus den gespeicherten Schluesseln signal_ein und signal_<anlass>
+ *  (Entscheidung des Hausherrn 24.11.2026, F1: Einstellungen uebernehmen) - Sperre wie ab Werk. */
+function by_meld_aus_cfg($cfg)
+{
+    if (!is_array($cfg)) { return null; }
+    $h = array();
+    foreach (array('laden_fertig', 'ausfall', 'vorklima', 'kabel') as $a) {
+        $h[$a] = (isset($cfg['signal_' . $a]) && (string) $cfg['signal_' . $a] === '1') ? 1 : 0;
+    }
+    return array('ein' => !empty($cfg['signal_ein']) ? 1 : 0, 'haken' => $h,
+                 'sperre_min' => defined('MELD_SPERRE_VORGABE') ? MELD_SPERRE_VORGABE : 60);
+}
+
 function by_signal_test($cfg = null)
 {
     if ($cfg === null) {
@@ -4531,20 +4553,9 @@ function by_signal_test($cfg = null)
     if (empty($cfg['signal_ein'])) {
         return array('aus', by_t('SIGNAL.T_AUS'));
     }
-    $p = by_paths();
-    $py = $p['bindir'] . '/venv/bin/python3';
-    $skript = $p['bindir'] . '/byd.py';
-    if (!is_file($py) || !is_file($skript)) {
-        return array('nicht_moeglich', by_t('SIGNAL.T_NICHT_MOEGLICH'));
-    }
-    $aus = array();
-    @exec(escapeshellcmd($py) . ' ' . escapeshellarg($skript) . ' --signal-test 2>/dev/null', $aus);
-    list($e, $text) = by_signal_test_lesen($aus);
-    $schl = array('angenommen' => 'SIGNAL.T_ANGENOMMEN', 'abgelehnt' => 'SIGNAL.T_ABGELEHNT',
-                  'keine_antwort' => 'SIGNAL.T_KEINE_ANTWORT', 'aus' => 'SIGNAL.T_AUS',
-                  'nicht_moeglich' => 'SIGNAL.T_NICHT_MOEGLICH');
-    $satz = by_t($schl[$e]);
-    return array($e, $e === 'abgelehnt' ? sprintf($satz, $text) : $satz);
+    /* 0.9.49 (Entscheidung des Hausherrn 24.11.2026, F1): ueber das gemeinsame Modul (haus/meldung/<ordner>, Quittung). */
+    list($ok, $satz) = by_meld_test();
+    return array($ok ? 'angenommen' : 'keine_antwort', $satz);
 }
 
 
@@ -4693,4 +4704,147 @@ function by_gesund_fakten(array $cfg)
         $f['bruecke_laeuft'] = $l[0] === true;
     }
     return $f;
+}
+
+/**
+ * 0.9.49 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Dazu der Vergleich der Liste mit der, die der Dienst in seinen Zustand schreibt (haus_bereiche).
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function by_pruef_praefix_haus($cfg)
+{
+    $p = (trim((string) $cfg['mqtt_topic'], '/') !== '' ? trim((string) $cfg['mqtt_topic'], '/') : 'byd');
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(!empty($cfg['mqtt_ein']))) {
+            return array(-1, sprintf(by_t('HAUSBEREICH.A_AUS'), by_e($p), by_e($b)));
+        }
+        return array(0, sprintf(by_t('HAUSBEREICH.A_NEIN'), by_e($p), by_e($b)));
+    }
+    $z = (is_array(by_zustand()) && isset(by_zustand()['haus_bereiche'])) ? by_zustand()['haus_bereiche'] : null;
+    if (!is_array($z)) {
+        return array(-1, sprintf(by_t('HAUSBEREICH.A_UNBEKANNT'), by_e($p)));
+    }
+    if ($z !== hb_bereiche()) {
+        return array(0, sprintf(by_t('HAUSBEREICH.A_LISTE'), by_e(implode(', ', hb_bereiche())),
+            by_e(implode(', ', array_map('strval', $z)))));
+    }
+    return array(1, sprintf(by_t('HAUSBEREICH.A_JA'), by_e($p)));
+}
+
+if (!function_exists('by_meld_block')) {
+
+/* ---------------- Statusmeldungen an SignalBot (0.9.49, gemeinsames Modul meldung.php) ----------------
+ *
+ * Auftrag des Hausherrn 23.11.2026, Entscheidungen 23./24.11.2026: dieselben Anlaesse wie die Ansage, eigener Haken je
+ * Anlass, ab Werk aus; Sperre, Bremse und Versand im Modul. Die Erkennung laeuft auch ohne Ausgabeart, wenn eine Meldung
+ * eingeschaltet ist (by_meld_aktiv()), und legt einen Anlass hin, wenn Ansage ODER Meldung ihn will
+ * (by_meld_will()); der Sender trennt die Wege wieder (by_meld_nur_ansage()).
+ */
+
+/** Die meldbaren Anlaesse: Name => Beschriftung (dieselben wie die Ansage). */
+function by_meld_anlaesse()
+{
+    return array('laden_fertig' => by_t('G42.L_SIG_FERTIG'), 'ausfall' => by_t('G42.L_SIG_AUSFALL'), 'vorklima' => by_t('G42.L_SIG_VORKLIMA'), 'kabel' => by_t('EINST.L_SIGNAL_KABEL'));
+}
+
+/** Die ab-Werk-Haken der Ansage dieser Linie: so stehen auch die Haken der Meldung, solange der Block nie gespeichert ist. */
+function by_meld_haken_vorgabe()
+{
+    return array('laden_fertig' => 1, 'ausfall' => 1, 'vorklima' => 1, 'kabel' => 1);
+}
+
+/** Ist der Haken dieses Anlasses fuer die ANSAGE gesetzt? */
+function by_ansage_anlass_sprache($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    return false;     // die Ansage hat eigene Anlaesse; dieser Block meldet nur
+}
+
+/** Der wirksame Block 'meldung' fuer den Betrieb (ungueltig gespeichert gilt als aus und wird im Formular genannt). */
+function by_meld_block($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    list($b) = meld_block(by_meld_aus_cfg($cfg), by_meld_anlaesse(), by_meld_haken_vorgabe());
+    return $b;
+}
+
+/** Die Beanstandungen eines gespeicherten Blocks (leer = gueltig). */
+function by_meld_bean($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    list(, $f) = meld_block(by_meld_aus_cfg($cfg), by_meld_anlaesse(), by_meld_haken_vorgabe());
+    return $f;
+}
+
+/** Ist irgendein Anlass zur Meldung eingeschaltet? Dann laeuft die Erkennung auch ohne Ausgabeart. */
+function by_meld_aktiv($cfg = null)
+{
+    return meld_irgendein_an(by_meld_block($cfg));
+}
+
+/** Will die Ansage ODER die Meldung diesen Anlass? */
+function by_meld_will($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    return by_ansage_anlass_sprache($a, $cfg) || meld_anlass_an(by_meld_block($cfg), (string) $a);
+}
+
+/** Der Kontext des Moduls: Datenordner (data/plugins/<ordner>, daraus der Absender) und Texte - wie bei der Ansage. */
+function by_meld_k()
+{
+    return by_ansage_k();
+}
+
+/** Fuer die Ansage nur Eintraege, deren Ansage-Haken gesetzt ist; ein Eintrag ohne bekannten Anlass bleibt wie bisher. */
+function by_meld_nur_ansage(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    $anl = by_meld_anlaesse();
+    $aus = array();
+    foreach ($l as $e) {
+        if (is_array($e) && array_key_exists(meld_anlass_von($e), $anl) && !by_ansage_anlass_sprache(meld_anlass_von($e), $cfg)) { continue; }
+        $aus[] = $e;
+    }
+    return $aus;
+}
+
+/** Die Eintraege an SignalBot melden. Protokoll: eine Zeile, wenn gesendet oder gescheitert (nie der Text). */
+function by_meld_senden(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    $b = by_meld_block($cfg);
+    if (empty($b['ein']) || !$l) { return null; }
+    $a = meld_regel_senden($l, $b, by_meld_k());
+    if ($a['regel'] === '' || in_array($a['regel'], array('BREMSE', 'STAND', 'ORDNER'), true)) {
+        by_log(meld_regel_kurz($a));
+    }
+    return $a;
+}
+
+/** Der Knopf "Testmeldung senden": array(angenommen, Satz). Geht an Haken, Sperre und Bremse vorbei. */
+function by_meld_test()
+{
+    $r = meld_testmeldung(by_meld_k());
+    by_log('Testmeldung an SignalBot: ' . ($r[0] ? 'angenommen' : 'nicht angenommen'));
+    return $r;
+}
+
+/** Der Block im Einstellungsformular (unter den Ansage-Regeln, im selben Formular), mit Lage und Knopf. */
+function by_meld_form_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = by_config(false); }
+    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); };
+    $k = by_meld_k();
+    $o = array();
+    $o[] = '<h3>' . $e(meld_t('TITEL', $k)) . '</h3>';
+    $o[] = meld_formular_html(by_meld_block($cfg), by_meld_anlaesse(), array(), $k);
+    list(, $lage) = meld_pruefzeile(by_meld_block($cfg), by_meld_bean($cfg), $k);
+    $o[] = '<div class="sm-hilfe">' . $e(meld_t('F_TEST', $k) . ' ' . $lage) . '</div>';
+    $o[] = '<div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="meld_test" value="1">'
+         . $e(meld_t('K_TEST', $k)) . '</button></div>';
+    return implode("\n", $o) . "\n";
+}
 }

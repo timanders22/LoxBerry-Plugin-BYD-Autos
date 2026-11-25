@@ -661,6 +661,13 @@ if ($by_post && $by_formular === 'mqtt') {
          * wie beim Zurueckspielen (by_sicherung_regel 'praefix'). */
         $by_fehler[] = sprintf(by_t('EINST.FEHLER_THEMA_RAND'), by_t('EINST.L_MQTT_TOPIC'));
         $by_beanstandet[] = 'mqtt_topic';
+    } elseif (hb_bereich($by_mtopic) !== '' && $by_mtopic !== (string) $by_mcfg['mqtt_topic']) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        /* 0.9.49 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+         * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+         * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+        $by_fehler[] = sprintf(by_t('HAUSBEREICH.FEHLER'), by_e($by_mtopic), by_e(hb_bereich($by_mtopic)));
+        $by_beanstandet[] = 'mqtt_topic';
     } else {
         $by_mcfg['mqtt_topic'] = $by_mtopic;
     }
@@ -755,13 +762,7 @@ if ($by_post && $by_formular === 'g42') {
     }
     $by_eq = $by_tx('ladeempf_quelle');
     $by_g['ladeempf_quelle'] = ($by_eq === 'haus') ? 'haus' : 'thema';
-    $by_sp = $by_tx('signal_praefix');
-    if (!preg_match('/^[A-Za-z0-9_-]{1,40}$/', $by_sp)) {
-        $by_fehler[] = by_t('G42.FEHLER_PRAEFIX');
-        $by_beanstandet[] = 'signal_praefix';
-    } else {
-        $by_g['signal_praefix'] = $by_sp;
-    }
+    // 0.9.49: kein Feld signal_praefix mehr - Meldungen gehen unter haus/meldung/<ordner>; der gespeicherte Wert bleibt
     if ($by_fehler) {
         $by_meldungen[] = sprintf(by_t('EINST.NICHT_GESPEICHERT'), count($by_fehler));
         $by_eingaben_form = 'g42';
@@ -1663,8 +1664,7 @@ $by_gh = function ($k) use ($by_cfg) { return by_eingabe_an('g42', $k, !empty($b
 <div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
   <input data-role="none" type="checkbox" name="<?= $by_k ?>" value="1" <?= $by_gh($by_k) ?>> <?= by_e(by_t($by_l)) ?></label></div>
 <?php } ?>
-<div class="sm-feld"><label for="signal_praefix"><?= by_e(by_t('G42.L_SIGNAL_PRAEFIX')) ?></label>
-  <input data-role="none" type="text" id="signal_praefix" name="signal_praefix" value="<?= by_e($by_gw('signal_praefix')) ?>"<?= by_markierung('signal_praefix') ?> placeholder="signalbot"></div>
+<?php /* 0.9.49: das Feld Praefix entfaellt - Meldungen gehen unter haus/meldung/<ordner> (gemeinsames Modul) */ ?>
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= by_e(by_t('ALLG.SPEICHERN')) ?></button>
 </div>

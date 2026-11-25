@@ -1,6 +1,6 @@
 # LoxBerry-Plugin: BYD Autos
 
-Version 0.9.48
+Version 0.9.49
 
 Bindet **Fahrzeuge von BYD** über das BYD-Konto an Loxone an: Ladezustand,
 Kilometerstand, Reichweite, Ladezustand des Steckers, Restladezeit,
@@ -40,6 +40,13 @@ schreibenden Befehl.
 > gesperrt, und deshalb trägt die Feldtabelle im Reiter *Einbindung in Loxone*
 > eine Spalte **Herkunft**. Ein Feld, das niemand gemessen hat, darf nicht
 > aussehen wie eines, das jemand gemessen hat.
+
+## Neu in 0.9.49
+
+- **Themen-Präfix auf einem gemeinsamen Bereich (Entscheidung des Hausherrn 23.11.2026 „Nur gemeinsame Bereiche“):** Ein MQTT-Präfix, das einer der gemeinsamen Bereiche unter `haus/` ist oder darin beginnt (`haus/<bereich>` bzw. `haus/<bereich>/…` für abfahrt, abfuhr, alarm, ansage, anwesenheit, energie, fahrzeug, kalender, klima, pv, raumklima, sonne, speicher, strompreis, szene, tag, tuer, usv, wetter), weisen Speichern im Reiter *MQTT* und das Zurückspielen einer Sicherung jetzt mit Namen ab: Dort liefern die Plugins einander Zustände ohne eigenes Präfix. `haus` allein und andere Präfixe unter `haus/` (etwa `haus/fenster`) bleiben erlaubt; Groß und Klein zählen wie bei MQTT. Ist ein solches Präfix schon gespeichert, ändert sich am Betrieb nichts – das Plugin sendet weiter darunter, nennt es einmal im Protokoll, und der Reiter *Test* zeigt die Zeile „Liegt das Themen-Präfix außerhalb der gemeinsamen Bereiche unter haus/?“ rot. Liste und Texte kommen aus dem gemeinsamen Modul `haus_bereiche.php` bzw. `haus_bereiche.py` im Dienst.
+- **Hinweis – eigenes BYD-Konto für das Plugin (Issue #3):** Meldet sich das Plugin mit demselben Konto an wie die BYD-App, meldet BYD die App ab. Nach Rückmeldung eines Anwenders hilft ein eigenes Konto nur für das Plugin, das Zugriff auf das Fahrzeug hat. Der Hinweis steht jetzt im Reiter Einstellungen am Abschnitt „BYD-Konto“.
+- **Meldungen an SignalBot über das gemeinsame Modul (Entscheidung des Hausherrn 24.11.2026):** Die Haken unter *Meldungen an SignalBot* bleiben, wie sie gespeichert sind. Die Nachricht geht jetzt unter `haus/meldung/bydautos` an SignalBot (Dienst → Brücke `bin/by_ansage.php` → `meldung.php`) und nicht mehr über `<präfix>/befehl/plugin/bydautos`. Nötig ist SignalBot ab 0.9.44 mit „Meldungen unter haus/meldung annehmen“; nach einem Update schaltet SignalBot das selbst ein, wenn dort schon ein Plugin freigegeben ist. Das Feld *Präfix des SignalBot-Plugins* entfällt. Je Ereignis und Fahrzeug höchstens eine Meldung je Stunde, insgesamt höchstens 10 je Stunde, darüber eine Sammelzeile. Die Testmeldung läuft über das Modul.
+- Gemeinsames Sicherungsmodul auf 1.3.0 nachgezogen (Einheitlichkeit, wie in der Welle Lade-Beanstandungen); am Verhalten von „Einstellungen sichern“ und „Einstellungen zurückspielen“ ändert sich nichts.
 
 ## Neu in 0.9.48
 

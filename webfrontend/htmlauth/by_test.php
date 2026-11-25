@@ -415,6 +415,9 @@ function by_pruefungen()
      * Ein Kreuz nur dann, wenn MQTT auch benutzt werden SOLL. Steht der Haken
      * aus und holt der Anwender seine Werte ueber den HTTP-Endpunkt, ist der
      * Zustand des Gateways kein Mangel dieses Plugins. */
+    // 0.9.49: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $by_hb = by_pruef_praefix_haus($cfg);
+    $zeilen[] = by_pruefzeile($by_hb[0], by_e(by_t('HAUSBEREICH.F_TEST')), $by_hb[1]);
     $m = by_mqtt_zustand();
     if (empty($cfg['mqtt_ein'])) {
         $zeilen[] = by_pruefzeile(-1, by_t('TEST.F_MQTT'), by_t('TEST.A_MQTT_UNBENUTZT'));

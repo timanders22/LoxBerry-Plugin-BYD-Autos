@@ -4151,18 +4151,25 @@ SIGNAL_TEXTE = {
 
 
 def signal_senden(cfg: dict, anlass: str, nr, text: str) -> bool:
-    """Ein Ereignis an SignalBot (ab Werk aus, je Ereignis abwaehlbar, je Ereignis und Fahrzeug 1x je Stunde)."""
+    """Ein Ereignis an SignalBot (ab Werk aus, je Ereignis abwaehlbar). Seit 0.9.49 (Entscheidung des Hausherrn 24.11.2026,
+    F1 "Abloesen") ueber das gemeinsame Modul meldung.php in der Bruecke by_ansage.php: Thema haus/meldung/<ordner>,
+    Sperre 60 min je Anlass und Fahrzeug, Bremse 10 je Stunde, Quittung - alles im Modul."""
     if not cfg.get("signal_ein") or str(cfg.get("signal_" + anlass)).strip() != "1":
         return False
-    if _ansage_sperre("signal:%s:%s" % (anlass, nr), int(time.time())):
+    auftrag = {"meldung": str(text or ""), "anlass": anlass, "nr": ganz(nr, 0)}
+    try:
+        e = subprocess.run(["php", str(SKRIPT_ANSAGE), PNAME],
+                           input=json.dumps(auftrag, ensure_ascii=False).encode("utf-8"),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ANSAGE_FRIST_S, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        melde_gebremst("signal_ruf", "SignalBot-Meldung %s (Fahrzeug %s): die Bruecke by_ansage.php war nicht aufrufbar (%s)."
+                       % (anlass, nr, type(err).__name__), 3600)
         return False
-    thema = signal_thema(cfg.get("signal_praefix"), PNAME)
-    if not thema:
-        melde_gebremst("signal_thema", "SignalBot-Meldung nicht gesendet: Praefix oder Ordnername ungueltig.", 86400)
-        return False
-    ok = broker_senden(thema, signal_nutzlast(text, 0))
-    _LOG.info("SignalBot-Meldung %s (Fahrzeug %s): %s.", anlass, nr, "gesendet" if ok else "NICHT gesendet")
-    return ok
+    zeilen = e.stdout.decode("ascii", "replace").strip().splitlines()
+    roh = zeilen[-1] if zeilen else ""
+    _LOG.info("SignalBot-Meldung %s (Fahrzeug %s): rc=%d %s", anlass, nr, e.returncode,
+              "".join(c if (c.isascii() and c.isalnum()) or c in "_.:,|/-=; " else " " for c in roh)[:120])
+    return e.returncode == 0 and "LAGE=angenommen" in roh
 
 
 # ---- G8-Zusatz: Testmeldung an SignalBot (Reiter Einstellungen, byd.py --signal-test) ----
@@ -5126,6 +5133,26 @@ def stand_zusammenfuehren(alt: dict, neu: dict) -> dict:
     return zusammen
 
 
+def _haus_bereiche():
+    """0.9.49 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): das gemeinsame
+    Modul haus_bereiche.py neben dem Dienst, beim ersten Aufruf geladen."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    if hier not in sys.path:
+        sys.path.insert(0, hier)
+    import haus_bereiche  # noqa: E402
+    return haus_bereiche
+
+
+def praefix_haus_melden(praefix):
+    """0.9.49: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich unter
+    haus/ faellt; der Versand bleibt, wie er ist. Rueckgabe der gemeldete Bereich oder ""."""
+    hb = _haus_bereiche()
+    bereich = hb.hb_melden_faellig(praefix)
+    if bereich:
+        _LOG.warning("%s", hb.hb_logtext(praefix, bereich))
+    return bereich
+
+
 def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "",
                      bekannte=(), weg=()) -> dict:
     """Schreibt den Zwischenspeicher.
@@ -5152,6 +5179,7 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "",
                                  "fehler": fehler, "fahrzeuge": fahrzeuge}, 0o600)
 
     praefix = mqtt_thema_saeubern(cfg.get("mqtt_topic") or "byd")
+    praefix_haus_melden(praefix)   # 0.9.49: im gemeinsamen Bereich? melden, nicht anhalten
 
     if ok:
         for nummer, f in fahrzeuge.items():
@@ -5535,7 +5563,8 @@ async def dienst_lauf(einmal: bool) -> int:
                              bekannte=bekannte_nummern(merker), weg=weg)
             if cfg.get("mqtt_ein"):
                 weg_gemeldet.update(weg)
-            zustand_schreiben(ok=ok, fehler=fehler, fehler_folge=fehler_folge,
+            zustand_schreiben(haus_bereiche=list(_haus_bereiche().HB_BEREICHE),   # 0.9.49
+                              ok=ok, fehler=fehler, fehler_folge=fehler_folge,
                               pid=os.getpid(), intervall=cfg["intervall"],
                               anzahl_fahrzeuge=len(stand["fahrzeuge"]),
                               konfiguration=bericht,

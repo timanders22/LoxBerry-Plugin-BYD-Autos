@@ -245,6 +245,34 @@
  *      bei mehr als zwei Feldern), DOPPELT (alle drei), KOPF (Kodi KOPF, WOLF
  *      zeile bei _ am Anfang), WERT (Kodi WERT, Smartmeter ANSAGE, WOLF json),
  *      ABSCHNITT (Smartmeter KOPF_OHNE_NAME).
+ *  22. Seit 1.3.0 (Entscheidung des Hausherrn 23.11.2026, Regeln/05
+ *      "Lade-Beanstandungen", dazu "Dateiwert behalten"): ein ungueltiger
+ *      gespeicherter Wert wird fuer den Betrieb ersetzt, aber gemeldet und nie
+ *      in die Datei zurueckgeschrieben. Das Modul liefert dafuer, ohne etwas an
+ *      der Konfiguration zu schreiben: sicherung_lade_beanstandungen() (je Feld
+ *      Name, Grund 'abgewiesen' | 'ersetzt', gespeicherter und verwendeter Wert;
+ *      geprueft mit denselben Regeln 'pruefen'/'quer' wie beim Zurueckspielen,
+ *      dazu jede Abweichung des verwendeten Werts vom Dateiwert),
+ *      sicherung_lade_behalten() (beim Speichern behaelt ein beanstandetes Feld,
+ *      das das Formular nicht geaendert hat, seinen gespeicherten Wert),
+ *      sicherung_lade_saetze() (Reiter Test rot, Einstellungsseite gelb),
+ *      sicherung_lade_protokollzeile() und sicherung_lade_melden_faellig()
+ *      (einmal je Aenderung ins Protokoll; die Merkdatei traegt nur eine
+ *      Pruefsumme). Geheim sind aktionstoken, jeder Teil und die Eintraege aus
+ *      'geheim': die Meldung nennt dort nur den Namen ("Form ungueltig"), nie
+ *      einen Wert; das Protokoll nennt bei keinem Feld einen Wert. 'lade_ohne'
+ *      nimmt Felder vom Vergleich (b) aus, die die Linie beim Laden umformt,
+ *      ohne zu ersetzen (je Linie begruendet). Bis 1.2.11 bot das Modul nur
+ *      sicherung_selbstpruefung(), die die Linien aus der schon bereinigten
+ *      Konfiguration bauten und die damit blind war (gemessen 23.11.2026,
+ *      Raumklima M4; Shelly-Weiche 0.9.2 sw_rueckspiel_altwerte() gelesen).
+ *      Uebernommen wird ein angezeigter Ersatzwert nur ueber einen eigenen Knopf
+ *      (SICHERUNG_LADE_KNOPF) mit gesetztem Haken (SICHERUNG_LADE_HAKEN, ab Werk
+ *      aus; Entscheidung des Hausherrn 24.11.2026 "Haken im gelben Kasten"):
+ *      sicherung_lade_haken_zeile(), sicherung_lade_eingang(),
+ *      sicherung_lade_uebernehmen_stand(). Das Zurueckspielen einer Sicherung
+ *      wendet "Dateiwert behalten" nicht an; ihre Werte sind ausdruecklich.
+ *      Ohne Aufruf der neuen Funktionen aendert sich nichts.
  *
  * Die Funktionen tragen das neutrale Kuerzel 'sicherung_' (wie 'ansage_' in
  * sprachausgabe.php). Laufen zwei Abschriften in einem PHP-Prozess, laedt sich
@@ -373,6 +401,12 @@
  *                  'abschnitt', ab Werk SICHERUNG.
  *   'e'            function ($s) -> maskierter Text; ab Werk htmlspecialchars.
  *   'max_byte'     Obergrenze der Datei, ab Werk SICHERUNG_MAX_BYTE.
+ *   'geheim'       (1.3.0) Liste von Feldern (feld, block.feld, liste[].feld),
+ *                  die die Lade-Beanstandungen nie mit Wert nennen; aktionstoken
+ *                  und jeder Teil sind es immer (Regel 22 im Kopf).
+ *   'lade_ohne'    (1.3.0) Liste von Feldern, die sicherung_lade_beanstandungen()
+ *                  nicht als 'ersetzt' meldet, weil die Linie sie beim Laden
+ *                  nur umformt (Regel 22 im Kopf); je Linie begruendet.
  * Fuer sicherung_zurueckspielen() dazu:
  *   'sperre'       function () -> Griff | null;  'freigeben' function ($griff)
  *   'vorbereiten'  function ($neu, $jetzt, $r) -> $neu (vor dem Speichern)
@@ -444,7 +478,7 @@ if (PHP_SAPI !== 'cli') {
 
 if (!defined('SICHERUNG_FASSUNG')) {
 
-define('SICHERUNG_FASSUNG', '1.2.11');
+define('SICHERUNG_FASSUNG', '1.3.0');
 /** Groesste Sicherungsdatei, die gelesen wird (Byte). */
 define('SICHERUNG_MAX_BYTE', 262144);
 /** Feldname des Hakens "Zurueckspielen bestaetigen" (seit 1.1.0; Wert 1). */
@@ -1820,7 +1854,384 @@ function sicherung_sprachschluessel()
                  'K_FEHLT_BEHALTEN', 'K_ZWEITSCHRIFT', 'K_HAKEN', 'K_HAKEN_FEHLT', 'K_KEINE_DATEI', 'K_FEHLT_VORGABE',
                  'K_FEHLT_UEBERGANG', 'K_JETZT_ENTFERNT', 'K_HUELLE_GEMISCHT', 'K_HUELLE_KEIN_OBJEKT', 'K_HUELLE_LEER',
                  'K_HUELLE_KOPF', 'K_HUELLE_DOPPELT', 'K_AUS_TEXT', 'K_TEXT_ZEILE', 'K_TEXT_DOPPELT', 'K_TEXT_KOPF',
-                 'K_TEXT_WERT', 'K_TEXT_ABSCHNITT', 'K_TEXT_UNBEKANNT');
+                 'K_TEXT_WERT', 'K_TEXT_ABSCHNITT', 'K_TEXT_UNBEKANNT', 'K_LADE_TITEL', 'K_LADE_ERSETZT',
+                 'K_LADE_ABGEWIESEN', 'K_LADE_GEHEIM', 'K_LADE_SPEICHERN', 'K_LADE_HAKEN', 'K_LADE_KNOPF',
+                 'K_LADE_UEBERNOMMEN', 'K_LADE_HAKEN_FEHLT', 'K_LADE_FRAGE', 'K_LADE_KEINE');
+}
+
+/* ==================================================================
+ * 1.3.0: Lade-Beanstandungen (Regel 22 im Kopf)
+ * ================================================================== */
+
+/**
+ * 1.3.0: Trifft einer der Eintraege $liste das Feld $name (Text wie feld, block.feld, liste[2].feld)? Ein Eintrag gilt
+ * fuer den Pfad selbst und alles darunter; [] in einem Eintrag steht fuer jeden Index einer Liste (geraete[].kennwort).
+ */
+function sicherung_lade_trifft(array $liste, $name)
+{
+    $n = (string) $name;
+    $nl = (string) preg_replace('/\[[^\]]*\]/', '[]', $n);
+    foreach ($liste as $x) {
+        if (!is_string($x) || $x === '') { continue; }
+        foreach (array($n, $nl) as $m) {
+            if ($m === $x || strpos($m, $x . '.') === 0 || strpos($m, $x . '[') === 0) { return true; }
+        }
+    }
+    return false;
+}
+
+/** 1.3.0: Ist das Feld $name geheim? Immer: aktionstoken und jeder Teil aus 'teile'; dazu die Eintraege aus 'geheim'. */
+function sicherung_lade_geheim(array $b, $name)
+{
+    $g = array('aktionstoken');
+    if (isset($b['geheim']) && is_array($b['geheim'])) { $g = array_merge($g, $b['geheim']); }
+    if (isset($b['teile']) && is_array($b['teile'])) { foreach (array_keys($b['teile']) as $x) { $g[] = (string) $x; } }
+    return sicherung_lade_trifft($g, $name);
+}
+
+/** 1.3.0: ein Wert fuer die Anzeige, in dem jedes geheime Unterfeld (sicherung_lade_geheim()) durch *** ersetzt ist. */
+function sicherung_lade_maskieren(array $b, $name, $w)
+{
+    if (!is_array($w)) { return $w; }
+    foreach ($w as $k => $x) {
+        $n = is_int($k) ? $name . '[' . ($k + 1) . ']' : $name . '.' . sicherung_name($k);
+        $w[$k] = sicherung_lade_geheim($b, $n) ? '***' : sicherung_lade_maskieren($b, $n, $x);
+    }
+    return $w;
+}
+
+/** 1.3.0: ein Wert fuer die PRUEFUNG beim Laden, in dem jedes geheime Unterfeld, das Text ist, leer ('') steht.
+ *  Die Feldpruefung der Sicherung weist einen Block ab, der ein Sprechtoken TRAEGT (eine Sicherung traegt keines,
+ *  ansage_sicherung_mangel()); die Datei einer eingerichteten Sprachausgabe traegt es zu Recht - ohne diesen Schritt
+ *  meldete jede solche Datei "tts abgewiesen" (gefunden an EVCC 0.9.66, 24.11.2026). Ein geheimes Unterfeld, das kein
+ *  Text ist (Liste, Zahl, null), bleibt und wird weiter abgewiesen. Oberste Felder (aktionstoken) bleiben unberuehrt. */
+function sicherung_lade_ohne_geheim(array $b, $name, $w)
+{
+    if (!is_array($w)) { return $w; }
+    foreach ($w as $k => $x) {
+        $n = is_int($k) ? $name . '[' . ($k + 1) . ']' : $name . '.' . sicherung_name($k);
+        if (sicherung_lade_geheim($b, $n)) {
+            if (is_string($x)) { $w[$k] = ''; }
+        } else {
+            $w[$k] = sicherung_lade_ohne_geheim($b, $n, $x);
+        }
+    }
+    return $w;
+}
+
+/** 1.3.0: Sind zwei Einzelwerte gleich? Zahlen (auch als Text) nach Zahlenwert, Wahrheitswerte als 1/0, sonst Text. */
+function sicherung_lade_gleich($d, $v)
+{
+    if (is_array($d) || is_array($v)) { return false; }
+    if ($d === null || $v === null) { return $d === $v; }
+    if (is_bool($d)) { $d = $d ? 1 : 0; }
+    if (is_bool($v)) { $v = $v ? 1 : 0; }
+    if (!is_scalar($d) || !is_scalar($v)) { return false; }
+    if (is_numeric($d) && is_numeric($v)) { return (float) $d == (float) $v; }
+    return (string) $d === (string) $v;
+}
+
+/** 1.3.0: Sind zwei Werte gleich, auch Felder (gleiche Schluesselmenge, jeder Wert gleich)? */
+function sicherung_lade_gleich_tief($a, $c)
+{
+    if (is_array($a) && is_array($c)) {
+        if (count($a) !== count($c)) { return false; }
+        foreach ($a as $k => $w) {
+            if (!array_key_exists($k, $c) || !sicherung_lade_gleich_tief($w, $c[$k])) { return false; }
+        }
+        return true;
+    }
+    return sicherung_lade_gleich($a, $c);
+}
+
+/** 1.3.0: Ist $w eine Liste (Schluessel 0..n-1)? Ein leeres Feld zaehlt als Liste. */
+function sicherung_lade_ist_liste($w)
+{
+    return is_array($w) && ($w === array() || array_keys($w) === range(0, count($w) - 1));
+}
+
+/**
+ * 1.3.0: die Stellen, an denen der verwendete Wert $v vom Dateiwert $d abweicht, als array(Name, Pfad) in $aus.
+ * Verglichen wird nur, was in beiden steht: ein Schluessel nur in der Datei ist fremd (Konfigurationslage), einer nur
+ * im verwendeten Stand ergaenzt (Vervollstaendigen). Ist die verwendete Liste KUERZER als die der Datei (Eintraege
+ * still entfernt), ist das eine Abweichung der ganzen Liste; ist sie laenger (aufgefuellt, etwa auf eine feste Zahl
+ * von Zeilen), werden nur die Eintraege verglichen, die beide tragen. Feld gegen Einzelwert ist eine Abweichung.
+ */
+function sicherung_lade_unterschiede($d, $v, $name, array $pfad, array &$aus)
+{
+    if (is_array($d) && is_array($v)) {
+        if (sicherung_lade_ist_liste($d) && sicherung_lade_ist_liste($v) && count($v) < count($d)) {
+            $aus[] = array($name, $pfad);
+            return;
+        }
+        foreach ($d as $k => $dw) {
+            if (!array_key_exists($k, $v)) { continue; }
+            $n = is_int($k) ? $name . '[' . ($k + 1) . ']' : $name . '.' . sicherung_name($k);
+            sicherung_lade_unterschiede($dw, $v[$k], $n, array_merge($pfad, array($k)), $aus);
+        }
+        return;
+    }
+    if (!sicherung_lade_gleich($d, $v)) { $aus[] = array($name, $pfad); }
+}
+
+/**
+ * 1.3.0: Lade-Beanstandungen (Regel 22 im Kopf). $datei: die rohen Werte der Konfigurationsdatei (json_decode, ohne
+ * jede Normierung der Linie); $verwendet: die Konfiguration, wie die Linie sie fuer den Betrieb verwendet. Schreibt
+ * nichts. Ein Feld wird beanstandet, wenn
+ *   (a) 'pruefen' (Knoten oder Beschreibung) oder 'quer' den Dateiwert abweisen - Grund 'abgewiesen', Text der
+ *       Pruefung; oder
+ *   (b) der verwendete Wert vom Dateiwert abweicht (sicherung_lade_unterschiede()) - Grund 'ersetzt'.
+ * Nicht beanstandet: was in der Datei fehlt (Sache des Vervollstaendigens), was die Beschreibung nicht kennt (fremd),
+ * Kopf (_), 'alt', 'nie_aus_datei' und Teile ('teile', eigene Dateien); unter (b) dazu jedes Feld, das 'lade_ohne'
+ * der Beschreibung trifft (eine Umformung beim Laden, die keine Ersetzung ist - je Linie begruendet). Unter einem abgewiesenen Schluessel der
+ * obersten Ebene werden seine Abweichungen nicht noch einmal einzeln genannt.
+ * Rueckgabe: Liste von array('feld' => Name, 'pfad' => Liste der Schluessel | null, 'grund' => 'abgewiesen' |
+ * 'ersetzt', 'text' => Text der Pruefung, 'geheim' => bool, 'gespeichert' => Wert, 'verwendet' => Wert). Bei einem
+ * geheimen Feld (sicherung_lade_geheim()) sind 'text', 'gespeichert' und 'verwendet' leer bzw. null: die Meldung
+ * sagt nur "Form ungueltig". 'pfad' ist null, wenn 'quer' einen Namen nennt, der kein Schluessel der Datei ist.
+ */
+function sicherung_lade_beanstandungen(array $b, $datei, array $verwendet)
+{
+    $aus = array();
+    if (!is_array($datei) || !isset($b['vorgaben']) || !is_array($b['vorgaben'])) { return $aus; }
+    $vorgaben = $b['vorgaben'];
+    $alt = isset($b['alt']) && is_array($b['alt']) ? $b['alt'] : array();
+    $nie = isset($b['nie_aus_datei']) && is_array($b['nie_aus_datei']) ? $b['nie_aus_datei'] : array();
+    $teile = isset($b['teile']) && is_array($b['teile']) ? $b['teile'] : array();
+    $zaehlt = function ($k) use ($vorgaben, $alt, $nie, $teile) {
+        return $k !== '' && $k[0] !== '_' && array_key_exists($k, $vorgaben) && !in_array($k, $alt, true)
+            && !in_array($k, $nie, true) && !isset($teile[$k]);
+    };
+    // der Dateistand, ergaenzt um die Vorgaben fehlender Schluessel: so sieht 'pruefen'/'quer' die ganze Konfiguration
+    // geheime Unterfelder (Sprechtoken) gelten fuer die Pruefung als "keins gesichert" (sicherung_lade_ohne_geheim())
+    $neu = $vorgaben;
+    foreach ($datei as $k => $w) { if ($zaehlt((string) $k)) { $neu[(string) $k] = sicherung_lade_ohne_geheim($b, (string) $k, $w); } }
+    $abgew = array();
+    $r = sicherung_ergebnis();      // Ablage fuer Regel 2 (fremde Unterschluessel); hier ohne Bedeutung
+    foreach ($datei as $k => $roh) {
+        $k = (string) $k;
+        if (!$zaehlt($k)) { continue; }
+        $roh = sicherung_lade_ohne_geheim($b, $k, $roh);
+        $knoten = sicherung_knoten($b, $k);
+        $w = sicherung_knoten_reinigen($knoten, $roh, null, $k, $r);
+        $grund = '';
+        if (isset($knoten['pruefen']) && is_callable($knoten['pruefen'])) {
+            $grund = call_user_func($knoten['pruefen'], $w, $k, $neu, $roh);
+        } elseif (isset($b['pruefen']) && is_callable($b['pruefen'])) {
+            $grund = call_user_func($b['pruefen'], $k, $w, $neu, $roh);
+        }
+        if ($grund !== '' && $grund !== array() && $grund !== null) {
+            $abgew[$k] = is_array($grund) ? implode(' ', array_map('strval', $grund)) : (string) $grund;
+        }
+    }
+    if (isset($b['quer']) && is_callable($b['quer'])) {
+        foreach ((array) call_user_func($b['quer'], $neu, $r, $datei) as $q) {
+            if (is_array($q) && count($q) >= 2 && !isset($abgew[(string) $q[0]])) { $abgew[(string) $q[0]] = (string) $q[1]; }
+        }
+    }
+    $eintrag = function ($name, $pfad, $grund, $text) use ($b, $datei, $verwendet) {
+        $geheim = sicherung_lade_geheim($b, $name);
+        $hd = is_array($pfad) ? sicherung_pfad_holen($datei, $pfad) : array(false, null);
+        $hv = is_array($pfad) ? sicherung_pfad_holen($verwendet, $pfad) : array(false, null);
+        /* Ein ungeheimes Feld, das geheime Unterfelder traegt (ein abgewiesener Block tts mit alexa_token), zeigt
+         * diese als *** - die Werte selbst bleiben fuer sicherung_lade_behalten() und _uebernehmen_stand() in der
+         * Datei bzw. im verwendeten Stand, nicht in diesem Eintrag. */
+        return array('feld' => sicherung_name($name), 'pfad' => $pfad, 'grund' => $grund,
+                     'text' => $geheim ? '' : $text, 'geheim' => $geheim,
+                     'gespeichert' => $geheim ? null : sicherung_lade_maskieren($b, $name, $hd[1]),
+                     'verwendet' => $geheim ? null : sicherung_lade_maskieren($b, $name, $hv[1]));
+    };
+    foreach ($abgew as $name => $text) {
+        $name = (string) $name;
+        $aus[] = $eintrag($name, array_key_exists($name, $datei) ? array($name) : null, 'abgewiesen', $text);
+    }
+    $unt = array();
+    foreach ($datei as $k => $dw) {
+        $k = (string) $k;
+        if (!$zaehlt($k) || isset($abgew[$k]) || !array_key_exists($k, $verwendet)) { continue; }
+        sicherung_lade_unterschiede($dw, $verwendet[$k], sicherung_name($k), array($k), $unt);
+    }
+    $ohne = isset($b['lade_ohne']) && is_array($b['lade_ohne']) ? $b['lade_ohne'] : array();
+    foreach ($unt as $u) {
+        if (!sicherung_lade_trifft($ohne, $u[0])) { $aus[] = $eintrag($u[0], $u[1], 'ersetzt', ''); }
+    }
+    return $aus;
+}
+
+/**
+ * 1.3.0: Speichern bei bestehender Beanstandung (Hausherr 23.11.2026: "Dateiwert behalten"). $neu: der Stand, den die
+ * Linie speichern will (geladene Konfiguration plus Formular); $datei, $verwendet und $beanst wie oben. Ein
+ * beanstandetes Feld, dessen Wert in $neu noch gleich dem verwendeten (also dem angezeigten) ist, hat das Formular
+ * nicht geaendert: es bekommt seinen gespeicherten Wert aus der Datei zurueck und bleibt gemeldet. Ein geaenderter
+ * Wert bleibt, wie er ist (die Linie hat ihn wie jede Eingabe geprueft). Rueckgabe: array($neu, Namen der behaltenen
+ * Felder).
+ */
+function sicherung_lade_behalten(array $neu, $datei, array $verwendet, array $beanst)
+{
+    $behalten = array();
+    if (!is_array($datei)) { return array($neu, $behalten); }
+    foreach ($beanst as $x) {
+        if (!is_array($x) || !isset($x['pfad']) || !is_array($x['pfad']) || !$x['pfad']) { continue; }
+        $hd = sicherung_pfad_holen($datei, $x['pfad']);
+        $hv = sicherung_pfad_holen($verwendet, $x['pfad']);
+        $hn = sicherung_pfad_holen($neu, $x['pfad']);
+        if (!$hd[0] || !$hv[0] || !$hn[0] || !sicherung_lade_gleich_tief($hn[1], $hv[1])) { continue; }
+        $neu = sicherung_pfad_mit($neu, $x['pfad'], $hd[1]);
+        $behalten[] = (string) $x['feld'];
+    }
+    return array($neu, $behalten);
+}
+
+/** 1.3.0: ein Wert fuer die Anzeige (unmaskiert): Text in Anfuehrungszeichen, Felder als JSON, hoechstens 80 Zeichen. */
+function sicherung_lade_wert($w)
+{
+    if ($w === null) { $s = 'null'; }
+    elseif (is_bool($w)) { $s = $w ? 'true' : 'false'; }
+    elseif (is_array($w)) { $s = (string) json_encode($w, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); }
+    elseif (is_string($w)) { $s = '"' . $w . '"'; }
+    else { $s = (string) $w; }
+    $s = (string) preg_replace('/[\x00-\x1F\x7F]/', '?', $s);
+    if (function_exists('mb_strlen') && mb_strlen($s, 'UTF-8') > 80) { return mb_substr($s, 0, 80, 'UTF-8') . '...'; }
+    return strlen($s) > 80 ? substr($s, 0, 80) . '...' : $s;
+}
+
+/**
+ * 1.3.0: ein Satz aus Muster und Werten; die Zahl der Werte wird an die Zahl der %s im Muster angepasst, damit ein
+ * Sprachtext mit einer anderen Zahl von Platzhaltern unter PHP 8 keinen ArgumentCountError wirft.
+ */
+function sicherung_lade_satz($muster, array $werte)
+{
+    $muster = (string) $muster;
+    if (substr_count(str_replace(array('%%', '%s'), '', $muster), '%') > 0) { return $muster . ' ' . implode(' ', $werte); }
+    $n = substr_count(str_replace('%%', '', $muster), '%s');
+    return vsprintf($muster, array_slice(array_pad($werte, $n, ''), 0, $n));
+}
+
+/**
+ * 1.3.0: die Saetze zu den Lade-Beanstandungen fuer Reiter Test und Einstellungsseite, fertig maskiert: zuerst
+ * K_LADE_TITEL, dann je Feld K_LADE_ERSETZT, K_LADE_ABGEWIESEN oder K_LADE_GEHEIM, zuletzt K_LADE_SPEICHERN. Leere
+ * Liste = nichts zu melden. Ein geheimes Feld wird nur mit Namen genannt, nie mit Wert. Der Text der Pruefung
+ * ('text') kommt von der Linie und ist dort maskiert (wie bei sicherung_meldungen()).
+ */
+function sicherung_lade_saetze(array $b, array $beanst)
+{
+    if (!$beanst) { return array(); }
+    $aus = array(sicherung_t('K_LADE_TITEL', $b));
+    foreach ($beanst as $x) {
+        $n = sicherung_e($x['feld'], $b);
+        if (!empty($x['geheim'])) {
+            $aus[] = sicherung_lade_satz(sicherung_t('K_LADE_GEHEIM', $b), array($n));
+        } else {
+            $w = array($n, sicherung_e(sicherung_lade_wert($x['gespeichert']), $b), sicherung_e(sicherung_lade_wert($x['verwendet']), $b));
+            if ($x['grund'] === 'abgewiesen') {
+                $w[] = (string) $x['text'];
+                $aus[] = sicherung_lade_satz(sicherung_t('K_LADE_ABGEWIESEN', $b), $w);
+            } else {
+                $aus[] = sicherung_lade_satz(sicherung_t('K_LADE_ERSETZT', $b), $w);
+            }
+        }
+    }
+    $aus[] = sicherung_t('K_LADE_SPEICHERN', $b);
+    return $aus;
+}
+
+/**
+ * 1.3.0: die Protokollzeile (ASCII, in allen Linien gleich): nur Namen und Gruende, nie Werte - auch nicht ungeheime,
+ * denn eine Weissliste traegt Rufnummern.
+ */
+function sicherung_lade_protokollzeile(array $beanst)
+{
+    $n = array();
+    foreach ($beanst as $x) { $n[] = sicherung_name($x['feld']) . ' (' . ($x['grund'] === 'abgewiesen' ? 'ungueltig' : 'ersetzt') . ')'; }
+    $z = 'Gespeicherte Einstellungen gelten beim Laden nicht wie gespeichert, die Datei bleibt unveraendert: '
+       . implode(', ', array_slice($n, 0, 40)) . (count($n) > 40 ? ', ... (' . count($n) . ' insgesamt)' : '');
+    return (string) preg_replace('/[\x00-\x1F\x7F]/', '?', $z);
+}
+
+/**
+ * 1.3.0: Ist die Protokollzeile jetzt faellig (einmal je Aenderung der Beanstandungen)? Gemerkt wird in $merkdatei
+ * eine Pruefsumme ueber Namen, Gruende und die ungeheimen gespeicherten Werte - kein Wert im Klartext. Keine
+ * Beanstandung: die Merkdatei wird entfernt, damit ein spaeterer Fund wieder gemeldet wird. $merkdatei '' = nur im
+ * laufenden Prozess merken.
+ */
+function sicherung_lade_melden_faellig(array $beanst, $merkdatei = '')
+{
+    static $im_prozess = '';
+    $t = array();
+    foreach ($beanst as $x) {
+        $t[] = $x['feld'] . '|' . $x['grund'] . '|' . (empty($x['geheim']) ? sicherung_lade_wert($x['gespeichert']) : '');
+    }
+    sort($t);
+    $jetzt = $t ? sha1(implode("\n", $t)) : '';
+    if ((string) $merkdatei === '') {
+        $vorher = $im_prozess;
+        $im_prozess = $jetzt;
+    } else {
+        $vorher = is_file($merkdatei) ? trim((string) @file_get_contents($merkdatei)) : '';
+        if ($vorher !== $jetzt) {
+            if ($jetzt === '') { @unlink($merkdatei); } else { @file_put_contents($merkdatei, $jetzt, LOCK_EX); }
+        }
+    }
+    return $jetzt !== '' && $jetzt !== $vorher;
+}
+
+/* 1.3.0 (Entscheidung des Hausherrn 24.11.2026, "Haken im gelben Kasten"): ein angezeigter Ersatzwert wird nur mit
+ * einem eigenen Knopf und gesetztem Haken uebernommen, wie beim Zurueckspielen. Ohne Haken bleibt alles, wie es ist. */
+define('SICHERUNG_LADE_KNOPF', 'lade_uebernehmen');
+define('SICHERUNG_LADE_HAKEN', 'lade_ok');
+
+/** 1.3.0: die Zeile mit dem Haken, fertig maskiert, im Formular des Knopfes SICHERUNG_LADE_KNOPF vor ihm. Ab Werk aus. */
+function sicherung_lade_haken_zeile(array $b)
+{
+    return '<div class="sm-feld"><label><input data-role="none" type="checkbox" name="' . SICHERUNG_LADE_HAKEN
+         . '" value="1"> ' . sicherung_e(sicherung_t('K_LADE_HAKEN', $b), $b) . '</label></div>';
+}
+
+/** 1.3.0: wurde der Knopf gedrueckt, und mit Haken? Rueckgabe '' (nicht gedrueckt) | 'ohne_haken' | 'ja'. */
+function sicherung_lade_eingang(array $post)
+{
+    if (!isset($post[SICHERUNG_LADE_KNOPF])) { return ''; }
+    return (isset($post[SICHERUNG_LADE_HAKEN]) && $post[SICHERUNG_LADE_HAKEN] === '1') ? 'ja' : 'ohne_haken';
+}
+
+/**
+ * 1.3.0: der Dateistand $datei, in dem jedes beanstandete Feld den verwendeten Wert bekommt (Knopf mit Haken). Alles
+ * uebrige bleibt wie in der Datei, auch Fremdes und der Kopf. Ein Eintrag ohne Pfad oder ohne Wert im verwendeten
+ * Stand bleibt. Rueckgabe: array(neuer Stand, Namen der uebernommenen Felder). Schreibt nichts.
+ */
+function sicherung_lade_uebernehmen_stand($datei, array $verwendet, array $beanst)
+{
+    $namen = array();
+    if (!is_array($datei)) { return array($datei, $namen); }
+    foreach ($beanst as $x) {
+        if (!is_array($x) || !isset($x['pfad']) || !is_array($x['pfad']) || !$x['pfad']) { continue; }
+        $hv = sicherung_pfad_holen($verwendet, $x['pfad']);
+        if (!$hv[0]) { continue; }
+        $datei = sicherung_pfad_mit($datei, $x['pfad'], $hv[1]);
+        $namen[] = (string) $x['feld'];
+    }
+    return array($datei, $namen);
+}
+
+/**
+ * 1.3.0: der gelbe Kasten fuer die Einstellungsseite, fertig maskiert - in allen Linien gleich: Klasse sm-warnung
+ * (Hausstandard), die Saetze aus sicherung_lade_saetze() und darunter das Formular mit Haken und Knopf "Angezeigte
+ * Werte uebernehmen". $versteckt: die versteckten Felder der Linie (Formulartoken, Reiter), fertig maskiert. Das
+ * Formular sendet an index.php (Hausstandard "jedes Formular sendet an index.php", hausstandard_pruefen.py act); der
+ * Kasten traegt data-lade="1" statt einer eigenen Klasse (keine Klasse ausserhalb des Hausstandards). Leere Liste: ''.
+ */
+function sicherung_lade_kasten(array $b, array $beanst, $versteckt)
+{
+    $s = sicherung_lade_saetze($b, $beanst);
+    if (!$s) { return ''; }
+    $h = '<div class="sm-warnung" data-lade="1"><strong>' . $s[0] . '</strong><ul>';
+    for ($i = 1; $i < count($s) - 1; $i++) { $h .= '<li>' . $s[$i] . '</li>'; }
+    $h .= '</ul><p>' . $s[count($s) - 1] . '</p>'
+        . '<form action="index.php" method="post">' . (string) $versteckt
+        . sicherung_lade_haken_zeile($b)
+        . '<button data-role="none" class="sm-btn" type="submit" name="' . SICHERUNG_LADE_KNOPF . '" value="1">'
+        . sicherung_e(sicherung_t('K_LADE_KNOPF', $b), $b) . '</button></form></div>';
+    return $h;
 }
 
 /* ==================================================================
@@ -2099,8 +2510,8 @@ function sicherung_selbsttest()
     $pruef('fassung ohne quelle', sicherung_fassung_lesen(array()), '');
     $pruef('namensform', array(sicherung_namensform('a.b-c_1'), sicherung_namensform("a\n"), sicherung_namensform('')), array(true, false, false));
     // 1.2.11: K_AUS_TEXT und die sechs Saetze K_TEXT_* (bis 1.2.10: 30; 1.2.6: K_HUELLE_DOPPELT, bis 1.2.5: 29)
-    $pruef('schluessel zahl', count(sicherung_sprachschluessel()), 37);
-    $pruef('schluessel eindeutig', count(array_unique(sicherung_sprachschluessel())), 37);
+    $pruef('schluessel zahl', count(sicherung_sprachschluessel()), 48);
+    $pruef('schluessel eindeutig', count(array_unique(sicherung_sprachschluessel())), 48);
 
     // --- 1.2.0 (a) Rohwert an 'pruefen' und 'quer' ---
     $gesehen = array();
@@ -3350,6 +3761,146 @@ function sicherung_selbsttest()
     $r = sicherung_lesen($b21, json_encode($d21e), $jetzt);
     $pruef('text: Stelle bereinigt (keine Steuerzeichen, kein <, hoechstens 64)', $r['beanstandet'][0]['name'],
            'a?b?c?script?' . str_repeat('x', 51) . '...');
+
+    /* ---- 1.3.0: Lade-Beanstandungen (Regel 22) ---- */
+    $bL = array(
+        'kennzeichen' => 'selbsttest-lade',
+        'vorgaben' => array('aktionstoken' => '', 'thema' => 'st', 'takt' => 60, 'ein' => 0,
+                            'tts' => array('mode' => 'aus', 'alexa_token' => ''), 'erlaubt' => array(), 'befehle' => array()),
+        'schluessel' => array(
+            'tts' => sicherung_block(array('mode', 'alexa_token')),
+            'erlaubt' => array('art' => 'offen'),
+            'befehle' => sicherung_liste(array('wort', 'stufe')),
+        ),
+        'pruefen' => function ($k, $w) {
+            if ($k === 'aktionstoken') { return (is_string($w) && preg_match('/^[A-Za-z0-9]{24,}\z/', $w)) ? '' : 'token ' . $w; }
+            if ($k === 'thema') { return (is_string($w) && preg_match('/^[a-z]+\z/', $w)) ? '' : 'thema unzulaessig'; }
+            if ($k === 'takt') { return (is_int($w) && $w >= 10 && $w <= 3600) ? '' : 'takt ausserhalb'; }
+            return '';
+        },
+        'geheim' => array('tts.alexa_token'),
+        'lade_ohne' => array('ein'),
+        't' => function ($s) { return $s . ($s === 'SICHERUNG.K_LADE_GEHEIM' ? ' [%s]' : ' [%s|%s|%s|%s]'); },
+    );
+    $dL = array('_plugin' => 'selbsttest-lade', 'aktionstoken' => 'Pruef_Token_1234567890ab', 'thema' => 'Signal Bot',
+                'takt' => 99999, 'ein' => '1', 'tts' => array('mode' => 'aus', 'alexa_token' => 'Geheim-Sprech-1'),
+                'erlaubt' => array('+4915550001', 'x'),
+                'befehle' => array(array('wort' => 'auf', 'stufe' => 'pin'), array('wort' => 'zu', 'stufe' => 'boese')),
+                'fremd_oben' => 'z');
+    $vL = array('aktionstoken' => 'Pruef_Token_1234567890ab', 'thema' => 'signalbot', 'takt' => 3600, 'ein' => 0,
+                'tts' => array('mode' => 'aus', 'alexa_token' => ''), 'erlaubt' => array('+4915550001'),
+                'befehle' => array(array('wort' => 'auf', 'stufe' => 'pin'), array('wort' => 'zu', 'stufe' => 'sofort')));
+    $lb = sicherung_lade_beanstandungen($bL, $dL, $vL);
+    $felder = array();
+    $gruende = array();
+    foreach ($lb as $x) { $felder[] = $x['feld']; $gruende[] = $x['grund']; }
+    $pruef('lade: Felder (abgewiesen zuerst, dann ersetzt; fremd, Kopf und lade_ohne nicht)', $felder,
+           array('aktionstoken', 'thema', 'takt', 'tts.alexa_token', 'erlaubt', 'befehle[2].stufe'));
+    $pruef('lade: Gruende', $gruende, array('abgewiesen', 'abgewiesen', 'abgewiesen', 'ersetzt', 'ersetzt', 'ersetzt'));
+    $pruef('lade: Token geheim, ohne Text und Werte', array($lb[0]['geheim'], $lb[0]['text'], $lb[0]['gespeichert'], $lb[0]['verwendet']),
+           array(true, '', null, null));
+    $pruef('lade: Feld aus geheim ohne Werte', array($lb[3]['geheim'], $lb[3]['gespeichert'], $lb[3]['verwendet']), array(true, null, null));
+    $pruef('lade: ungeheim mit Text und beiden Werten', array($lb[1]['geheim'], $lb[1]['text'], $lb[1]['gespeichert'], $lb[1]['verwendet']),
+           array(false, 'thema unzulaessig', 'Signal Bot', 'signalbot'));
+    $pruef('lade: Liste mit entferntem Eintrag als Ganzes', array($lb[4]['pfad'], $lb[4]['gespeichert'], $lb[4]['verwendet']),
+           array(array('erlaubt'), array('+4915550001', 'x'), array('+4915550001')));
+    $pruef('lade: Feld in Liste mit Pfad', array($lb[5]['pfad'], $lb[5]['gespeichert'], $lb[5]['verwendet']),
+           array(array('befehle', 1, 'stufe'), 'boese', 'sofort'));
+    $bL2 = $bL;
+    unset($bL2['lade_ohne']);
+    $f2 = array();
+    foreach (sicherung_lade_beanstandungen($bL2, $dL, $vL) as $x) { $f2[] = $x['feld']; }
+    $pruef('lade: ohne lade_ohne erscheint ein', in_array('ein', $f2, true), true);
+    $pruef('lade: gleiche Werte melden nichts', sicherung_lade_beanstandungen($bL2, array('thema' => 'st', 'takt' => 60, 'ein' => true),
+           array('thema' => 'st', 'takt' => '60', 'ein' => 1)), array());
+    $pruef('lade: fehlender Schluessel ist keine Beanstandung', sicherung_lade_beanstandungen($bL, array('thema' => 'st'),
+           array('thema' => 'st', 'takt' => 60)), array());
+    $pruef('lade: keine Datei, keine Beanstandung', sicherung_lade_beanstandungen($bL, null, $vL), array());
+    $pruef('lade: aufgefuellte Liste ist keine Ersetzung, nur gemeinsame Eintraege zaehlen',
+           sicherung_lade_beanstandungen($bL, array('befehle' => array(array('wort' => 'auf', 'stufe' => 'pin'))),
+               array('befehle' => array(array('wort' => 'auf', 'stufe' => 'pin', 'aktiv' => 0), array('wort' => '', 'stufe' => 'sofort')))),
+           array());
+    $pruef('lade: im verwendeten Stand fehlender Schluessel wird nicht verglichen',
+           sicherung_lade_beanstandungen($bL, array('thema' => 'st', 'takt' => 60), array('thema' => 'st')), array());
+    $pruef('lade: gleich', array(sicherung_lade_gleich('060', 60), sicherung_lade_gleich('', 0), sicherung_lade_gleich('A', 'a'),
+                                 sicherung_lade_gleich(true, 1), sicherung_lade_gleich(array(), ''), sicherung_lade_gleich(null, '')),
+           array(true, false, false, true, false, false));
+    // Speichern: das Formular aendert nur takt; alles uebrige Beanstandete behaelt den Dateiwert
+    $neuL = $vL;
+    $neuL['takt'] = 120;
+    list($neuB, $beh) = sicherung_lade_behalten($neuL, $dL, $vL, $lb);
+    $pruef('lade: behalten - Namen', $beh, array('aktionstoken', 'thema', 'tts.alexa_token', 'erlaubt', 'befehle[2].stufe'));
+    $pruef('lade: behalten - Werte aus der Datei, geaenderter bleibt',
+           array($neuB['thema'], $neuB['takt'], $neuB['tts']['alexa_token'], $neuB['erlaubt'], $neuB['befehle'][1]['stufe'],
+                 $neuB['aktionstoken'], $neuB['ein']),
+           array('Signal Bot', 120, 'Geheim-Sprech-1', array('+4915550001', 'x'), 'boese', 'Pruef_Token_1234567890ab', 0));
+    $pruef('lade: behalten - fremder Schluessel kommt nicht hinein', array_key_exists('fremd_oben', $neuB), false);
+    // Meldung und Protokoll: kein Geheimnis, im Protokoll gar kein Wert
+    $saetze = sicherung_lade_saetze($bL, $lb);
+    $alle = implode("\n", $saetze);
+    $pruef('lade: Saetze - Titel, je Feld einer, Schluss', count($saetze), 8);
+    $pruef('lade: Saetze ohne Geheimnis', array(strpos($alle, 'Pruef_Token') === false, strpos($alle, 'Geheim-Sprech') === false), array(true, true));
+    $pruef('lade: Saetze mit ungeheimem Wert', strpos($alle, '&quot;Signal Bot&quot;') !== false, true);
+    $pz = sicherung_lade_protokollzeile($lb);
+    $pruef('lade: Protokoll ohne Werte', array(strpos($pz, 'Signal') === false, strpos($pz, '4915550001') === false,
+                                               strpos($pz, 'Pruef_Token') === false, strpos($pz, 'thema (ungueltig)') !== false), array(true, true, true, true));
+    $pruef('lade: keine Beanstandung, keine Saetze', sicherung_lade_saetze($bL, array()), array());
+    $bL3 = $bL;
+    $bL3['t'] = function ($s) { return $s . ' %s'; };
+    $pruef('lade: Sprachtext mit weniger Platzhaltern wirft nicht', count(sicherung_lade_saetze($bL3, $lb)), 8);
+    $pruef('lade: satz', array(sicherung_lade_satz('%s/%s', array('a')), sicherung_lade_satz('%s', array('a', 'b')),
+                               sicherung_lade_satz('x %d', array('a'))), array('a/', 'a', 'x %d a'));
+    // einmal je Aenderung melden
+    $m1 = sicherung_lade_melden_faellig($lb);
+    $m2 = sicherung_lade_melden_faellig($lb);
+    $m3 = sicherung_lade_melden_faellig(array());
+    $m4 = sicherung_lade_melden_faellig($lb);
+    $pruef('lade: einmal melden, nach Behebung wieder', array($m1, $m2, $m3, $m4), array(true, false, false, true));
+    $pruef('lade: geheim ueber Teil und []', array(sicherung_lade_geheim(array('teile' => array('zugang' => 1)), 'zugang.kennwort'),
+                                                    sicherung_lade_geheim(array('geheim' => array('geraete[].kennwort')), 'geraete[3].kennwort'),
+                                                    sicherung_lade_geheim(array(), 'thema'), sicherung_lade_geheim(array(), 'aktionstoken_alt')),
+           array(true, true, false, false));
+    // Knopf mit Haken: angezeigte Werte uebernehmen (Entscheidung 24.11.2026)
+    list($uS, $uN) = sicherung_lade_uebernehmen_stand($dL, $vL, $lb);
+    $pruef('lade: uebernehmen - Namen', $uN, array('aktionstoken', 'thema', 'takt', 'tts.alexa_token', 'erlaubt', 'befehle[2].stufe'));
+    $pruef('lade: uebernehmen - verwendete Werte, Fremdes und Kopf bleiben',
+           array($uS['thema'], $uS['takt'], $uS['tts']['alexa_token'], $uS['erlaubt'], $uS['befehle'][1]['stufe'],
+                 $uS['aktionstoken'], $uS['ein'], $uS['fremd_oben'], $uS['_plugin']),
+           array('signalbot', 3600, '', array('+4915550001'), 'sofort', 'Pruef_Token_1234567890ab', '1', 'z', 'selbsttest-lade'));
+    $pruef('lade: eingang', array(sicherung_lade_eingang(array()), sicherung_lade_eingang(array('lade_uebernehmen' => '1')),
+                                  sicherung_lade_eingang(array('lade_uebernehmen' => '1', 'lade_ok' => '1')),
+                                  sicherung_lade_eingang(array('lade_uebernehmen' => '1', 'lade_ok' => 'on'))),
+           array('', 'ohne_haken', 'ja', 'ohne_haken'));
+    $pruef('lade: Hakenzeile ab Werk aus', array(strpos(sicherung_lade_haken_zeile($bL), 'name="lade_ok"') !== false,
+                                                 strpos(sicherung_lade_haken_zeile($bL), 'checked') === false), array(true, true));
+    $kasten = sicherung_lade_kasten($bL, $lb, '<input type="hidden" name="formtoken" value="x">');
+    $pruef('lade: Kasten mit Klasse, Saetzen, Haken und Knopf, ohne Geheimnis',
+           array(strpos($kasten, '<div class="sm-warnung" data-lade="1">') === 0 && strpos($kasten, '<form action="index.php" method="post">') !== false, substr_count($kasten, '<li>'), strpos($kasten, 'name="lade_ok"') !== false,
+                 strpos($kasten, 'name="lade_uebernehmen"') !== false, strpos($kasten, 'name="formtoken"') !== false,
+                 strpos($kasten, 'Geheim-Sprech') === false && strpos($kasten, 'Pruef_Token') === false),
+           array(true, 6, true, true, true, true));
+    $pruef('lade: kein Kasten ohne Beanstandung', sicherung_lade_kasten($bL, array(), ''), '');
+    // ein abgewiesener Block mit geheimem Unterfeld zeigt es als ***, nie im Klartext (gefunden an Sprachsteuerung 0.12.25)
+    $bM = $bL;
+    $bM['pruefen'] = function ($k, $w) { return $k === 'tts' ? 'tts unzulaessig' : ''; };
+    $lM = sicherung_lade_beanstandungen($bM, array('tts' => array('mode' => 'x', 'alexa_token' => 'Geheim-Sprech-2')),
+                                        array('tts' => array('mode' => 'aus', 'alexa_token' => '')));
+    $pruef('lade: Block mit geheimem Unterfeld maskiert', array(count($lM), $lM[0]['feld'], $lM[0]['geheim'],
+           $lM[0]['gespeichert']['alexa_token'], $lM[0]['gespeichert']['mode'],
+           strpos(implode(' ', sicherung_lade_saetze($bM, $lM)), 'Geheim-Sprech-2') === false),
+           array(1, 'tts', false, '***', 'x', true));
+    // die Datei einer eingerichteten Sprachausgabe traegt ihr Sprechtoken zu Recht - kein "abgewiesen" (gefunden an
+    // EVCC 0.9.66); ein Sprechtoken, das kein Text ist, wird weiter abgewiesen
+    $bN = $bL;
+    $bN['pruefen'] = function ($k, $w) {
+        return ($k === 'tts' && is_array($w) && array_key_exists('alexa_token', $w) && $w['alexa_token'] !== '') ? 'tts.alexa_token' : '';
+    };
+    $tN = array('mode' => 'x', 'alexa_token' => 'Geheim-Sprech-3');
+    $pruef('lade: gueltiges Sprechtoken in der Datei nicht abgewiesen',
+           count(sicherung_lade_beanstandungen($bN, array('tts' => $tN), array('tts' => $tN))), 0);
+    $pruef('lade: Sprechtoken als Liste weiter abgewiesen',
+           count(sicherung_lade_beanstandungen($bN, array('tts' => array('mode' => 'x', 'alexa_token' => array())),
+                                               array('tts' => array('mode' => 'x', 'alexa_token' => '')))), 1);
     return array($faelle, $fehl, $zeilen);
 }
 

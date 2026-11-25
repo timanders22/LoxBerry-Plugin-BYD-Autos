@@ -59,9 +59,16 @@
  * 1.0.3 (Frage 70, Entscheidung des Hausherrn 18.11.2026), Tabellenfassung bleibt 1:
  * - bb_waechter() fragt die Upgrade-Marke vor jedem Anlegen (bb_waechter_mit()); bei frischer Marke
  *   entsteht weder befehle/ noch waechter.lock. befehlsbruecke.sh start ebenso. Selbsttest: ein Fall mehr.
+ *
+ * 1.0.4 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07), Tabellenfassung bleibt 1:
+ * - --pruefen meldet ein Praefix, das auf einen gemeinsamen Bereich unter haus/ faellt (haus/<bereich>[/...]), mit
+ *   [FEHL]; ohne geladenes Modul haus_bereiche.php (die Linie laedt es mit ihrer Bibliothek) steht [INFO] "nicht
+ *   geprueft". bb_praefix_gueltig() bleibt unveraendert: die Bruecke uebernimmt das Praefix der Linie, und eine
+ *   Abweisung dort haette Status und Hoerer abgeschaltet - ein schon gespeichertes Praefix bleibt aber in Betrieb.
+ *   Abgewiesen wird beim Speichern und Zurueckspielen in der Linie. Selbsttest: ein Fall mehr.
  */
 
-define('BB_FASSUNG', '1.0.3');
+define('BB_FASSUNG', '1.0.4');
 define('BB_ZUORDNUNG_FASSUNG', 1);
 define('BB_SPERRE_VORGABE', 60);
 define('BB_SPERRE_MAX', 3600);
@@ -1431,6 +1438,16 @@ function bb_pruefen()
     } else {
         $zeile(bb_praefix_gueltig($e['praefix']) ? 'OK' : 'FEHL', 'Praefix ' . ($e['praefix'] !== '' ? $e['praefix'] : '(leer)')
             . ' - Abo ' . $e['praefix'] . '/befehl/#');
+        // 1.0.4: Praefix auf einem gemeinsamen Bereich unter haus/ (Regeln/07)? Melden, nicht anhalten.
+        if (function_exists('hb_bereich')) {
+            $hb = hb_bereich($e['praefix']);
+            $zeile($hb === '' ? 'OK' : 'FEHL', $hb === ''
+                ? 'Praefix ausserhalb der gemeinsamen Bereiche unter haus/'
+                : 'Praefix faellt auf den gemeinsamen Bereich haus/' . $hb . ' - die Bruecke arbeitet weiter; bitte in'
+                    . ' den Einstellungen der Linie ein anderes Praefix eintragen');
+        } else {
+            $zeile('INFO', 'Praefix gegen die gemeinsamen Bereiche unter haus/ nicht geprueft (haus_bereiche.php nicht geladen)');
+        }
         $zeile('INFO', 'Befehle ueber MQTT annehmen: ' . ($e['annehmen'] ? 'an' : 'aus') . '; zweiter Haken'
             . (isset($z['zweiter_haken']) ? ' (' . $z['zweiter_haken'] . ')' : '') . ': ' . ($e['eingreifend'] ? 'an' : 'aus'));
     }
@@ -1479,6 +1496,8 @@ function bb_selbsttest()
     $pruef(!bb_name_gueltig('a+'), 'Name Platzhalter');
     $pruef(bb_praefix_gueltig('alexang') && bb_praefix_gueltig('haus/alexa-ng'), 'Praefix gueltig');
     $pruef(!bb_praefix_gueltig('a/#') && !bb_praefix_gueltig('') && !bb_praefix_gueltig('a b') && !bb_praefix_gueltig('/a'), 'Praefix ungueltig');
+    // 1.0.4: ein gespeichertes Praefix im gemeinsamen Bereich haelt die Bruecke nicht an (Regeln/07, 23.11.2026)
+    $pruef(bb_praefix_gueltig('haus/tuer') && bb_praefix_gueltig('haus/klima/wz'), 'Praefix im gemeinsamen Bereich bleibt gueltig');
     // --- Pruef-Tabelle mit Mitschrift
     $auf = array();
     $antwort = array('ok' => array(true, ''));
