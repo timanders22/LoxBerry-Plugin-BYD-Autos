@@ -18,6 +18,10 @@
 # Alles, was das Upgrade ueberleben soll, muss also HIER geschrieben werden -
 # und NEBEN die Ordner, nicht darin.
 
+# [upgrade_daten] Argumente des Installers festhalten - unten sichert der gemeinsame Baustein
+# [upgrade_daten] upgrade_daten.sh (neben diesem Skript) den ganzen Datenordner.
+UPGD_ORDNER="$3"; UPGD_WURZEL="$5"
+
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bydautos}"
@@ -487,4 +491,31 @@ rm -rf "$PBIN/__pycache__" 2>/dev/null
 
 zs_schluss
 echo "<OK> preupgrade abgeschlossen."
+# Fehlerweg fuer den gemeinsamen Baustein (unten): misslingt das Sichern des Datenordners, bricht das Update
+# mit Rueckgabe 2 ab und die bisherige Fassung bleibt. Wie zs_schluss oben wird ein Dienst, der vorher lief,
+# wieder gestartet. Die Marke entfernt der Baustein selbst.
+upgd_bei_fehler() {
+    if [ "$LIEF_JETZT" = "1" ] && [ -x "$PBIN/dienst.sh" ]; then
+        if "$PBIN/dienst.sh" start >/dev/null 2>&1; then
+            echo "<INFO> Der Dienst lief vorher und wurde wieder gestartet."
+        else
+            echo "<WARNING> Der Dienst lief vorher, liess sich aber nicht wieder starten."
+            return 1
+        fi
+    fi
+    return 0
+}
+# befehle/ und antworten/ ueberleben das Update bewusst nicht: die Befehlsbruecke legt befehle/ samt
+# Optionsdatei beim Start neu an, postinstall.sh beide Ordner leer (Regeln/06, Entscheidung des Hausherrn
+# 15.11.2026). Alles andere im Datenordner traegt der Baustein unten ueber das Update.
+UPGD_OHNE="befehle antworten"
+# [upgrade_daten] Gemeinsamer Baustein (Werkzeuge/gemeinsam/upgrade_daten.sh): den ganzen Datenordner
+# [upgrade_daten] neben den Ordner sichern; misslingt das, bricht die Aktualisierung mit Rueckgabe 2 ab.
+if [ -f "$(dirname "$0")/upgrade_daten.sh" ] && . "$(dirname "$0")/upgrade_daten.sh"; then
+    upgrade_daten_sichern "$UPGD_ORDNER" "$UPGD_WURZEL" || exit 2
+else
+    echo "<FAIL> Der Baustein upgrade_daten.sh fehlt neben $(basename "$0") - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt installiert."
+    exit 2
+fi
 exit 0

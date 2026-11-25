@@ -53,6 +53,24 @@
 # stehen und behalten ihren letzten Wert; sie entfernt nur der Anwender in
 # Loxone Config.
 
+# [upgrade_daten] Eine liegengebliebene Sicherung des Datenordners (gemeinsamer Baustein upgrade_daten.sh)
+# [upgrade_daten] mit abraeumen - sie kann Zugangsdaten aus dem Datenordner tragen (Regeln/06).
+case "$3" in
+    ''|.|..|*/*) ;;
+    *)  if [ -n "$5" ] && [ -d "$5/data/plugins" ] && [ -f "$5/config/system/general.json" ]; then
+            for UPGD_R in "$5/data/plugins/$3.upgrade_daten" "$5/data/plugins/$3.upgrade_daten.neu" \
+                          "$5/data/plugins/$3.upgrade_daten.alt"; do
+                [ -e "$UPGD_R" ] || [ -L "$UPGD_R" ] || continue
+                rm -rf "$UPGD_R"
+                if [ -e "$UPGD_R" ] || [ -L "$UPGD_R" ]; then
+                    echo "<WARNING> Die Sicherung des Datenordners liess sich nicht entfernen: $UPGD_R"
+                else
+                    echo "<OK> Sicherung des Datenordners entfernt: $UPGD_R"
+                fi
+            done
+        fi ;;
+esac
+
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-bydautos}"
